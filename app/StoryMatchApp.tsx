@@ -1,9 +1,98 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+
+// ─── TYPES ───────────────────────────────────────────────────────────────────
+type AssetType = "Video Testimonial" | "Written Case Study" | "Quote";
+type AssetStatus = "active" | "inactive";
+
+interface Asset {
+  id: string;
+  sourceId?: string | null;
+  clientName: string;
+  company: string;
+  vertical: string;
+  geography: string;
+  companySize: string;
+  challenge: string;
+  outcome: string;
+  assetType: AssetType | string;
+  videoUrl: string;
+  status: AssetStatus | string;
+  dateCreated: string;
+  headline: string;
+  pullQuote: string;
+  transcript: string;
+  thumbnail: string;
+}
+
+interface Source {
+  id: string;
+  name: string;
+  url: string;
+  type: string;
+  status: string;
+  lastSync: string | null;
+  videoCount: number;
+  assetIds: string[];
+}
+
+type UrlKind = "yt-video" | "yt-playlist" | "vm-video" | "vm-showcase" | "unknown";
+
+interface UrlInfo {
+  kind: UrlKind;
+  url: string;
+  id?: string | null;
+}
+
+interface VidInfo {
+  p: "yt" | "vm";
+  id: string;
+}
+
+interface OEmbedData {
+  title?: string;
+  description?: string;
+  thumbnail_url?: string;
+  author_name?: string;
+  html?: string;
+}
+
+interface OEmbedResult {
+  data: OEmbedData | null;
+  error: string | null;
+}
+
+interface Enrichment {
+  company?: string;
+  clientName?: string;
+  vertical?: string;
+  challenge?: string;
+  outcome?: string;
+  headline?: string;
+  pullQuote?: string;
+}
+
+interface AIMatchResult {
+  id: string;
+  reasoning: string;
+  quotes: string[];
+  relevanceScore?: number;
+  rank: number;
+}
+
+interface Filters {
+  vertical: string[];
+  assetType: string[];
+}
+
+interface Route {
+  page: "home" | "detail";
+  id: string | null;
+}
 
 // ─── DATA ────────────────────────────────────────────────────────────────────
-const SEED = [
+const SEED: Asset[] = [
   { id:"1",clientName:"Sarah Chen",company:"Meridian Logistics",vertical:"Logistics",geography:"Southeast US",companySize:"500-1000",challenge:"Legacy System Migration",outcome:"40% reduction in processing time",assetType:"Video Testimonial",status:"active",dateCreated:"2025-11-15",headline:"From legacy chaos to streamlined operations",pullQuote:"Within three months of switching, our team was processing orders 40% faster — and actually enjoying their work again.",thumbnail:"https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=640&h=360&fit=crop",videoUrl:"https://vimeo.com/example1",transcript:"Sarah Chen, VP of Operations at Meridian Logistics:\n\n\"When we first looked at replacing our legacy ERP system, honestly, the team was terrified. We'd been running on the same platform for 12 years. Every workaround was someone's baby. But the pain was real — we were losing two hours a day per person on manual data entry.\n\nThe implementation team understood that. They didn't come in and say 'rip everything out.' They mapped our workflows first, found the 80/20 — the 20% of processes causing 80% of the pain — and built the migration path around that.\n\nWithin three months, we had the core system live. Within six months, we'd migrated everything. Our processing time dropped 40%. Our error rate went from 4.2% to under 0.5%.\n\nIf you're a logistics company still running on a legacy platform and you're scared to switch — I get it. We were too. But the cost of staying was so much higher than the cost of changing.\"" },
   { id:"2",clientName:"Marcus Rivera",company:"BrightPath Health",vertical:"Healthcare",geography:"Northeast US",companySize:"1000-5000",challenge:"Patient Engagement",outcome:"68% increase in portal adoption",assetType:"Written Case Study",status:"active",dateCreated:"2025-09-22",headline:"Transforming patient engagement overnight",pullQuote:"Our patients weren't disengaged — they were frustrated. Once we gave them a portal that actually worked, adoption went through the roof.",thumbnail:"https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?w=640&h=360&fit=crop",videoUrl:"",transcript:"BrightPath Health Case Study\n\nBackground: BrightPath Health serves 200,000+ patients across 14 facilities in the Northeast US.\n\nChallenge: Low patient portal adoption hovering at 23%. \"Our patients weren't disengaged — they were frustrated,\" explains Marcus Rivera, CDO. \"Booking an appointment took 11 clicks.\"\n\nSolution: Unified access, AI-powered scheduling, real-time messaging.\n\nResults: Portal adoption 23% → 91%. Booking time 4.5min → 38sec. NPS +22 → +54. No-show rate 18% → 7%. Support calls down 41%.\n\nMarcus: \"We saved $2.1M in year one. But the real win? Patients come to appointments better prepared and more engaged in their own care.\"" },
   { id:"3",clientName:"James Whitfield",company:"Cornerstone Mfg",vertical:"Manufacturing",geography:"Midwest US",companySize:"200-500",challenge:"Compliance & QC",outcome:"92% reduction in incidents",assetType:"Video Testimonial",status:"active",dateCreated:"2025-07-10",headline:"Eliminated compliance nightmares for good",pullQuote:"We went from dreading audits to welcoming them. That's not something I ever thought I'd say.",thumbnail:"https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=640&h=360&fit=crop",videoUrl:"https://vimeo.com/example3",transcript:"James Whitfield, Director of QA at Cornerstone Manufacturing:\n\n\"Manufacturing compliance isn't glamorous. But when you get it wrong, the consequences are devastating — fines, shutdowns, lost contracts.\n\nWe were managing compliance across three facilities with spreadsheets and paper logs. Every audit season was a three-week scramble.\n\nThe platform changed everything. Every inspection, every test result — all captured digitally with automatic audit trails. When our FDA auditor came last quarter, I pulled up 18 months of compliance history in 30 seconds.\n\nWe went from dreading audits to welcoming them. 92% reduction in compliance incidents, $1.8M in avoided penalties.\"" },
@@ -15,13 +104,20 @@ const SEED = [
   { id:"9",clientName:"Elena Vasquez",company:"Summit HR",vertical:"Technology",geography:"National US",companySize:"200-500",challenge:"Employee Retention",outcome:"Turnover decreased 35%",assetType:"Quote",status:"active",dateCreated:"2025-10-12",headline:"Predictive analytics saved their best people",pullQuote:"We stopped guessing who was about to leave and started knowing. The model flagged our top performer three weeks before she updated her LinkedIn. We saved her — and seven others that quarter.",thumbnail:"",videoUrl:"",transcript:"Elena Vasquez, CHRO at Summit HR:\n\n\"We stopped guessing who was about to leave and started knowing. Turnover decreased 35%. We estimate we saved $2.8M in replacement costs in the first year.\"" },
 ];
 
-const VERTICALS=["All","Logistics","Healthcare","Manufacturing","Financial Services","Retail","Education","Real Estate","Technology"];
-const ASSET_TYPES=["All","Video Testimonial","Written Case Study","Quote"];
-const VERT_CLR={Logistics:"#2563eb",Healthcare:"#059669",Manufacturing:"#d97706","Financial Services":"#7c3aed",Retail:"#db2777",Education:"#0891b2","Real Estate":"#65a30d",Technology:"#4f46e5"};
-const CTA_MAP={"Video Testimonial":"watch","Written Case Study":"read","Quote":"quote"};
+const VERTICALS: string[] = ["All","Logistics","Healthcare","Manufacturing","Financial Services","Retail","Education","Real Estate","Technology"];
+const ASSET_TYPES: string[] = ["All","Video Testimonial","Written Case Study","Quote"];
+const VERT_CLR: Record<string, string> = {Logistics:"#2563eb",Healthcare:"#059669",Manufacturing:"#d97706","Financial Services":"#7c3aed",Retail:"#db2777",Education:"#0891b2","Real Estate":"#65a30d",Technology:"#4f46e5"};
+const CTA_MAP: Record<string, string> = {"Video Testimonial":"watch","Written Case Study":"read","Quote":"quote"};
 
-function extractVid(url){if(!url)return null;let m=url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&?#]+)/);if(m)return{p:"yt",id:m[1]};m=url.match(/vimeo\.com\/(?:video\/)?(\d+)/);if(m)return{p:"vm",id:m[1]};return null;}
-function ytThumb(id){return`https://img.youtube.com/vi/${id}/hqdefault.jpg`;}
+function extractVid(url: string | null | undefined): VidInfo | null {
+  if(!url)return null;
+  let m=url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&?#]+)/);
+  if(m)return{p:"yt",id:m[1]};
+  m=url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  if(m)return{p:"vm",id:m[1]};
+  return null;
+}
+function ytThumb(id: string): string { return `https://img.youtube.com/vi/${id}/hqdefault.jpg`; }
 
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&display=swap');
@@ -405,7 +501,14 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 `;
 
 // ─── CARD COMPONENTS ─────────────────────────────────────────────────────────
-function TCard({asset,onClick,aiData,onCopyQuote}){
+interface CardProps {
+  asset: Asset;
+  onClick: (a: Asset) => void;
+  aiData?: AIMatchResult | null;
+  onCopyQuote: (q: string) => void;
+}
+
+function TCard({asset,onClick,aiData,onCopyQuote}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const isV=asset.assetType==="Video Testimonial";
   const vid=extractVid(asset.videoUrl);
@@ -434,13 +537,13 @@ function TCard({asset,onClick,aiData,onCopyQuote}){
   );
 }
 
-function QCard({asset,onClick,aiData,onCopyQuote}){
+function QCard({asset,onClick,aiData,onCopyQuote}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const grad=`linear-gradient(135deg, ${c} 0%, ${c}dd 40%, ${c}99 100%)`;
   return(
     <div className="qcard" onClick={()=>onClick(asset)}>
       {aiData&&<div className="card-rank" style={{position:"absolute",top:12,left:12,zIndex:3}}>{aiData.rank}</div>}
-      <div className="qcard-bg" style={{"--qgrad":grad}}/>
+      <div className="qcard-bg" style={{["--qgrad" as string]:grad} as React.CSSProperties}/>
       <div className="qcard-content">
         <div className="qcard-quote-text">"{asset.pullQuote}"</div>
         <div className="qcard-divider"/>
@@ -462,7 +565,19 @@ function QCard({asset,onClick,aiData,onCopyQuote}){
 }
 
 // ─── DETAIL PAGE ─────────────────────────────────────────────────────────────
-function DetailPage({asset,onBack,allAssets,onSelect}){
+interface DetailPageProps {
+  asset: Asset | null;
+  onBack: () => void;
+  allAssets: Asset[];
+  onSelect: (a: Asset) => void;
+}
+
+interface Chapter {
+  title: string;
+  paras: string[];
+}
+
+function DetailPage({asset,onBack,allAssets,onSelect}: DetailPageProps) {
   if(!asset)return null;
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const vid=extractVid(asset.videoUrl);
@@ -470,7 +585,8 @@ function DetailPage({asset,onBack,allAssets,onSelect}){
   const statParts=asset.outcome.split(/[,;]/).map(s=>s.trim()).filter(Boolean);
   const parseStats=statParts.map(s=>{const m=s.match(/([\d.]+)(%|[A-Z])?/);if(m)return{num:m[1],unit:m[2]||"",label:s.replace(m[0],"").trim().replace(/^[:\-–—]\s*/,"")};return{num:"",unit:"",label:s};}).filter(s=>s.num);
   const paras=asset.transcript.split(/\n\n+/).filter(Boolean);
-  const chapters=[];let cur={title:"The Story",paras:[]};
+  const chapters: Chapter[] = [];
+  let cur: Chapter = {title:"The Story", paras:[]};
   paras.forEach(p=>{if(p.match(/^(Background|Challenge|Solution|Results|Company|Problem|Implementation):/i)){if(cur.paras.length>0)chapters.push(cur);cur={title:p.split(":")[0].trim(),paras:[p]};}else{cur.paras.push(p);}});
   if(cur.paras.length>0)chapters.push(cur);if(chapters.length===0)chapters.push({title:"The Story",paras:[asset.transcript]});
   const related=(allAssets||[]).filter(a=>a.id!==asset.id).sort((a,b)=>a.vertical===asset.vertical?-1:1).slice(0,3);
@@ -489,7 +605,7 @@ function DetailPage({asset,onBack,allAssets,onSelect}){
           <div className="dp-bq"><blockquote>{asset.pullQuote}</blockquote><div className="dp-bq-name">{asset.clientName}</div><div className="dp-bq-role">{asset.company}</div></div>
         </div>
       </div>
-      {related.length>0&&<div className="dp-related"><h3>More customer stories</h3><div className="dp-related-grid">{related.map(r=>{const rt=r.thumbnail||(extractVid(r.videoUrl)?.p==="yt"?ytThumb(extractVid(r.videoUrl).id):"https://images.unsplash.com/photo-1557804506-669a67965ba0?w=400&h=225&fit=crop");return(<div className="dp-rel-card" key={r.id} onClick={()=>onSelect(r)}>{r.assetType!=="Quote"&&<div className="dp-rel-thumb"><img src={rt} alt={r.company} loading="lazy"/></div>}<div className="dp-rel-body"><div className="dp-rel-label">{r.assetType}</div><div className="dp-rel-title">{r.headline}</div></div></div>);})}</div></div>}
+      {related.length>0&&<div className="dp-related"><h3>More customer stories</h3><div className="dp-related-grid">{related.map(r=>{const rvid=extractVid(r.videoUrl);const rt=r.thumbnail||(rvid?.p==="yt"?ytThumb(rvid.id):"https://images.unsplash.com/photo-1557804506-669a67965ba0?w=400&h=225&fit=crop");return(<div className="dp-rel-card" key={r.id} onClick={()=>onSelect(r)}>{r.assetType!=="Quote"&&<div className="dp-rel-thumb"><img src={rt} alt={r.company} loading="lazy"/></div>}<div className="dp-rel-body"><div className="dp-rel-label">{r.assetType}</div><div className="dp-rel-title">{r.headline}</div></div></div>);})}</div></div>}
     </div>
   );
 }
@@ -497,7 +613,7 @@ function DetailPage({asset,onBack,allAssets,onSelect}){
 // ─── ADMIN: IMPORT PANEL ─────────────────────────────────────────────────────
 
 // Detect the kind of URL pasted
-function detectUrlType(url){
+function detectUrlType(url: string): UrlInfo | null {
   const u=url.trim();
   if(!u)return null;
   // YouTube playlist
@@ -520,33 +636,34 @@ function detectUrlType(url){
 }
 
 // Parse pasted text into URLs
-function parseUrls(text){
+function parseUrls(text: string): UrlInfo[] {
   return text
     .split(/[\s,]+/)
     .map(s=>s.trim())
     .filter(s=>s.startsWith("http"))
     .map(detectUrlType)
-    .filter(Boolean);
+    .filter((x): x is UrlInfo => x !== null);
 }
 
 // Fetch oEmbed metadata — returns {data, error}
-async function fetchOEmbed(urlInfo){
+async function fetchOEmbed(urlInfo: UrlInfo): Promise<OEmbedResult> {
   try{
-    let endpoint;
+    let endpoint: string;
     if(urlInfo.kind.startsWith("yt"))endpoint=`https://www.youtube.com/oembed?url=${encodeURIComponent(urlInfo.url)}&format=json`;
     else if(urlInfo.kind.startsWith("vm"))endpoint=`https://vimeo.com/api/oembed.json?url=${encodeURIComponent(urlInfo.url)}`;
     else return{data:null,error:"Unsupported URL"};
     const r=await fetch(endpoint);
     if(!r.ok)return{data:null,error:`${r.status} ${r.statusText}`};
-    const data=await r.json();
+    const data=await r.json() as OEmbedData;
     return{data,error:null};
   }catch(e){
-    return{data:null,error:e.message||"Network error"};
+    const err=e as Error;
+    return{data:null,error:err.message||"Network error"};
   }
 }
 
 // Ask Claude to infer business metadata from video title/description
-async function enrichWithClaude(oembed,urlInfo){
+async function enrichWithClaude(oembed: OEmbedData | null, urlInfo: UrlInfo): Promise<Enrichment> {
   const title=oembed?.title||"";
   const desc=oembed?.description||"";
   const author=oembed?.author_name||"";
@@ -573,16 +690,21 @@ Return ONLY valid JSON (no markdown fences):
       body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:500,messages:[{role:"user",content:prompt}]})
     });
     const d=await r.json();
-    const txt=(d.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");
+    const txt=(d.content||[]).filter((c:{type:string})=>c.type==="text").map((c:{text:string})=>c.text).join("");
     const jm=txt.match(/\{[\s\S]*\}/);
-    if(jm)return JSON.parse(jm[0]);
+    if(jm)return JSON.parse(jm[0]) as Enrichment;
   }catch{}
   return{};
 }
 
 
 // Extract video URLs from a showcase/playlist page using Claude + web search
-async function extractShowcaseVideos(sourceUrl){
+interface ExtractedVideo {
+  url: string;
+  title?: string;
+}
+
+async function extractShowcaseVideos(sourceUrl: string): Promise<ExtractedVideo[]> {
   try{
     const r=await fetch("https://api.anthropic.com/v1/messages",{
       method:"POST",
@@ -604,10 +726,10 @@ If you cannot find any videos, return: []`}]
       })
     });
     const d=await r.json();
-    const txt=(d.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");
+    const txt=(d.content||[]).filter((c:{type:string})=>c.type==="text").map((c:{text:string})=>c.text).join("");
     const jm=txt.match(/\[[\s\S]*\]/);
     if(jm){
-      const arr=JSON.parse(jm[0]);
+      const arr=JSON.parse(jm[0]) as ExtractedVideo[];
       // Filter to only those with valid URLs
       return arr.filter(v=>v.url&&(v.url.includes("vimeo.com")||v.url.includes("youtube.com")||v.url.includes("youtu.be")));
     }
@@ -616,10 +738,10 @@ If you cannot find any videos, return: []`}]
 }
 
 // Import a single video URL into an asset (oEmbed + Claude enrichment)
-async function importSingleVideo(urlInfo,sourceId){
+async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Promise<Asset> {
   const {data:oe}=await fetchOEmbed(urlInfo);
-  let enriched={};
-  let meta=oe;
+  let enriched: Enrichment = {};
+  let meta: OEmbedData | null = oe;
   if(oe){
     enriched=await enrichWithClaude(oe,urlInfo);
   } else {
@@ -632,7 +754,7 @@ async function importSingleVideo(urlInfo,sourceId){
   }
   const title=meta?.title||"Imported video";
   const desc=meta?.description||"";
-  const thumb=meta?.thumbnail_url||(urlInfo.kind==="yt-video"?ytThumb(urlInfo.id):"");
+  const thumb=meta?.thumbnail_url||(urlInfo.kind==="yt-video"&&urlInfo.id?ytThumb(urlInfo.id):"");
   return{
     id:`imp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
     sourceId:sourceId||null,
@@ -655,20 +777,37 @@ async function importSingleVideo(urlInfo,sourceId){
 }
 
 // ─── ADMIN: SOURCES PANEL ────────────────────────────────────────────────────
-function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets}){
-  const[view,setView]=useState("list"); // list | add
-  const[mode,setMode]=useState("source"); // source | single
+interface SourcesPanelProps {
+  sources: Source[];
+  assets: Asset[];
+  onAddSource: (s: Source) => void;
+  onRemoveSource: (id: string) => void;
+  onSyncSource: (id: string, newAssetIds: string[], videoCount: number) => void;
+  onAddAssets: (arr: Asset[]) => void;
+}
+
+interface Progress {
+  step: string;
+  count: number;
+  total: number | "?";
+  done?: boolean;
+  error?: boolean;
+}
+
+function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets}: SourcesPanelProps) {
+  const[view,setView]=useState<"list"|"add">("list");
+  const[mode,setMode]=useState<"source"|"single">("source");
   const[url,setUrl]=useState("");
   const[name,setName]=useState("");
   const[working,setWorking]=useState(false);
-  const[progress,setProgress]=useState(null);
-  const[syncingId,setSyncingId]=useState(null);
+  const[progress,setProgress]=useState<Progress|null>(null);
+  const[syncingId,setSyncingId]=useState<string|null>(null);
 
   const detected=url.trim()?detectUrlType(url.trim()):null;
   const isCollection=detected&&(detected.kind==="vm-showcase"||detected.kind==="yt-playlist");
   const isSingle=detected&&(detected.kind==="vm-video"||detected.kind==="yt-video");
 
-  const typeLabel=(k)=>k==="yt-video"?"YouTube video":k==="yt-playlist"?"YouTube playlist":k==="vm-video"?"Vimeo video":k==="vm-showcase"?"Vimeo showcase":"Unknown";
+  const typeLabel=(k: string): string => k==="yt-video"?"YouTube video":k==="yt-playlist"?"YouTube playlist":k==="vm-video"?"Vimeo video":k==="vm-showcase"?"Vimeo showcase":"Unknown";
 
   // Add a collection source — extract all videos and create assets
   const addCollectionSource=async()=>{
@@ -678,7 +817,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     const videos=await extractShowcaseVideos(detected.url);
     if(videos.length===0){
       setProgress({step:`No videos could be extracted. Source saved — try "Sync" later.`,count:0,total:0,done:true,error:true});
-      const source={id:`src-${Date.now()}`,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"error",lastSync:new Date().toISOString(),videoCount:0,assetIds:[]};
+      const source: Source = {id:`src-${Date.now()}`,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"error",lastSync:new Date().toISOString(),videoCount:0,assetIds:[]};
       onAddSource(source);
       setWorking(false);
       setTimeout(()=>{setProgress(null);setView("list");setUrl("");setName("");},2500);
@@ -686,7 +825,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     }
     setProgress({step:`Found ${videos.length} videos. Importing…`,count:0,total:videos.length});
     const sourceId=`src-${Date.now()}`;
-    const newAssets=[];
+    const newAssets: Asset[] = [];
     for(let i=0;i<videos.length;i++){
       const v=videos[i];
       const info=detectUrlType(v.url);
@@ -696,7 +835,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       if(v.title&&!asset.headline)asset.headline=v.title;
       newAssets.push(asset);
     }
-    const source={id:sourceId,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"synced",lastSync:new Date().toISOString(),videoCount:newAssets.length,assetIds:newAssets.map(a=>a.id)};
+    const source: Source = {id:sourceId,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"synced",lastSync:new Date().toISOString(),videoCount:newAssets.length,assetIds:newAssets.map(a=>a.id)};
     onAddSource(source);
     onAddAssets(newAssets);
     setProgress({step:`Imported ${newAssets.length} videos`,count:newAssets.length,total:newAssets.length,done:true});
@@ -717,14 +856,14 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
   };
 
   // Re-sync an existing source
-  const doSync=async(source)=>{
+  const doSync=async(source: Source)=>{
     setSyncingId(source.id);
     const videos=await extractShowcaseVideos(source.url);
     const existingAssetIds=new Set(source.assetIds||[]);
     const existingAssets=assets.filter(a=>existingAssetIds.has(a.id));
     const existingUrls=new Set(existingAssets.map(a=>a.videoUrl));
     const newUrls=videos.filter(v=>!existingUrls.has(v.url));
-    const newAssets=[];
+    const newAssets: Asset[] = [];
     for(const v of newUrls){
       const info=detectUrlType(v.url);
       if(!info||info.kind==="unknown")continue;
@@ -737,9 +876,16 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     setSyncingId(null);
   };
 
-  const iconFor=(type)=>type?.startsWith("vm")?"vm":type?.startsWith("yt")?"yt":"unk";
-  const shortLabel=(type)=>type==="vm-showcase"?"Vimeo":type==="yt-playlist"?"YouTube":type==="vm-video"?"Vimeo":"YouTube";
-  const timeAgo=(iso)=>{if(!iso)return"Never synced";const m=Math.round((Date.now()-new Date(iso).getTime())/60000);if(m<1)return"Just now";if(m<60)return`${m}m ago`;const h=Math.round(m/60);if(h<24)return`${h}h ago`;return`${Math.round(h/24)}d ago`;};
+  const iconFor=(type: string | undefined): string => type?.startsWith("vm")?"vm":type?.startsWith("yt")?"yt":"unk";
+  const timeAgo=(iso: string | null): string => {
+    if(!iso)return"Never synced";
+    const m=Math.round((Date.now()-new Date(iso).getTime())/60000);
+    if(m<1)return"Just now";
+    if(m<60)return`${m}m ago`;
+    const h=Math.round(m/60);
+    if(h<24)return`${h}h ago`;
+    return`${Math.round(h/24)}d ago`;
+  };
 
   if(view==="add"){
     return(
@@ -811,7 +957,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                 <span className="imp-spin"/>
                 {progress.step}
               </div>
-              {progress.total>0&&progress.total!=="?"&&(
+              {typeof progress.total==="number"&&progress.total>0&&(
                 <div style={{marginTop:6,fontSize:10.5,opacity:.8}}>
                   {progress.count} of {progress.total}
                 </div>
@@ -897,10 +1043,18 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
 }
 
 // ─── ADMIN: ASSETS PANEL ─────────────────────────────────────────────────────
-function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}){
-  const[editingId,setEditingId]=useState(null);
+interface AssetsPanelProps {
+  assets: Asset[];
+  onUpdate: (a: Asset) => void;
+  onDelete: (id: string) => void;
+  onAdd: (a: Asset) => void;
+  onPreview: (id: string) => void;
+}
+
+function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProps) {
+  const[editingId,setEditingId]=useState<string|null>(null);
   const[search,setSearch]=useState("");
-  const[form,setForm]=useState(null);
+  const[form,setForm]=useState<Asset|null>(null);
   const[creating,setCreating]=useState(false);
 
   const editing=editingId?assets.find(a=>a.id===editingId):null;
@@ -910,11 +1064,11 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}){
     else setForm(null);
   },[editingId,creating]);
 
-  const s=(k,v)=>setForm(p=>({...p,[k]:v}));
-  const save=()=>{if(creating){onAdd(form);setCreating(false);setEditingId(form.id);}else{onUpdate(form);setEditingId(null);}};
-  const del=()=>{if(confirm("Delete this asset?")){onDelete(editingId);setEditingId(null);}};
+  const s=(k: keyof Asset, v: string) => setForm(p => p ? {...p, [k]: v} : p);
+  const save=()=>{if(!form)return;if(creating){onAdd(form);setCreating(false);setEditingId(form.id);}else{onUpdate(form);setEditingId(null);}};
+  const del=()=>{if(editingId&&confirm("Delete this asset?")){onDelete(editingId);setEditingId(null);}};
 
-  const filtered=assets.filter(a=>{if(!search)return true;const s=search.toLowerCase();return a.company.toLowerCase().includes(s)||a.clientName.toLowerCase().includes(s)||a.vertical.toLowerCase().includes(s);});
+  const filtered=assets.filter(a=>{if(!search)return true;const q=search.toLowerCase();return a.company.toLowerCase().includes(q)||a.clientName.toLowerCase().includes(q)||a.vertical.toLowerCase().includes(q);});
 
   if(form){
     return(
@@ -923,7 +1077,7 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}){
           <div className="ap-edit-head">
             <button className="ap-back" onClick={()=>{setEditingId(null);setCreating(false);}}>← Back</button>
             <div className="ap-title" style={{fontSize:15}}>{creating?"New Asset":"Edit Asset"}</div>
-            {!creating&&<button className="ap-preview-btn" onClick={()=>onPreview(editingId)}>Preview</button>}
+            {!creating&&editingId&&<button className="ap-preview-btn" onClick={()=>onPreview(editingId)}>Preview</button>}
           </div>
           {!creating&&<div className="ap-sub">{editing?.company} · {editing?.vertical}</div>}
         </div>
@@ -995,43 +1149,43 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}){
 
 // ─── APP ─────────────────────────────────────────────────────────────────────
 export default function App(){
-  const[assets,setAssets]=useState(SEED);
-  const[filters,setFilters]=useState({vertical:[],assetType:[]});
-  const[openFilter,setOpenFilter]=useState(null);
+  const[assets,setAssets]=useState<Asset[]>(SEED);
+  const[filters,setFilters]=useState<Filters>({vertical:[],assetType:[]});
+  const[openFilter,setOpenFilter]=useState<string|null>(null);
   const[search,setSearch]=useState("");
-  const[route,setRoute]=useState({page:"home",id:null});
-  const[toast,setToast]=useState(null);
+  const[route,setRoute]=useState<Route>({page:"home",id:null});
+  const[toast,setToast]=useState<string|null>(null);
 
   // Admin mode + nav
   const[adminMode,setAdminMode]=useState(true); // admin by default
-  const[adminSection,setAdminSection]=useState(null); // assets | import | null (collapsed)
-  const[sources,setSources]=useState([]); // video sources (showcases, playlists)
+  const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
+  const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
   const[railHidden,setRailHidden]=useState(true); // fully hidden by default
 
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
   const[smQuery,setSmQuery]=useState("");
-  const[smMode,setSmMode]=useState("describe");
+  const[smMode,setSmMode]=useState<"describe"|"prospect">("describe");
   const[smLoading,setSmLoading]=useState(false);
-  const[smResults,setSmResults]=useState(null); // [{id,reasoning,quotes,rank}]
+  const[smResults,setSmResults]=useState<AIMatchResult[]|null>(null);
 
   useEffect(()=>{
     const h=()=>{const hash=window.location.hash.slice(1);if(hash.startsWith("/asset/"))setRoute({page:"detail",id:hash.split("/asset/")[1]});else setRoute({page:"home",id:null});};
     h();window.addEventListener("hashchange",h);return()=>window.removeEventListener("hashchange",h);
   },[]);
 
-  const openAsset=a=>{window.location.hash=`/asset/${a.id}`;};
+  const openAsset=(a: Asset)=>{window.location.hash=`/asset/${a.id}`;};
   const goHome=()=>{window.location.hash="/";};
-  const copyQuote=t=>{navigator.clipboard?.writeText(t);setToast("Copied!");setTimeout(()=>setToast(null),1800);};
+  const copyQuote=(t: string)=>{navigator.clipboard?.writeText(t);setToast("Copied!");setTimeout(()=>setToast(null),1800);};
 
-  const runStoryMatch=useCallback(async(query)=>{
+  const runStoryMatch=useCallback(async(query: string)=>{
     if(!query.trim())return;setSmLoading(true);setSmResults(null);
     const hasUrl=query.match(/https?:\/\/[^\s]+/);
     let ctx="";
-    if(hasUrl){try{const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,tools:[{type:"web_search_20250305",name:"web_search"}],messages:[{role:"user",content:`Visit ${hasUrl[0]} and summarize: what they do, industry, size, who they serve, likely pain points. 3-4 sentences only, no markdown.`}]})});const d=await r.json();ctx=(d.content||[]).filter(c=>c.type==="text").map(c=>c.text).join(" ");}catch{}}
+    if(hasUrl){try{const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,tools:[{type:"web_search_20250305",name:"web_search"}],messages:[{role:"user",content:`Visit ${hasUrl[0]} and summarize: what they do, industry, size, who they serve, likely pain points. 3-4 sentences only, no markdown.`}]})});const d=await r.json();ctx=(d.content||[]).filter((c:{type:string})=>c.type==="text").map((c:{text:string})=>c.text).join(" ");}catch{}}
     const s=assets.map(a=>`[ID:${a.id}] ${a.company}|${a.clientName}|${a.vertical}|${a.geography}|${a.companySize}|${a.challenge}|${a.assetType}|${a.status}|${a.outcome}\n${a.transcript.substring(0,700)}`).join("\n---\n");
     const prompt=ctx?`Sales enablement AI. Prospect context:\n${ctx}\n\nSalesperson: "${query}"\n\nMatch prospect to assets. Explain why each resonates.`:`Sales enablement AI. Need: "${query}"\n\nMatch against assets by vertical, size, geography, challenge, persona.`;
-    try{const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`${prompt}\n\nAssets:\n${s}\n\nReturn ONLY valid JSON array. Top 3-5. Each: {"id":"","reasoning":"","quotes":[""],"relevanceScore":0}. No matches? [].`}]})});const d=await r.json();const t=d.content?.map(i=>i.text||"").join("")||"[]";const p=JSON.parse(t.replace(/```json|```/g,"").trim());setSmResults(p.map((r,i)=>({...r,rank:i+1})));setSmOpen(false);}catch{setSmResults([]);setSmOpen(false);}setSmLoading(false);
+    try{const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`${prompt}\n\nAssets:\n${s}\n\nReturn ONLY valid JSON array. Top 3-5. Each: {"id":"","reasoning":"","quotes":[""],"relevanceScore":0}. No matches? [].`}]})});const d=await r.json();const t=(d.content||[]).map((i:{text?:string})=>i.text||"").join("")||"[]";const p=JSON.parse(t.replace(/```json|```/g,"").trim()) as Omit<AIMatchResult,"rank">[];setSmResults(p.map((r,i)=>({...r,rank:i+1})));setSmOpen(false);}catch{setSmResults([]);setSmOpen(false);}setSmLoading(false);
   },[assets]);
 
   const clearSm=()=>{setSmResults(null);setSmQuery("");};
@@ -1040,11 +1194,11 @@ export default function App(){
   const prosEx=["Series B fintech, 120 emp, selling to CFO on onboarding speed","Regional hospital, Southeast, CTO modernizing patient experience","Mid-market manufacturer, Ohio, VP Ops worried about QC"];
 
   // Determine what to show in the grid
-  let displayAssets;
-  let aiDataMap = {};
+  let displayAssets: Asset[];
+  const aiDataMap: Record<string, AIMatchResult> = {};
   if(smResults&&smResults.length>0){
     const matchedIds=smResults.map(r=>r.id);
-    displayAssets=matchedIds.map(id=>assets.find(a=>a.id===id)).filter(Boolean);
+    displayAssets=matchedIds.map(id=>assets.find(a=>a.id===id)).filter((a): a is Asset => a !== undefined);
     smResults.forEach(r=>{aiDataMap[r.id]=r;});
   } else {
     displayAssets=assets.filter(a=>{
@@ -1055,7 +1209,7 @@ export default function App(){
     });
   }
   const anyFilter=filters.vertical.length>0||filters.assetType.length>0;
-  const detailAsset=route.page==="detail"?assets.find(a=>a.id===route.id):null;
+  const detailAsset=route.page==="detail"?assets.find(a=>a.id===route.id)||null:null;
 
   if(route.page==="detail"){
     return(<React.Fragment><style>{css}</style><div style={{minHeight:"100vh",background:"var(--bg)"}}>
@@ -1186,7 +1340,10 @@ export default function App(){
                     setToast("Created");
                     setTimeout(()=>setToast(null),1500);
                   }}
-                  onPreview={id=>openAsset({id})}
+                  onPreview={id=>{
+                    const a=assets.find(x=>x.id===id);
+                    if(a)openAsset(a);
+                  }}
                 />
               )}
             </aside>
@@ -1293,12 +1450,12 @@ export default function App(){
             {!smResults && (
               <div
                 className="filters-wrap"
-                onClick={e=>{if(!e.target.closest('.filter-group'))setOpenFilter(null);}}
+                onClick={e=>{if(!(e.target as HTMLElement).closest('.filter-group'))setOpenFilter(null);}}
               >
-                {[
-                  {k:"vertical",label:"Industry",opts:VERTICALS.filter(v=>v!=="All")},
-                  {k:"assetType",label:"Type",opts:ASSET_TYPES.filter(v=>v!=="All")}
-                ].map(f=>{
+                {([
+                  {k:"vertical" as keyof Filters,label:"Industry",opts:VERTICALS.filter(v=>v!=="All")},
+                  {k:"assetType" as keyof Filters,label:"Type",opts:ASSET_TYPES.filter(v=>v!=="All")}
+                ]).map(f=>{
                   const sel=filters[f.k];
                   const isOpen=openFilter===f.k;
                   const display=sel.length===0?"All":sel.length===1?sel[0]:`${sel.length} selected`;
