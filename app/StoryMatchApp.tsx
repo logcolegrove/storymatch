@@ -92,17 +92,7 @@ interface Route {
 }
 
 // ─── DATA ────────────────────────────────────────────────────────────────────
-const SEED: Asset[] = [
-  { id:"1",clientName:"Sarah Chen",company:"Meridian Logistics",vertical:"Logistics",geography:"Southeast US",companySize:"500-1000",challenge:"Legacy System Migration",outcome:"40% reduction in processing time",assetType:"Video Testimonial",status:"active",dateCreated:"2025-11-15",headline:"From legacy chaos to streamlined operations",pullQuote:"Within three months of switching, our team was processing orders 40% faster — and actually enjoying their work again.",thumbnail:"https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=640&h=360&fit=crop",videoUrl:"https://vimeo.com/example1",transcript:"Sarah Chen, VP of Operations at Meridian Logistics:\n\n\"When we first looked at replacing our legacy ERP system, honestly, the team was terrified. We'd been running on the same platform for 12 years. Every workaround was someone's baby. But the pain was real — we were losing two hours a day per person on manual data entry.\n\nThe implementation team understood that. They didn't come in and say 'rip everything out.' They mapped our workflows first, found the 80/20 — the 20% of processes causing 80% of the pain — and built the migration path around that.\n\nWithin three months, we had the core system live. Within six months, we'd migrated everything. Our processing time dropped 40%. Our error rate went from 4.2% to under 0.5%.\n\nIf you're a logistics company still running on a legacy platform and you're scared to switch — I get it. We were too. But the cost of staying was so much higher than the cost of changing.\"" },
-  { id:"2",clientName:"Marcus Rivera",company:"BrightPath Health",vertical:"Healthcare",geography:"Northeast US",companySize:"1000-5000",challenge:"Patient Engagement",outcome:"68% increase in portal adoption",assetType:"Written Case Study",status:"active",dateCreated:"2025-09-22",headline:"Transforming patient engagement overnight",pullQuote:"Our patients weren't disengaged — they were frustrated. Once we gave them a portal that actually worked, adoption went through the roof.",thumbnail:"https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?w=640&h=360&fit=crop",videoUrl:"",transcript:"BrightPath Health Case Study\n\nBackground: BrightPath Health serves 200,000+ patients across 14 facilities in the Northeast US.\n\nChallenge: Low patient portal adoption hovering at 23%. \"Our patients weren't disengaged — they were frustrated,\" explains Marcus Rivera, CDO. \"Booking an appointment took 11 clicks.\"\n\nSolution: Unified access, AI-powered scheduling, real-time messaging.\n\nResults: Portal adoption 23% → 91%. Booking time 4.5min → 38sec. NPS +22 → +54. No-show rate 18% → 7%. Support calls down 41%.\n\nMarcus: \"We saved $2.1M in year one. But the real win? Patients come to appointments better prepared and more engaged in their own care.\"" },
-  { id:"3",clientName:"James Whitfield",company:"Cornerstone Mfg",vertical:"Manufacturing",geography:"Midwest US",companySize:"200-500",challenge:"Compliance & QC",outcome:"92% reduction in incidents",assetType:"Video Testimonial",status:"active",dateCreated:"2025-07-10",headline:"Eliminated compliance nightmares for good",pullQuote:"We went from dreading audits to welcoming them. That's not something I ever thought I'd say.",thumbnail:"https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=640&h=360&fit=crop",videoUrl:"https://vimeo.com/example3",transcript:"James Whitfield, Director of QA at Cornerstone Manufacturing:\n\n\"Manufacturing compliance isn't glamorous. But when you get it wrong, the consequences are devastating — fines, shutdowns, lost contracts.\n\nWe were managing compliance across three facilities with spreadsheets and paper logs. Every audit season was a three-week scramble.\n\nThe platform changed everything. Every inspection, every test result — all captured digitally with automatic audit trails. When our FDA auditor came last quarter, I pulled up 18 months of compliance history in 30 seconds.\n\nWe went from dreading audits to welcoming them. 92% reduction in compliance incidents, $1.8M in avoided penalties.\"" },
-  { id:"4",clientName:"Priya Sharma",company:"Elevate Financial",vertical:"Financial Services",geography:"West Coast US",companySize:"50-200",challenge:"Client Onboarding",outcome:"Onboarding: 14 days to 3 days",assetType:"Written Case Study",status:"active",dateCreated:"2026-01-08",headline:"Cut client onboarding from two weeks to three days",pullQuote:"Our clients are high-net-worth individuals who expect white-glove service. A 14-day onboarding process was telling them we didn't value their time.",thumbnail:"https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=640&h=360&fit=crop",videoUrl:"",transcript:"Elevate Financial Case Study\n\nCompany: Boutique wealth management, $2.3B AUM, ~400 HNW clients, team of 85.\n\nProblem: 14-day onboarding with 23 touchpoints and 7 document collection steps.\n\nResults: Onboarding 14 days → 3 days. Client satisfaction 67% → 95%. Doc errors down 88%. Advisor time per client 6hrs → 45min. Referral rate up 34%.\n\nPriya: \"They understood that for our clients, onboarding IS the first impression. Now new clients tell us it was the smoothest financial experience they've ever had.\"" },
-  { id:"5",clientName:"David Park",company:"Atlas Retail Group",vertical:"Retail",geography:"National US",companySize:"5000+",challenge:"Inventory Optimization",outcome:"$4.2M annual savings",assetType:"Video Testimonial",status:"inactive",dateCreated:"2024-03-18",headline:"Solved their $4M overstock problem with AI",pullQuote:"We were sitting on $12M in dead inventory. Turns out, we were using last year's weather to predict this year's demand.",thumbnail:"https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=640&h=360&fit=crop",videoUrl:"https://vimeo.com/example5",transcript:"David Park, SVP Supply Chain at Atlas Retail Group:\n\n\"Retail inventory is a high-wire act. We were losing on both ends — $12M in dead inventory and stockouts on bestsellers.\n\nThe AI-powered platform integrates real-time signals. First year: 23% reduction in overstock across 340 locations. $4.2M saved. Stockouts dropped 31%.\"" },
-  { id:"6",clientName:"Rachel Torres",company:"Greenfield Education",vertical:"Education",geography:"Southeast US",companySize:"50-200",challenge:"Student Retention",outcome:"28% retention improvement",assetType:"Quote",status:"active",dateCreated:"2025-06-30",headline:"Early intervention AI changed everything",pullQuote:"We were losing students silently. By the time a professor flagged a struggling student, they'd already mentally checked out. Now we catch them in week two, not week twelve.",thumbnail:"",videoUrl:"",transcript:"Rachel Torres, Dean of Student Success:\n\n\"We were losing students silently. By the time a professor flagged a struggling student, they'd already mentally checked out. Now we catch them in week two, not week twelve.\n\nOur early intervention success rate is 85%. Overall retention improved 28%. For a university our size, that's transformative.\"" },
-  { id:"7",clientName:"Tom Nakamura",company:"Pacific Coast Properties",vertical:"Real Estate",geography:"West Coast US",companySize:"200-500",challenge:"Lease Management",outcome:"Recovered $800K in missed revenue",assetType:"Written Case Study",status:"active",dateCreated:"2025-12-05",headline:"Recovered $800K in missed lease revenue",pullQuote:"We discovered we'd been under-collecting on 34 leases for over two years. The system paid for itself in the first month.",thumbnail:"https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=640&h=360&fit=crop",videoUrl:"",transcript:"Tom Nakamura, VP Asset Management: \"Commercial lease management is deceptively complex. We missed rent escalation dates on 34 leases. Total: $800,000.\n\nResults: Lease processing time down 60%. Zero missed escalations. Recovered $800K. CAM reconciliation time cut 70%. The system paid for itself in month one.\"" },
-  { id:"8",clientName:"Angela Foster",company:"NovaTech Solutions",vertical:"Technology",geography:"National US",companySize:"1000-5000",challenge:"Sales Enablement",outcome:"Win rate: 22% to 34%",assetType:"Video Testimonial",status:"active",dateCreated:"2026-02-14",headline:"Sales team went from 22% to 34% win rate",pullQuote:"Our reps were spending more time looking for content than talking to prospects. Now the right case study finds them.",thumbnail:"https://images.unsplash.com/photo-1553877522-43269d4ea984?w=640&h=360&fit=crop",videoUrl:"https://vimeo.com/example8",transcript:"Angela Foster, CRO at NovaTech Solutions:\n\n\"200 reps, thousands of pieces of content, no intelligent way to connect the two. The average rep spent 7.2 hours per week searching for content.\n\nWin rate: 22% → 34%. Sales cycle shortened 50%. Content utilization 12% → 67%.\"" },
-  { id:"9",clientName:"Elena Vasquez",company:"Summit HR",vertical:"Technology",geography:"National US",companySize:"200-500",challenge:"Employee Retention",outcome:"Turnover decreased 35%",assetType:"Quote",status:"active",dateCreated:"2025-10-12",headline:"Predictive analytics saved their best people",pullQuote:"We stopped guessing who was about to leave and started knowing. The model flagged our top performer three weeks before she updated her LinkedIn. We saved her — and seven others that quarter.",thumbnail:"",videoUrl:"",transcript:"Elena Vasquez, CHRO at Summit HR:\n\n\"We stopped guessing who was about to leave and started knowing. Turnover decreased 35%. We estimate we saved $2.8M in replacement costs in the first year.\"" },
-];
+// (SEED data now lives in Supabase — see prisma/seed-assets.sql)
 
 const VERTICALS: string[] = ["All","Logistics","Healthcare","Manufacturing","Financial Services","Retail","Education","Real Estate","Technology"];
 const ASSET_TYPES: string[] = ["All","Video Testimonial","Written Case Study","Quote"];
@@ -1149,7 +1139,7 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProp
 
 // ─── APP ─────────────────────────────────────────────────────────────────────
 export default function App(){
-  const[assets,setAssets]=useState<Asset[]>(SEED);
+  const[assets,setAssets]=useState<Asset[]>([]);
   const[filters,setFilters]=useState<Filters>({vertical:[],assetType:[]});
   const[openFilter,setOpenFilter]=useState<string|null>(null);
   const[search,setSearch]=useState("");
@@ -1172,6 +1162,18 @@ export default function App(){
   useEffect(()=>{
     const h=()=>{const hash=window.location.hash.slice(1);if(hash.startsWith("/asset/"))setRoute({page:"detail",id:hash.split("/asset/")[1]});else setRoute({page:"home",id:null});};
     h();window.addEventListener("hashchange",h);return()=>window.removeEventListener("hashchange",h);
+  },[]);
+
+  // Load assets from the database on mount
+  useEffect(()=>{
+    fetch("/api/assets")
+      .then(r=>r.json())
+      .then((data: Asset[])=>{
+        setAssets(data);
+      })
+      .catch(e=>{
+        console.error("Failed to load assets",e);
+      });
   },[]);
 
   const openAsset=(a: Asset)=>{window.location.hash=`/asset/${a.id}`;};
@@ -1325,19 +1327,52 @@ export default function App(){
               {adminSection==="assets" && (
                 <AssetsPanel
                   assets={assets}
-                  onUpdate={u=>{
+                  onUpdate={async u=>{
+                    // Optimistic UI: update local state immediately
                     setAssets(p=>p.map(a=>a.id===u.id?u:a));
-                    setToast("Saved");
+                    setToast("Saving…");
+                    try{
+                      const r=await fetch("/api/assets",{
+                        method:"PUT",
+                        headers:{"Content-Type":"application/json"},
+                        body:JSON.stringify(u)
+                      });
+                      if(!r.ok)throw new Error("Save failed");
+                      setToast("Saved");
+                    }catch(e){
+                      console.error(e);
+                      setToast("Save failed");
+                    }
                     setTimeout(()=>setToast(null),1500);
                   }}
-                  onDelete={id=>{
+                  onDelete={async id=>{
                     setAssets(p=>p.filter(a=>a.id!==id));
-                    setToast("Deleted");
+                    setToast("Deleting…");
+                    try{
+                      const r=await fetch(`/api/assets?id=${id}`,{method:"DELETE"});
+                      if(!r.ok)throw new Error("Delete failed");
+                      setToast("Deleted");
+                    }catch(e){
+                      console.error(e);
+                      setToast("Delete failed");
+                    }
                     setTimeout(()=>setToast(null),1500);
                   }}
-                  onAdd={a=>{
+                  onAdd={async a=>{
                     setAssets(p=>[a,...p]);
-                    setToast("Created");
+                    setToast("Creating…");
+                    try{
+                      const r=await fetch("/api/assets",{
+                        method:"POST",
+                        headers:{"Content-Type":"application/json"},
+                        body:JSON.stringify(a)
+                      });
+                      if(!r.ok)throw new Error("Create failed");
+                      setToast("Created");
+                    }catch(e){
+                      console.error(e);
+                      setToast("Create failed");
+                    }
                     setTimeout(()=>setToast(null),1500);
                   }}
                   onPreview={id=>{
