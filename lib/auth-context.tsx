@@ -76,11 +76,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const refresh = async () => {
-    const { data: { user } } = await supabaseBrowser.auth.getUser();
-    setUser(user);
-    if (user) {
-      await loadOrg(user.id);
-    } else {
+    try {
+      // Time-bound this call. If the Supabase lock hangs for any reason,
+      // we want to fail open ("no user") rather than keep the app stuck on
+      // the loading screen forever.
+      const getUserPromise = supabaseBrowser.auth.getUser();
+      const timeout = new Promise<{ data: { user: null } }>((resolve) =>
+        setTimeout(() => resolve({ data: { user: null } }), 5000)
+      );
+      const { data: { user } } = (await Promise.race([getUserPromise, timeout])) as { data: { user: User | null } };
+      setUser(user);
+      if (user) {
+        await loadOrg(user.id);
+      } else {
+        setOrg(null);
+      }
+    } catch (e) {
+      console.error("auth refresh failed:", e);
+      setUser(null);
       setOrg(null);
     }
   };
