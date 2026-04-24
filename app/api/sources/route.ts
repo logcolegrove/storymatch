@@ -139,7 +139,7 @@ export async function PUT(req: NextRequest) {
 }
 
 // ───────────────────────────────────────────────────────────
-// DELETE /api/sources?id=xxx — remove (admins only)
+// DELETE /api/sources?id=xxx — remove source AND all its imported assets (admins only)
 // ───────────────────────────────────────────────────────────
 export async function DELETE(req: NextRequest) {
   const ctx = await getCurrentUserOrg(req);
@@ -149,11 +149,27 @@ export async function DELETE(req: NextRequest) {
   }
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
-  const { error } = await supabaseAdmin
+
+  // First delete all assets that came from this source
+  // (Scope by org_id as a safety check so we never touch another org's data)
+  const { error: assetError, count: assetsDeleted } = await supabaseAdmin
+    .from("assets")
+    .delete({ count: "exact" })
+    .eq("source_id", id)
+    .eq("org_id", ctx.orgId);
+  if (assetError) {
+    return NextResponse.json({ error: assetError.message }, { status: 500 });
+  }
+
+  // Then delete the source itself
+  const { error: sourceError } = await supabaseAdmin
     .from("sources")
     .delete()
     .eq("id", id)
     .eq("org_id", ctx.orgId);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+  if (sourceError) {
+    return NextResponse.json({ error: sourceError.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, assetsDeleted: assetsDeleted ?? 0 });
 }

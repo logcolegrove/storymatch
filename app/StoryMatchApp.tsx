@@ -1476,11 +1476,22 @@ export default function App(){
                     }
                   }}
                   onRemoveSource={async id=>{
-                    if(!confirm("Remove this source? Assets already imported will remain in your library."))return;
+                    const src=sources.find(s=>s.id===id);
+                    const assetCount=src?.assetIds?.length||0;
+                    const msg=assetCount>0
+                      ?`Remove this source AND its ${assetCount} imported ${assetCount===1?"asset":"assets"}? This cannot be undone.`
+                      :"Remove this source? This cannot be undone.";
+                    if(!confirm(msg))return;
+                    // Optimistic: remove source and its assets from local state
                     setSources(p=>p.filter(s=>s.id!==id));
+                    setAssets(p=>p.filter(a=>a.sourceId!==id));
                     try{
                       const r=await fetch(`/api/sources?id=${id}`,{method:"DELETE",headers:await authHeaders()});
                       if(!r.ok)throw new Error("Delete failed");
+                      const body=await r.json().catch(()=>({}));
+                      const n=body.assetsDeleted||0;
+                      setToast(n>0?`Removed source and ${n} ${n===1?"asset":"assets"}`:"Source removed");
+                      setTimeout(()=>setToast(null),2000);
                     }catch(e){
                       console.error(e);
                       setToast("Couldn't remove source");
