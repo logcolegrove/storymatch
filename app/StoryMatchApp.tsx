@@ -139,7 +139,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 
 /* ── ADMIN LEFT RAIL + PANEL ── */
 .layout{display:flex;min-height:calc(100vh - 56px);}
-.admin-rail{width:64px;background:#fff;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:12px 0;flex-shrink:0;}
+.admin-rail{width:64px;background:#fff;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:12px 0;flex-shrink:0;position:sticky;top:56px;height:calc(100vh - 56px);align-self:flex-start;overflow-y:auto;z-index:20;}
 .rail-btn{width:44px;height:44px;border-radius:10px;border:none;background:none;color:var(--t3);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-family:var(--font);font-size:9px;font-weight:600;transition:all .12s;margin-bottom:4px;position:relative;}
 .rail-btn:hover{background:var(--bg2);color:var(--t1);}
 .rail-btn.on{background:var(--accentL);color:var(--accent);}
@@ -149,19 +149,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .rail-btn.disabled:hover{background:none;color:var(--t3);}
 .rail-btn .rail-soon{position:absolute;top:2px;right:2px;background:var(--t4);color:#fff;font-size:7px;font-weight:700;padding:1px 3px;border-radius:3px;letter-spacing:.3px;}
 .rail-spacer{flex:1;}
-.rail-collapse{width:36px;height:28px;border-radius:6px;border:1px solid var(--border);background:#fff;color:var(--t3);cursor:pointer;display:grid;place-items:center;transition:all .12s;margin-bottom:6px;}
-.rail-collapse:hover{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
-.rail-divider{width:32px;height:1px;background:var(--border);margin:4px auto 10px;}
-.rail-toggle{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--t3);cursor:pointer;display:grid;place-items:center;margin:0 auto;transition:all .12s;}
-.rail-toggle:hover{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
-.rail-toggle .admin-pull-dots span{width:3px;height:3px;}
 
-.admin-pull{position:fixed;left:0;top:50%;transform:translateY(-50%);width:32px;height:64px;border-radius:0 10px 10px 0;border:1px solid var(--border);border-left:none;background:#fff;color:var(--t2);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;z-index:25;box-shadow:2px 2px 12px rgba(0,0,0,.08);transition:all .15s;}
-.admin-pull:hover{width:38px;color:var(--accent);border-color:var(--accent);background:var(--accentLL);}
-.admin-pull-dots{display:flex;flex-direction:column;gap:3px;}
-.admin-pull-dots span{display:block;width:4px;height:4px;border-radius:50%;background:currentColor;}
-
-.admin-panel{width:340px;background:#fff;border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;animation:fadeIn .2s ease;}
+.admin-panel{width:340px;background:#fff;border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;animation:fadeIn .2s ease;position:sticky;top:56px;height:calc(100vh - 56px);align-self:flex-start;z-index:15;}
 .ap-head{padding:18px 20px 14px;border-bottom:1px solid var(--border);}
 .ap-title{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;}
 .ap-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
@@ -1150,7 +1139,6 @@ export default function App(){
   const[adminMode,setAdminMode]=useState(true); // admin by default
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
-  const[railHidden,setRailHidden]=useState(true); // fully hidden by default
 
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
@@ -1247,18 +1235,8 @@ export default function App(){
 
         <div className="layout">
 
-          {adminMode && !railHidden && (
+          {adminMode && (
             <aside className="admin-rail">
-              <button
-                className="rail-collapse"
-                onClick={()=>{setRailHidden(true);setAdminSection(null);}}
-                title="Hide sidebar"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="15 18 9 12 15 6"/>
-                </svg>
-              </button>
-              <div className="rail-divider"/>
               <button
                 className={`rail-btn ${adminSection==="import"?"on":""}`}
                 onClick={()=>setAdminSection(adminSection==="import"?null:"import")}
@@ -1295,17 +1273,7 @@ export default function App(){
             </aside>
           )}
 
-          {adminMode && railHidden && (
-            <button
-              className="admin-pull"
-              onClick={()=>{setRailHidden(false);if(!adminSection)setAdminSection("assets");}}
-              title="Show admin sidebar"
-            >
-              <div className="admin-pull-dots"><span/><span/><span/></div>
-            </button>
-          )}
-
-          {adminMode && !railHidden && adminSection && (
+          {adminMode && adminSection && (
             <aside className="admin-panel">
               {adminSection==="import" && (
                 <SourcesPanel
