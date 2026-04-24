@@ -1,6 +1,35 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useAuth } from "@/lib/auth-context";
+
+// Helper: build auth header for API requests.
+// IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
+// it acquires an internal lock that can deadlock under React Strict Mode, causing
+// fetch helpers to hang forever. Instead, we read the token directly from localStorage
+// where Supabase persists it. If no token exists, we fall through gracefully.
+async function authHeaders(): Promise<HeadersInit> {
+  try {
+    if (typeof window === "undefined") return {};
+    // Scan localStorage for any key matching supabase auth token pattern
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("sb-") && key.endsWith("-auth-token")) {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        try {
+          const parsed = JSON.parse(raw);
+          // Supabase stores either as {access_token, ...} or as an array-like structure
+          const token = parsed?.access_token || parsed?.currentSession?.access_token;
+          if (token) return { "Authorization": `Bearer ${token}` };
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn("authHeaders: unable to read token", e);
+  }
+  return {};
+}
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 type AssetType = "Video Testimonial" | "Written Case Study" | "Quote";
@@ -677,43 +706,41 @@ Return ONLY valid JSON (no markdown fences):
 }
 
 
-// Extract video URLs from a showcase/playlist page using Claude + web search
+// Extract videos from a showcase URL using our authenticated Vimeo API
 interface ExtractedVideo {
   url: string;
   title?: string;
+  description?: string;
+  thumbnail?: string;
+  durationSec?: number;
+  transcript?: string;
 }
 
 async function extractShowcaseVideos(sourceUrl: string): Promise<ExtractedVideo[]> {
   try{
-    const r=await fetch("https://api.anthropic.com/v1/messages",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",
-        max_tokens:2500,
-        tools:[{type:"web_search_20250305",name:"web_search"}],
-        messages:[{role:"user",content:`Visit this video showcase/playlist URL and extract every individual video it contains: ${sourceUrl}
-
-For each video, return its direct video URL (like https://vimeo.com/123456789 or https://youtube.com/watch?v=ABC) and title if visible.
-
-Search thoroughly — look for embedded players, metadata, and any linked video pages. If the showcase/playlist page itself doesn't show individual URLs, search for the collection by name to find individual videos.
-
-Return ONLY valid JSON (no markdown fences, no preamble):
-[{"url": "direct video URL", "title": "video title"}, ...]
-
-If you cannot find any videos, return: []`}]
-      })
-    });
-    const d=await r.json();
-    const txt=(d.content||[]).filter((c:{type:string})=>c.type==="text").map((c:{text:string})=>c.text).join("");
-    const jm=txt.match(/\[[\s\S]*\]/);
-    if(jm){
-      const arr=JSON.parse(jm[0]) as ExtractedVideo[];
-      // Filter to only those with valid URLs
-      return arr.filter(v=>v.url&&(v.url.includes("vimeo.com")||v.url.includes("youtube.com")||v.url.includes("youtu.be")));
+    const headers=await authHeaders();
+    // Only call the real Vimeo API for Vimeo URLs. (YouTube would use a separate route.)
+    if(sourceUrl.includes("vimeo.com")){
+      const r=await fetch(`/api/vimeo/showcase?url=${encodeURIComponent(sourceUrl)}`,{headers});
+      if(!r.ok){
+        const body=await r.json().catch(()=>({error:`HTTP ${r.status}`}));
+        console.error("Vimeo showcase fetch failed:",body);
+        return[];
+      }
+      const data=await r.json() as {videos:{url:string;title:string;description?:string;thumbnail?:string;durationSec?:number;uploader?:string;transcript?:string}[]};
+      return(data.videos||[]).map(v=>({
+        url:v.url,
+        title:v.title,
+        description:v.description,
+        thumbnail:v.thumbnail,
+        durationSec:v.durationSec,
+        transcript:v.transcript,
+      }));
     }
-  }catch(e){console.error("extractShowcaseVideos failed",e);}
-  return[];
+    // Fallback: non-Vimeo URLs get nothing for now
+    console.warn("Non-Vimeo source URL; skipping:",sourceUrl);
+    return[];
+  }catch(e){console.error("extractShowcaseVideos failed",e);return[];}
 }
 
 // Import a single video URL into an asset (oEmbed + Claude enrichment)
@@ -782,6 +809,70 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
   const[progress,setProgress]=useState<Progress|null>(null);
   const[syncingId,setSyncingId]=useState<string|null>(null);
 
+  // Vimeo connection state
+  const[vimeoStatus,setVimeoStatus]=useState<{connected:boolean;vimeoUserName?:string}|null>(null);
+  const[vimeoBusy,setVimeoBusy]=useState(false);
+
+  // Check Vimeo connection on mount
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const headers=await authHeaders();
+        const r=await fetch("/api/vimeo/status",{headers});
+        if(r.ok){
+          const data=await r.json();
+          setVimeoStatus(data);
+        }
+      }catch(e){console.error("Failed to check Vimeo status",e);}
+    })();
+  },[]);
+
+  // Also react to ?vimeo_connected=1 returning from OAuth flow
+  useEffect(()=>{
+    if(typeof window==="undefined")return;
+    const params=new URLSearchParams(window.location.search);
+    if(params.has("vimeo_connected")||params.has("vimeo_error")){
+      // Refetch status
+      (async()=>{
+        const headers=await authHeaders();
+        const r=await fetch("/api/vimeo/status",{headers});
+        if(r.ok){setVimeoStatus(await r.json());}
+      })();
+      // Clean up the URL
+      window.history.replaceState({},"",window.location.pathname);
+    }
+  },[]);
+
+  const connectVimeo=async()=>{
+    setVimeoBusy(true);
+    try{
+      const headers=await authHeaders();
+      const r=await fetch("/api/vimeo/connect",{headers});
+      if(!r.ok){
+        const body=await r.json().catch(()=>({}));
+        alert(body.error||"Failed to start Vimeo connection");
+        setVimeoBusy(false);
+        return;
+      }
+      const {url}=await r.json();
+      window.location.href=url;
+    }catch(e){
+      console.error(e);
+      setVimeoBusy(false);
+    }
+  };
+
+  const disconnectVimeo=async()=>{
+    if(!confirm("Disconnect your Vimeo account?"))return;
+    setVimeoBusy(true);
+    try{
+      const headers=await authHeaders();
+      await fetch("/api/vimeo/status",{method:"DELETE",headers});
+      setVimeoStatus({connected:false});
+    }catch(e){console.error(e);}
+    setVimeoBusy(false);
+  };
+
   const detected=url.trim()?detectUrlType(url.trim()):null;
   const isCollection=detected&&(detected.kind==="vm-showcase"||detected.kind==="yt-playlist");
   const isSingle=detected&&(detected.kind==="vm-video"||detected.kind==="yt-video");
@@ -791,8 +882,13 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
   // Add a collection source — extract all videos and create assets
   const addCollectionSource=async()=>{
     if(!detected||!isCollection)return;
+    // Vimeo showcases need Vimeo connected
+    if(detected.kind==="vm-showcase"&&!vimeoStatus?.connected){
+      alert("Connect your Vimeo account first to import showcases.");
+      return;
+    }
     setWorking(true);
-    setProgress({step:"Extracting video list from showcase…",count:0,total:"?"});
+    setProgress({step:"Extracting videos and transcripts from showcase…",count:0,total:"?"});
     const videos=await extractShowcaseVideos(detected.url);
     if(videos.length===0){
       setProgress({step:`No videos could be extracted. Source saved — try "Sync" later.`,count:0,total:0,done:true,error:true});
@@ -811,7 +907,12 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       if(!info||info.kind==="unknown")continue;
       setProgress({step:`Processing ${v.title||v.url}…`,count:i+1,total:videos.length});
       const asset=await importSingleVideo(info,sourceId);
+      // Override with rich data we already have from Vimeo (higher quality than oEmbed)
       if(v.title&&!asset.headline)asset.headline=v.title;
+      if(v.thumbnail)asset.thumbnail=v.thumbnail;
+      // Real auto-transcribed captions beat everything else
+      if(v.transcript)asset.transcript=v.transcript;
+      else if(v.description&&!asset.transcript)asset.transcript=v.description;
       newAssets.push(asset);
     }
     const source: Source = {id:sourceId,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"synced",lastSync:new Date().toISOString(),videoCount:newAssets.length,assetIds:newAssets.map(a=>a.id)};
@@ -957,9 +1058,58 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     <React.Fragment>
       <div className="ap-head">
         <div className="ap-title">Import</div>
-        <div className="ap-sub">Connect video sources — we'll pull them in and keep them synced</div>
+        <div className="ap-sub">Connect video sources — we&apos;ll pull them in and keep them synced</div>
       </div>
       <div className="ap-body">
+        {/* Vimeo connection status */}
+        {vimeoStatus && (
+          <div style={{
+            marginBottom:14,
+            padding:"10px 12px",
+            borderRadius:9,
+            border:vimeoStatus.connected?"1px solid var(--accentL)":"1.5px dashed var(--border2)",
+            background:vimeoStatus.connected?"var(--accentLL)":"var(--bg)",
+            display:"flex",
+            alignItems:"center",
+            gap:10,
+          }}>
+            <div style={{
+              width:28,height:28,borderRadius:7,background:"#1ab7ea",
+              color:"#fff",display:"grid",placeItems:"center",
+              fontSize:13,fontWeight:700,flexShrink:0
+            }}>V</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:600,color:"var(--t1)"}}>
+                {vimeoStatus.connected?"Vimeo connected":"Connect Vimeo"}
+              </div>
+              <div style={{fontSize:10.5,color:"var(--t3)",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {vimeoStatus.connected
+                  ?`Signed in as ${vimeoStatus.vimeoUserName||"Vimeo user"}`
+                  :"Pull showcases and videos from your Vimeo account."}
+              </div>
+            </div>
+            <button
+              onClick={vimeoStatus.connected?disconnectVimeo:connectVimeo}
+              disabled={vimeoBusy}
+              style={{
+                padding:"6px 11px",
+                borderRadius:6,
+                border:"1px solid var(--border)",
+                background:vimeoStatus.connected?"#fff":"var(--accent)",
+                color:vimeoStatus.connected?"var(--t2)":"#fff",
+                fontSize:11,
+                fontWeight:700,
+                cursor:vimeoBusy?"wait":"pointer",
+                fontFamily:"var(--font)",
+                flexShrink:0,
+                opacity:vimeoBusy?.6:1,
+              }}
+            >
+              {vimeoBusy?"…":vimeoStatus.connected?"Disconnect":"Connect"}
+            </button>
+          </div>
+        )}
+
         <button className="src-add-new" onClick={()=>setView("add")}>
           + Add source or single video
         </button>
@@ -1128,6 +1278,7 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProp
 
 // ─── APP ─────────────────────────────────────────────────────────────────────
 export default function App(){
+  const{user,org,signOut}=useAuth();
   const[assets,setAssets]=useState<Asset[]>([]);
   const[filters,setFilters]=useState<Filters>({vertical:[],assetType:[]});
   const[openFilter,setOpenFilter]=useState<string|null>(null);
@@ -1136,7 +1287,8 @@ export default function App(){
   const[toast,setToast]=useState<string|null>(null);
 
   // Admin mode + nav
-  const[adminMode,setAdminMode]=useState(true); // admin by default
+  const isAdmin = org?.role === "admin";
+  const[adminMode,setAdminMode]=useState(true); // whether admin is viewing admin UI vs preview as sales
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
@@ -1154,14 +1306,28 @@ export default function App(){
 
   // Load assets from the database on mount
   useEffect(()=>{
-    fetch("/api/assets")
-      .then(r=>r.json())
-      .then((data: Asset[])=>{
+    (async()=>{
+      try{
+        const headers=await authHeaders();
+        const r=await fetch("/api/assets",{headers});
+        if(!r.ok)throw new Error("Failed");
+        const data=await r.json() as Asset[];
         setAssets(data);
-      })
-      .catch(e=>{
-        console.error("Failed to load assets",e);
-      });
+      }catch(e){console.error("Failed to load assets",e);}
+    })();
+  },[]);
+
+  // Load sources from the database on mount
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const headers=await authHeaders();
+        const r=await fetch("/api/sources",{headers});
+        if(!r.ok)throw new Error("Failed");
+        const data=await r.json() as Source[];
+        setSources(data);
+      }catch(e){console.error("Failed to load sources",e);}
+    })();
   },[]);
 
   const openAsset=(a: Asset)=>{window.location.hash=`/asset/${a.id}`;};
@@ -1203,7 +1369,7 @@ export default function App(){
 
   if(route.page==="detail"){
     return(<React.Fragment><style>{css}</style><div style={{minHeight:"100vh",background:"var(--bg)"}}>
-      <header className="hdr"><div className="logo" onClick={goHome}></div><div className="hdr-r"><span className="badge">{assets.length} assets</span></div></header>
+      <header className="hdr"><div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}>StoryMatch</div><div className="hdr-r"><span className="badge">{assets.length} assets</span></div></header>
       <DetailPage asset={detailAsset} onBack={goHome} allAssets={assets} onSelect={openAsset}/>
     </div></React.Fragment>);
   }
@@ -1214,28 +1380,42 @@ export default function App(){
       <div style={{minHeight:"100vh",background:"var(--bg)"}}>
 
         <header className="hdr">
-          <div className="logo" onClick={goHome}>
+          <div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}>
+            StoryMatch
           </div>
           <div className="hdr-r">
             <span className="badge">{assets.length} assets</span>
-            <div className="mode-toggle">
+            {isAdmin && (
+              <div className="mode-toggle">
+                <button
+                  className={`mode-btn ${adminMode?"on":""}`}
+                  onClick={()=>setAdminMode(true)}
+                  title="Admin view: manage assets and use StoryMatch"
+                >Admin</button>
+                <button
+                  className={`mode-btn ${!adminMode?"on":""}`}
+                  onClick={()=>setAdminMode(false)}
+                  title="Public view: what your customers see"
+                >Public</button>
+              </div>
+            )}
+            <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:8,paddingLeft:12,borderLeft:"1px solid var(--border)"}}>
+              <div style={{fontSize:11,color:"var(--t3)",textAlign:"right",lineHeight:1.3}}>
+                <div style={{fontWeight:600,color:"var(--t2)"}}>{user?.email}</div>
+                <div>{org?.name||"No workspace"} · {org?.role||"—"}</div>
+              </div>
               <button
-                className={`mode-btn ${adminMode?"on":""}`}
-                onClick={()=>setAdminMode(true)}
-                title="Admin view: manage assets and use StoryMatch"
-              >Admin</button>
-              <button
-                className={`mode-btn ${!adminMode?"on":""}`}
-                onClick={()=>setAdminMode(false)}
-                title="Public view: what your customers see"
-              >Public</button>
+                onClick={signOut}
+                title="Sign out"
+                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
+              >Sign out</button>
             </div>
           </div>
         </header>
 
         <div className="layout">
 
-          {adminMode && (
+          {isAdmin && adminMode && (
             <aside className="admin-rail">
               <button
                 className={`rail-btn ${adminSection==="import"?"on":""}`}
@@ -1273,22 +1453,78 @@ export default function App(){
             </aside>
           )}
 
-          {adminMode && adminSection && (
+          {isAdmin && adminMode && adminSection && (
             <aside className="admin-panel">
               {adminSection==="import" && (
                 <SourcesPanel
                   sources={sources}
                   assets={assets}
-                  onAddSource={s=>setSources(p=>[s,...p])}
-                  onRemoveSource={id=>setSources(p=>p.filter(s=>s.id!==id))}
-                  onSyncSource={(id,newAssetIds,videoCount)=>{
-                    setSources(p=>p.map(s=>s.id===id?{...s,lastSync:new Date().toISOString(),status:"synced",videoCount:videoCount,assetIds:[...(s.assetIds||[]),...newAssetIds]}:s));
+                  onAddSource={async s=>{
+                    // Optimistic local update
+                    setSources(p=>[s,...p]);
+                    try{
+                      const r=await fetch("/api/sources",{
+                        method:"POST",
+                        headers:{"Content-Type":"application/json",...(await authHeaders())},
+                        body:JSON.stringify(s)
+                      });
+                      if(!r.ok)throw new Error("Save source failed");
+                    }catch(e){
+                      console.error(e);
+                      setToast("Couldn't save source");
+                      setTimeout(()=>setToast(null),2000);
+                    }
+                  }}
+                  onRemoveSource={async id=>{
+                    if(!confirm("Remove this source? Assets already imported will remain in your library."))return;
+                    setSources(p=>p.filter(s=>s.id!==id));
+                    try{
+                      const r=await fetch(`/api/sources?id=${id}`,{method:"DELETE",headers:await authHeaders()});
+                      if(!r.ok)throw new Error("Delete failed");
+                    }catch(e){
+                      console.error(e);
+                      setToast("Couldn't remove source");
+                      setTimeout(()=>setToast(null),2000);
+                    }
+                  }}
+                  onSyncSource={async (id,newAssetIds,videoCount)=>{
+                    const updated=sources.find(s=>s.id===id);
+                    if(!updated)return;
+                    const nextSource={
+                      ...updated,
+                      lastSync:new Date().toISOString(),
+                      status:"synced",
+                      videoCount,
+                      assetIds:[...(updated.assetIds||[]),...newAssetIds],
+                    };
+                    setSources(p=>p.map(s=>s.id===id?nextSource:s));
                     setToast(newAssetIds.length>0?`Synced — ${newAssetIds.length} new`:"Synced — no new videos");
                     setTimeout(()=>setToast(null),2000);
+                    try{
+                      await fetch("/api/sources",{
+                        method:"PUT",
+                        headers:{"Content-Type":"application/json",...(await authHeaders())},
+                        body:JSON.stringify(nextSource)
+                      });
+                    }catch(e){console.error(e);}
                   }}
-                  onAddAssets={arr=>{
+                  onAddAssets={async arr=>{
+                    // Optimistic UI
                     setAssets(p=>[...arr,...p]);
-                    if(arr.length>1){setToast(`Added ${arr.length} assets`);setTimeout(()=>setToast(null),2000);}
+                    setToast(arr.length>1?`Saving ${arr.length} assets…`:"Saving asset…");
+                    try{
+                      const r=await fetch("/api/assets",{
+                        method:"POST",
+                        headers:{"Content-Type":"application/json",...(await authHeaders())},
+                        body:JSON.stringify({assets:arr})
+                      });
+                      if(!r.ok)throw new Error("Save failed");
+                      setToast(arr.length>1?`Saved ${arr.length} assets`:"Saved");
+                    }catch(e){
+                      console.error(e);
+                      setToast("Save failed");
+                    }
+                    setTimeout(()=>setToast(null),2000);
                   }}
                 />
               )}
@@ -1302,7 +1538,7 @@ export default function App(){
                     try{
                       const r=await fetch("/api/assets",{
                         method:"PUT",
-                        headers:{"Content-Type":"application/json"},
+                        headers:{"Content-Type":"application/json",...(await authHeaders())},
                         body:JSON.stringify(u)
                       });
                       if(!r.ok)throw new Error("Save failed");
@@ -1314,10 +1550,11 @@ export default function App(){
                     setTimeout(()=>setToast(null),1500);
                   }}
                   onDelete={async id=>{
+                    if(!confirm("Delete this asset? This cannot be undone."))return;
                     setAssets(p=>p.filter(a=>a.id!==id));
                     setToast("Deleting…");
                     try{
-                      const r=await fetch(`/api/assets?id=${id}`,{method:"DELETE"});
+                      const r=await fetch(`/api/assets?id=${id}`,{method:"DELETE",headers:await authHeaders()});
                       if(!r.ok)throw new Error("Delete failed");
                       setToast("Deleted");
                     }catch(e){
@@ -1332,7 +1569,7 @@ export default function App(){
                     try{
                       const r=await fetch("/api/assets",{
                         method:"POST",
-                        headers:{"Content-Type":"application/json"},
+                        headers:{"Content-Type":"application/json",...(await authHeaders())},
                         body:JSON.stringify(a)
                       });
                       if(!r.ok)throw new Error("Create failed");
@@ -1367,7 +1604,7 @@ export default function App(){
                   onChange={e=>{setSearch(e.target.value);if(smResults)clearSm();}}
                   onFocus={()=>{if(smOpen)setSmOpen(false);}}
                 />
-                {adminMode && (
+                {((isAdmin && adminMode) || org?.role === "sales") && (
                   <button
                     className={`sm-btn ${smOpen||smLoading||smResults?"active":""}`}
                     onClick={()=>{if(smResults){clearSm();}else{setSmOpen(!smOpen);}}}
@@ -1377,7 +1614,7 @@ export default function App(){
                 )}
               </div>
 
-              {adminMode && (smOpen||smLoading) && !smResults && (
+              {((isAdmin && adminMode) || org?.role === "sales") && (smOpen||smLoading) && !smResults && (
                 <div className="sm-dropdown-wrap">
                   <div className="sm-dropdown">
                     <div className="sm-inner">
