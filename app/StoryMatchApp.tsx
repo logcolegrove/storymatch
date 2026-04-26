@@ -1211,7 +1211,7 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProp
   const editing=editingId?assets.find(a=>a.id===editingId):null;
   useEffect(()=>{
     if(editing)setForm({...editing});
-    else if(creating)setForm({id:`new-${Date.now()}`,clientName:"",company:"",vertical:"Healthcare",geography:"Northeast US",companySize:"50-200",challenge:"",outcome:"",assetType:"Video Testimonial",videoUrl:"",status:"active",headline:"",pullQuote:"",transcript:"",thumbnail:"",dateCreated:new Date().toISOString().split("T")[0]});
+    else if(creating)setForm({id:`new-${Date.now()}`,clientName:"",company:"",vertical:"Healthcare",geography:"Northeast US",companySize:"50-200",challenge:"",outcome:"",assetType:"Video Testimonial",videoUrl:"",status:"active",headline:"",pullQuote:"",transcript:"",description:"",thumbnail:"",dateCreated:new Date().toISOString().split("T")[0]});
     else setForm(null);
   },[editingId,creating]);
 
