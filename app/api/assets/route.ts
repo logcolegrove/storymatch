@@ -50,6 +50,7 @@ type AssetDB = {
   headline: string;
   pull_quote: string;
   transcript: string;
+  description: string;
   thumbnail: string;
 };
 
@@ -70,6 +71,7 @@ type AssetFE = {
   headline: string;
   pullQuote: string;
   transcript: string;
+  description: string;
   thumbnail: string;
 };
 
@@ -91,6 +93,7 @@ function dbToFe(r: AssetDB): AssetFE {
     headline: r.headline,
     pullQuote: r.pull_quote,
     transcript: r.transcript,
+    description: r.description,
     thumbnail: r.thumbnail,
   };
 }
@@ -112,6 +115,7 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string): Partial<As
   if (a.headline !== undefined) o.headline = a.headline;
   if (a.pullQuote !== undefined) o.pull_quote = a.pullQuote;
   if (a.transcript !== undefined) o.transcript = a.transcript;
+  if (a.description !== undefined) o.description = a.description;
   if (a.thumbnail !== undefined) o.thumbnail = a.thumbnail;
   return o;
 }
@@ -152,7 +156,16 @@ export async function POST(req: NextRequest) {
     .upsert(rows, { onConflict: "id" })
     .select();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    console.error("[/api/assets POST] Supabase upsert error:", {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      sampleRow: rows[0],
+    });
+    return NextResponse.json({ error: error.message, code: error.code, hint: error.hint }, { status: 500 });
+  }
   return NextResponse.json((data as AssetDB[]).map(dbToFe));
 }
 

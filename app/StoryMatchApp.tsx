@@ -31,6 +31,23 @@ async function authHeaders(): Promise<HeadersInit> {
   return {};
 }
 
+// Fire-and-forget: ask the backend to (re)compute the embedding for an asset.
+// We don't await this — the user shouldn't wait. Embeddings catch up in the background.
+function reembedAsset(assetId: string) {
+  (async () => {
+    try {
+      const headers = await authHeaders();
+      await fetch("/api/embeddings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ assetId }),
+      });
+    } catch (e) {
+      console.warn("reembedAsset failed", e);
+    }
+  })();
+}
+
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 type AssetType = "Video Testimonial" | "Written Case Study" | "Quote";
 type AssetStatus = "active" | "inactive";
@@ -52,6 +69,7 @@ interface Asset {
   headline: string;
   pullQuote: string;
   transcript: string;
+  description: string;
   thumbnail: string;
 }
 
@@ -764,11 +782,11 @@ async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Pro
   return{
     id:`imp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
     sourceId:sourceId||null,
-    clientName:enriched?.clientName||meta?.author_name||"—",
-    company:enriched?.company||title.split(/[-–|:]/)[0].trim(),
-    vertical:enriched?.vertical||"Technology",
-    geography:"—",
-    companySize:"—",
+    clientName:enriched?.clientName||meta?.author_name||"",
+    company:enriched?.company||"",
+    vertical:enriched?.vertical||"",
+    geography:"",
+    companySize:"",
     challenge:enriched?.challenge||"",
     outcome:enriched?.outcome||"",
     assetType:"Video Testimonial",
@@ -776,8 +794,11 @@ async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Pro
     status:"active",
     dateCreated:new Date().toISOString().split("T")[0],
     headline:enriched?.headline||title,
-    pullQuote:enriched?.pullQuote||desc.substring(0,200),
-    transcript:desc||"Transcript pending — paste or generate here.",
+    pullQuote:enriched?.pullQuote||"",
+    // transcript stays empty unless real auto-captions come from Vimeo
+    transcript:"",
+    // description holds the human-written video description (more reliable than transcript for proper nouns)
+    description:desc,
     thumbnail:thumb||""
   };
 }
@@ -907,12 +928,13 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       if(!info||info.kind==="unknown")continue;
       setProgress({step:`Processing ${v.title||v.url}…`,count:i+1,total:videos.length});
       const asset=await importSingleVideo(info,sourceId);
-      // Override with rich data we already have from Vimeo (higher quality than oEmbed)
+      // Override with rich data we already have from Vimeo
       if(v.title&&!asset.headline)asset.headline=v.title;
       if(v.thumbnail)asset.thumbnail=v.thumbnail;
-      // Real auto-transcribed captions beat everything else
+      // Description is the human-written field — keep it separate from transcript
+      if(v.description)asset.description=v.description;
+      // Transcript is the auto-generated caption text
       if(v.transcript)asset.transcript=v.transcript;
-      else if(v.description&&!asset.transcript)asset.transcript=v.description;
       newAssets.push(asset);
     }
     const source: Source = {id:sourceId,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"synced",lastSync:new Date().toISOString(),videoCount:newAssets.length,assetIds:newAssets.map(a=>a.id)};
@@ -1152,8 +1174,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                     </button>
                     <button
                       className="src-act-btn danger"
-                      onClick={()=>{if(confirm(`Remove source "${s.name}"? (Assets will remain in your library.)`))onRemoveSource(s.id);}}
-                      title="Remove source"
+                      onClick={()=>onRemoveSource(s.id)}
+                      title="Remove source and its imported assets"
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 6 6 18M6 6l12 12"/>
@@ -1335,14 +1357,34 @@ export default function App(){
   const copyQuote=(t: string)=>{navigator.clipboard?.writeText(t);setToast("Copied!");setTimeout(()=>setToast(null),1800);};
 
   const runStoryMatch=useCallback(async(query: string)=>{
-    if(!query.trim())return;setSmLoading(true);setSmResults(null);
-    const hasUrl=query.match(/https?:\/\/[^\s]+/);
-    let ctx="";
-    if(hasUrl){try{const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,tools:[{type:"web_search_20250305",name:"web_search"}],messages:[{role:"user",content:`Visit ${hasUrl[0]} and summarize: what they do, industry, size, who they serve, likely pain points. 3-4 sentences only, no markdown.`}]})});const d=await r.json();ctx=(d.content||[]).filter((c:{type:string})=>c.type==="text").map((c:{text:string})=>c.text).join(" ");}catch{}}
-    const s=assets.map(a=>`[ID:${a.id}] ${a.company}|${a.clientName}|${a.vertical}|${a.geography}|${a.companySize}|${a.challenge}|${a.assetType}|${a.status}|${a.outcome}\n${a.transcript.substring(0,700)}`).join("\n---\n");
-    const prompt=ctx?`Sales enablement AI. Prospect context:\n${ctx}\n\nSalesperson: "${query}"\n\nMatch prospect to assets. Explain why each resonates.`:`Sales enablement AI. Need: "${query}"\n\nMatch against assets by vertical, size, geography, challenge, persona.`;
-    try{const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`${prompt}\n\nAssets:\n${s}\n\nReturn ONLY valid JSON array. Top 3-5. Each: {"id":"","reasoning":"","quotes":[""],"relevanceScore":0}. No matches? [].`}]})});const d=await r.json();const t=(d.content||[]).map((i:{text?:string})=>i.text||"").join("")||"[]";const p=JSON.parse(t.replace(/```json|```/g,"").trim()) as Omit<AIMatchResult,"rank">[];setSmResults(p.map((r,i)=>({...r,rank:i+1})));setSmOpen(false);}catch{setSmResults([]);setSmOpen(false);}setSmLoading(false);
-  },[assets]);
+    if(!query.trim())return;
+    setSmLoading(true);setSmResults(null);
+    try{
+      const r=await fetch("/api/storymatch",{
+        method:"POST",
+        headers:{"Content-Type":"application/json",...(await authHeaders())},
+        body:JSON.stringify({query}),
+      });
+      if(!r.ok){
+        const body=await r.json().catch(()=>({error:`HTTP ${r.status}`}));
+        console.error("StoryMatch failed:",body);
+        setToast(body.error||"StoryMatch failed");
+        setTimeout(()=>setToast(null),3000);
+        setSmResults([]);setSmOpen(false);setSmLoading(false);
+        return;
+      }
+      const data=await r.json() as {matches:AIMatchResult[];candidatesFound:number;note?:string};
+      if(data.note)setToast(data.note);
+      else if(data.candidatesFound===0)setToast("No matches found");
+      setTimeout(()=>setToast(null),3000);
+      setSmResults(data.matches||[]);
+      setSmOpen(false);
+    }catch(e){
+      console.error(e);
+      setSmResults([]);setSmOpen(false);
+    }
+    setSmLoading(false);
+  },[]);
 
   const clearSm=()=>{setSmResults(null);setSmQuery("");};
 
@@ -1530,7 +1572,36 @@ export default function App(){
                         body:JSON.stringify({assets:arr})
                       });
                       if(!r.ok)throw new Error("Save failed");
-                      setToast(arr.length>1?`Saved ${arr.length} assets`:"Saved");
+                      setToast(arr.length>1?`Saved ${arr.length} assets — extracting metadata…`:"Saved");
+                      // Background: extract metadata from transcripts (Claude Haiku),
+                      // then embed (OpenAI). Metadata extraction nulls the embedding,
+                      // so we run extraction first, then embedding picks up automatically.
+                      (async()=>{
+                        try{
+                          const headers=await authHeaders();
+                          // Extract metadata in batches
+                          const extractCount=Math.min(arr.length+5,20);
+                          await fetch("/api/extract-metadata",{
+                            method:"POST",
+                            headers:{"Content-Type":"application/json",...headers},
+                            body:JSON.stringify({backfill:true,limit:extractCount}),
+                          });
+                          // Reload assets so the user sees the freshly extracted fields
+                          const aR=await fetch("/api/assets",{headers});
+                          if(aR.ok){
+                            const fresh=await aR.json() as Asset[];
+                            setAssets(fresh);
+                          }
+                          // Now embed
+                          await fetch("/api/embeddings",{
+                            method:"POST",
+                            headers:{"Content-Type":"application/json",...headers},
+                            body:JSON.stringify({backfill:true,limit:50}),
+                          });
+                          setToast("Library ready");
+                          setTimeout(()=>setToast(null),2000);
+                        }catch(e){console.warn("Background processing failed",e);}
+                      })();
                     }catch(e){
                       console.error(e);
                       setToast("Save failed");
@@ -1554,6 +1625,8 @@ export default function App(){
                       });
                       if(!r.ok)throw new Error("Save failed");
                       setToast("Saved");
+                      // Re-embed in the background so semantic search reflects the new content
+                      reembedAsset(u.id);
                     }catch(e){
                       console.error(e);
                       setToast("Save failed");
@@ -1585,6 +1658,7 @@ export default function App(){
                       });
                       if(!r.ok)throw new Error("Create failed");
                       setToast("Created");
+                      reembedAsset(a.id);
                     }catch(e){
                       console.error(e);
                       setToast("Create failed");

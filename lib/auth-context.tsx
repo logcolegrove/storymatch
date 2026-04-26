@@ -43,32 +43,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Load current org for the authenticated user
   const loadOrg = async (userId: string) => {
     try {
-      const { data, error } = await supabaseBrowser
-        .from("org_members")
-        .select("role, org_id, organizations(id, name)")
-        .eq("user_id", userId)
-        .limit(1)
-        .maybeSingle();
+      // Use the current_user_org_details() SECURITY DEFINER function instead of
+      // querying org_members directly. The function bypasses RLS and reliably
+      // returns the user's org membership regardless of what RLS policies look like.
+      // (Note: we use a separate function from current_user_orgs() because that
+      // one has a single-column signature and is referenced by RLS policies — we
+      // can't change its shape without breaking those policies.)
+      const { data, error } = await supabaseBrowser.rpc("current_user_org_details");
 
-      if (error || !data) {
+      if (error) {
+        console.error("loadOrg RPC error:", error);
         setOrg(null);
         return;
       }
 
-      // Supabase returns the joined table as an object or array depending on the relation
-      const orgData = Array.isArray(data.organizations)
-        ? data.organizations[0]
-        : data.organizations;
-
-      if (orgData) {
-        setOrg({
-          id: orgData.id,
-          name: orgData.name,
-          role: data.role as "admin" | "sales",
-        });
-      } else {
+      const rows = (data || []) as Array<{ org_id: string; org_name: string; role: string }>;
+      if (rows.length === 0) {
         setOrg(null);
+        return;
       }
+
+      // Take the first one (a user could be in multiple orgs in the future,
+      // but for now we just use the first)
+      const first = rows[0];
+      setOrg({
+        id: first.org_id,
+        name: first.org_name,
+        role: first.role as "admin" | "sales",
+      });
     } catch (e) {
       console.error("Failed to load org:", e);
       setOrg(null);
