@@ -1210,16 +1210,39 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProp
 
   const editing=editingId?assets.find(a=>a.id===editingId):null;
   useEffect(()=>{
-    if(editing)setForm({...editing});
+    if(editing){
+      // Coerce any null fields to empty strings so controlled inputs don't crash.
+      // (Postgres can return null for empty columns; React inputs require strings.)
+      const safe = {
+        ...editing,
+        clientName: editing.clientName || "",
+        company: editing.company || "",
+        vertical: editing.vertical || "",
+        geography: editing.geography || "",
+        companySize: editing.companySize || "",
+        challenge: editing.challenge || "",
+        outcome: editing.outcome || "",
+        assetType: editing.assetType || "Video Testimonial",
+        videoUrl: editing.videoUrl || "",
+        status: editing.status || "active",
+        headline: editing.headline || "",
+        pullQuote: editing.pullQuote || "",
+        transcript: editing.transcript || "",
+        description: editing.description || "",
+        thumbnail: editing.thumbnail || "",
+        dateCreated: editing.dateCreated || new Date().toISOString().split("T")[0],
+      };
+      setForm(safe);
+    }
     else if(creating)setForm({id:`new-${Date.now()}`,clientName:"",company:"",vertical:"Healthcare",geography:"Northeast US",companySize:"50-200",challenge:"",outcome:"",assetType:"Video Testimonial",videoUrl:"",status:"active",headline:"",pullQuote:"",transcript:"",description:"",thumbnail:"",dateCreated:new Date().toISOString().split("T")[0]});
     else setForm(null);
-  },[editingId,creating]);
+  },[editingId,creating,editing]);
 
   const s=(k: keyof Asset, v: string) => setForm(p => p ? {...p, [k]: v} : p);
   const save=()=>{if(!form)return;if(creating){onAdd(form);setCreating(false);setEditingId(form.id);}else{onUpdate(form);setEditingId(null);}};
   const del=()=>{if(editingId&&confirm("Delete this asset?")){onDelete(editingId);setEditingId(null);}};
 
-  const filtered=assets.filter(a=>{if(!search)return true;const q=search.toLowerCase();return a.company.toLowerCase().includes(q)||a.clientName.toLowerCase().includes(q)||a.vertical.toLowerCase().includes(q);});
+  const filtered=assets.filter(a=>{if(!search)return true;const q=search.toLowerCase();return (a.company||"").toLowerCase().includes(q)||(a.clientName||"").toLowerCase().includes(q)||(a.vertical||"").toLowerCase().includes(q);});
 
   if(form){
     return(
@@ -1402,7 +1425,7 @@ export default function App(){
     displayAssets=assets.filter(a=>{
       if(filters.vertical.length>0&&!filters.vertical.includes(a.vertical))return false;
       if(filters.assetType.length>0&&!filters.assetType.includes(a.assetType))return false;
-      if(search){const s=search.toLowerCase();if(!a.company.toLowerCase().includes(s)&&!a.clientName.toLowerCase().includes(s)&&!a.vertical.toLowerCase().includes(s)&&!a.headline.toLowerCase().includes(s))return false;}
+      if(search){const s=search.toLowerCase();if(!(a.company||"").toLowerCase().includes(s)&&!(a.clientName||"").toLowerCase().includes(s)&&!(a.vertical||"").toLowerCase().includes(s)&&!(a.headline||"").toLowerCase().includes(s))return false;}
       return true;
     });
   }
