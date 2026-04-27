@@ -957,7 +957,15 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     setTimeout(()=>{setProgress(null);setView("list");setUrl("");setName("");},1500);
   };
 
-  // Re-sync an existing source
+  // Re-sync an existing source.
+  //
+  // For each newly-detected video, we mirror the same override pattern that
+  // `addCollectionSource` uses on initial import: importSingleVideo gives us
+  // a baseline asset from oEmbed, then we layer the rich Vimeo data we
+  // already fetched in extractShowcaseVideos on top — hi-res thumbnail,
+  // human-written description, and auto-generated transcript. Without these
+  // overrides, re-synced videos came in with low-res thumbnails, no
+  // transcript, and nothing for Claude's metadata extraction to work with.
   const doSync=async(source: Source)=>{
     setSyncingId(source.id);
     const videos=await extractShowcaseVideos(source.url);
@@ -970,7 +978,13 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       const info=detectUrlType(v.url);
       if(!info||info.kind==="unknown")continue;
       const asset=await importSingleVideo(info,source.id);
+      // Override with rich data we already have from Vimeo
       if(v.title&&!asset.headline)asset.headline=v.title;
+      if(v.thumbnail)asset.thumbnail=v.thumbnail;
+      // Description is the human-written field — keep it separate from transcript
+      if(v.description)asset.description=v.description;
+      // Transcript is the auto-generated caption text
+      if(v.transcript)asset.transcript=v.transcript;
       newAssets.push(asset);
     }
     if(newAssets.length>0)onAddAssets(newAssets);
