@@ -40,31 +40,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [org, setOrg] = useState<OrgMembership | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load current org for the authenticated user
-  const loadOrg = async (userId: string) => {
+  // Read the Supabase auth token directly from localStorage. We deliberately
+  // avoid supabaseBrowser.auth.getSession() (and any supabase-js method that
+  // calls it internally, including .rpc()) because it acquires an internal
+  // lock that can deadlock OR fire before localStorage finishes restoring
+  // the session. Same pattern as authHeaders() in StoryMatchApp.tsx — this
+  // is the codebase's blessed way to attach auth.
+  const readSupabaseToken = (): string | null => {
+    if (typeof window === "undefined") return null;
     try {
-      // Use the current_user_org_details() SECURITY DEFINER function instead of
-      // querying org_members directly. The function bypasses RLS and reliably
-      // returns the user's org membership regardless of what RLS policies look like.
-      // (Note: we use a separate function from current_user_orgs() because that
-      // one has a single-column signature and is referenced by RLS policies — we
-      // can't change its shape without breaking those policies.)
-      const { data, error } = await supabaseBrowser.rpc("current_user_org_details");
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("sb-") && key.endsWith("-auth-token")) {
+          const raw = localStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            const token = parsed?.access_token || parsed?.currentSession?.access_token;
+            if (token) return token as string;
+          } catch {}
+        }
+      }
+    } catch {}
+    return null;
+  };
 
-      if (error) {
-        console.error("loadOrg RPC error:", error);
-        setOrg(null);
+  // Load current org for the authenticated user.
+  //
+  // Goes through fetch() directly with the localStorage-read token rather
+  // than supabaseBrowser.rpc(). This avoids a race where supabase-js's
+  // internal getSession() runs before the cached session has finished
+  // restoring, sending the RPC with no auth header. PostgREST then runs
+  // current_user_org_details() with auth.uid() = null and returns []
+  // — which silently set org=null and made the admin rail disappear.
+  const loadOrg = async (userId: string) => {
+    void userId; // The function uses auth.uid() server-side; param kept for call-site clarity.
+    try {
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+      const apikey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+      const token = readSupabaseToken();
+      if (!token) {
+        // No token yet — don't clear org; trust a later auth event to retry.
+        console.warn("loadOrg: no auth token in localStorage yet, skipping");
         return;
       }
+      const r = await fetch(`${url}/rest/v1/rpc/current_user_org_details`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": apikey,
+          "Authorization": `Bearer ${token}`,
+        },
+        body: "{}",
+      });
 
-      const rows = (data || []) as Array<{ org_id: string; org_name: string; role: string }>;
-      if (rows.length === 0) {
-        setOrg(null);
-        return;
+      if (!r.ok) {
+        console.error("loadOrg HTTP error:", r.status, await r.text());
+        return; // don't clobber on transient failures
       }
 
-      // Take the first one (a user could be in multiple orgs in the future,
-      // but for now we just use the first)
+      const rows = (await r.json()) as Array<{ org_id: string; org_name: string; role: string }>;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        // Empty response with a valid token is unusual — log so we can see it.
+        console.warn("loadOrg: RPC returned empty rows", rows);
+        return; // again, don't clobber on a maybe-transient empty result
+      }
+
       const first = rows[0];
       setOrg({
         id: first.org_id,
@@ -73,7 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     } catch (e) {
       console.error("Failed to load org:", e);
-      setOrg(null);
+      // don't clobber org state on transient errors
     }
   };
 
