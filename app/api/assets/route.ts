@@ -52,6 +52,14 @@ type AssetDB = {
   transcript: string;
   description: string;
   thumbnail: string;
+  // Governance / lifecycle (added in testimonial-governance migration)
+  archived_at: string | null;
+  archived_reason: string | null;
+  client_status: string;
+  client_status_source: string;
+  client_status_updated_at: string | null;
+  crm_account_id: string | null;
+  last_verified_at: string | null;
 };
 
 type AssetFE = {
@@ -73,6 +81,14 @@ type AssetFE = {
   transcript: string;
   description: string;
   thumbnail: string;
+  // Governance / lifecycle
+  archivedAt?: string | null;
+  archivedReason?: string | null;
+  clientStatus?: string;
+  clientStatusSource?: string;
+  clientStatusUpdatedAt?: string | null;
+  crmAccountId?: string | null;
+  lastVerifiedAt?: string | null;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -95,6 +111,13 @@ function dbToFe(r: AssetDB): AssetFE {
     transcript: r.transcript,
     description: r.description,
     thumbnail: r.thumbnail,
+    archivedAt: r.archived_at,
+    archivedReason: r.archived_reason,
+    clientStatus: r.client_status,
+    clientStatusSource: r.client_status_source,
+    clientStatusUpdatedAt: r.client_status_updated_at,
+    crmAccountId: r.crm_account_id,
+    lastVerifiedAt: r.last_verified_at,
   };
 }
 
@@ -117,6 +140,13 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string): Partial<As
   if (a.transcript !== undefined) o.transcript = a.transcript;
   if (a.description !== undefined) o.description = a.description;
   if (a.thumbnail !== undefined) o.thumbnail = a.thumbnail;
+  if (a.archivedAt !== undefined) o.archived_at = a.archivedAt;
+  if (a.archivedReason !== undefined) o.archived_reason = a.archivedReason;
+  if (a.clientStatus !== undefined) o.client_status = a.clientStatus;
+  if (a.clientStatusSource !== undefined) o.client_status_source = a.clientStatusSource;
+  if (a.clientStatusUpdatedAt !== undefined) o.client_status_updated_at = a.clientStatusUpdatedAt;
+  if (a.crmAccountId !== undefined) o.crm_account_id = a.crmAccountId;
+  if (a.lastVerifiedAt !== undefined) o.last_verified_at = a.lastVerifiedAt;
   return o;
 }
 

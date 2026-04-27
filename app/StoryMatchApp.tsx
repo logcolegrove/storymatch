@@ -50,7 +50,9 @@ function reembedAsset(assetId: string) {
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 type AssetType = "Video Testimonial" | "Written Case Study" | "Quote";
-type AssetStatus = "active" | "inactive";
+type AssetStatus = "active" | "archived" | "draft" | "inactive";
+type ClientStatus = "current" | "former" | "unknown";
+type ClientStatusSource = "manual" | "crm" | "system" | "unset";
 
 interface Asset {
   id: string;
@@ -71,6 +73,14 @@ interface Asset {
   transcript: string;
   description: string;
   thumbnail: string;
+  // Governance / lifecycle (added in testimonial-governance migration)
+  archivedAt?: string | null;
+  archivedReason?: string | null;
+  clientStatus?: ClientStatus | string;
+  clientStatusSource?: ClientStatusSource | string;
+  clientStatusUpdatedAt?: string | null;
+  crmAccountId?: string | null;
+  lastVerifiedAt?: string | null;
 }
 
 interface Source {
@@ -811,6 +821,8 @@ interface SourcesPanelProps {
   onRemoveSource: (id: string) => void;
   onSyncSource: (id: string, newAssetIds: string[], videoCount: number) => void;
   onAddAssets: (arr: Asset[]) => void;
+  // Apply partial updates to existing assets (used for auto-archive on Vimeo removal)
+  onUpdateAssets: (updates: Array<Partial<Asset> & { id: string }>) => void;
 }
 
 interface Progress {
@@ -821,7 +833,7 @@ interface Progress {
   error?: boolean;
 }
 
-function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets}: SourcesPanelProps) {
+function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets,onUpdateAssets}: SourcesPanelProps) {
   const[view,setView]=useState<"list"|"add">("list");
   const[mode,setMode]=useState<"source"|"single">("source");
   const[url,setUrl]=useState("");
@@ -972,6 +984,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     const existingAssetIds=new Set(source.assetIds||[]);
     const existingAssets=assets.filter(a=>existingAssetIds.has(a.id));
     const existingUrls=new Set(existingAssets.map(a=>a.videoUrl));
+
+    // 1) New videos in Vimeo that we don't have yet — import them
     const newUrls=videos.filter(v=>!existingUrls.has(v.url));
     const newAssets: Asset[] = [];
     for(const v of newUrls){
@@ -987,6 +1001,26 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       if(v.transcript)asset.transcript=v.transcript;
       newAssets.push(asset);
     }
+
+    // 2) Orphaned assets — we have them, Vimeo no longer does. Auto-archive
+    //    rather than delete: preserves enrichment data, embeddings, manual edits,
+    //    and lets admin restore with one click. Skip already-archived assets.
+    const currentVimeoUrls=new Set(videos.map(v=>v.url));
+    const orphaned=existingAssets.filter(a=>
+      !currentVimeoUrls.has(a.videoUrl) && a.status!=="archived"
+    );
+    if(orphaned.length>0){
+      const today=new Date().toISOString().split("T")[0];
+      const nowIso=new Date().toISOString();
+      const updates=orphaned.map(a=>({
+        id:a.id,
+        status:"archived",
+        archivedAt:nowIso,
+        archivedReason:`Removed from Vimeo showcase on ${today}`,
+      }));
+      onUpdateAssets(updates);
+    }
+
     if(newAssets.length>0)onAddAssets(newAssets);
     onSyncSource(source.id,newAssets.map(a=>a.id),videos.length);
     setSyncingId(null);
@@ -1596,6 +1630,29 @@ export default function App(){
                         body:JSON.stringify(nextSource)
                       });
                     }catch(e){console.error(e);}
+                  }}
+                  onUpdateAssets={async updates=>{
+                    if(updates.length===0)return;
+                    // Optimistic UI: merge updates into local state
+                    setAssets(prev=>prev.map(a=>{
+                      const u=updates.find(x=>x.id===a.id);
+                      return u?{...a,...u}:a;
+                    }));
+                    const archivedCount=updates.filter(u=>u.status==="archived").length;
+                    if(archivedCount>0){
+                      setToast(`Archived ${archivedCount} ${archivedCount===1?"asset":"assets"} (no longer in source)`);
+                      setTimeout(()=>setToast(null),3000);
+                    }
+                    // Persist each update via PUT /api/assets
+                    for(const u of updates){
+                      try{
+                        await fetch("/api/assets",{
+                          method:"PUT",
+                          headers:{"Content-Type":"application/json",...(await authHeaders())},
+                          body:JSON.stringify(u),
+                        });
+                      }catch(e){console.error("Asset update failed for",u.id,e);}
+                    }
                   }}
                   onAddAssets={async arr=>{
                     // Optimistic UI
