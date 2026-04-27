@@ -106,15 +106,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Initial load
     refresh().finally(() => setLoading(false));
 
-    // Listen to auth state changes
+    // Listen to auth state changes.
+    //
+    // IMPORTANT: only clear user/org on an explicit SIGNED_OUT event. Some
+    // auth events (transient INITIAL_SESSION before localStorage finishes
+    // restoring, mid-flight TOKEN_REFRESHED, etc.) can fire with a null
+    // session even though the user is genuinely logged in. Treating those
+    // as logout would race with an earlier successful loadOrg call and
+    // leave org=null — that was the "admin rail disappears in normal Chrome
+    // but works in incognito/with DevTools open" bug.
     const { data: { subscription } } = supabaseBrowser.auth.onAuthStateChange(
-      async (_event, session) => {
-        setUser(session?.user || null);
-        if (session?.user) {
-          await loadOrg(session.user.id);
-        } else {
+      async (event, session) => {
+        if (event === "SIGNED_OUT") {
+          setUser(null);
           setOrg(null);
+          return;
         }
+        if (session?.user) {
+          setUser(session.user);
+          await loadOrg(session.user.id);
+        }
+        // Any other null-session event: ignore. Trust prior good state.
       }
     );
 
@@ -158,9 +170,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabaseBrowser.auth.signOut();
+    // Clear local state FIRST so the UI updates and the auth gate redirects
+    // even if supabase.auth.signOut() hangs (it has been observed to do so
+    // under the same lock conditions that affect getUser — see handoff §10.1).
     setUser(null);
     setOrg(null);
+    // Fire-and-forget the actual sign out. SIGNED_OUT event will also fire
+    // and is handled by the listener above for any additional cleanup.
+    supabaseBrowser.auth.signOut().catch((e) => {
+      console.error("auth.signOut failed:", e);
+    });
   };
 
   return (
