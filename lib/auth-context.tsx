@@ -87,16 +87,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTimeout(() => resolve({ data: { user: null } }), 5000)
       );
       const { data: { user } } = (await Promise.race([getUserPromise, timeout])) as { data: { user: User | null } };
-      setUser(user);
+      // Only update state when getUser returned a definitive user. If it timed out
+      // (user === null from the timeout fallback) we must NOT clear state here,
+      // because onAuthStateChange may have already populated user/org from the
+      // cached session — clearing would race-overwrite that good state and
+      // hide the admin rail. SIGNED_OUT events still come through onAuthStateChange.
       if (user) {
+        setUser(user);
         await loadOrg(user.id);
-      } else {
-        setOrg(null);
       }
     } catch (e) {
       console.error("auth refresh failed:", e);
-      setUser(null);
-      setOrg(null);
+      // Same reasoning: don't clobber state on transient errors.
     }
   };
 
