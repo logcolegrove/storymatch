@@ -173,8 +173,8 @@ const css = `
   --bg:#fafafa;--bg2:#f4f4f6;--bg3:#ededf0;
   --border:#e2e2e6;--border2:#d0d0d6;
   --t1:#111118;--t2:#55556a;--t3:#8888a0;--t4:#aaaabb;
-  --accent:#6d28d9;--accent2:#7c3aed;--accentL:#ede9fe;--accentLL:#f5f3ff;
-  --green:#059669;--red:#dc2626;
+  --accent:#6d28d9;--accent2:#7c3aed;--accentL:#ede9fe;--accentLL:#f5f3ff;--accent-bg:#f5f3ff;
+  --green:#059669;--red:#dc2626;--amber:#d97706;--amberL:#fef3c7;
   --font:'Instrument Sans',-apple-system,sans-serif;
   --serif:'Newsreader',Georgia,serif;
   --r:14px;--r2:10px;--r3:7px;
@@ -426,6 +426,15 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .card-ai-q:hover::after{opacity:1;}
 .card-rank{position:absolute;top:12px;left:12px;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;z-index:2;box-shadow:0 2px 8px rgba(109,40,217,.3);}
 
+/* ── ARCHIVED ASSET TREATMENT ── */
+.card.archived,.qcard.archived{opacity:.55;}
+.card.archived:hover,.qcard.archived:hover{opacity:.8;}
+.card.archived .card-thumb img,.qcard.archived .qcard-bg{filter:grayscale(.9);}
+.archived-badge{position:absolute;top:10px;right:10px;background:var(--amberL);color:var(--amber);font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:4px 7px;border-radius:5px;z-index:3;border:1px solid var(--amber);}
+.archived-restore{position:absolute;bottom:10px;right:10px;background:#fff;color:var(--accent);font-size:11px;font-weight:600;padding:5px 9px;border-radius:6px;border:1px solid var(--accent);cursor:pointer;z-index:3;font-family:var(--font);opacity:0;transition:opacity .2s;}
+.card.archived:hover .archived-restore,.qcard.archived:hover .archived-restore{opacity:1;}
+.archived-restore:hover{background:var(--accent);color:#fff;}
+
 /* ── QUOTE CARD ── */
 .qcard{border-radius:var(--r);cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;min-height:340px;display:flex;flex-direction:column;justify-content:flex-end;}
 .qcard:hover{transform:translateY(-4px);box-shadow:0 20px 50px rgba(0,0,0,.12);}
@@ -542,16 +551,22 @@ interface CardProps {
   onClick: (a: Asset) => void;
   aiData?: AIMatchResult | null;
   onCopyQuote: (q: string) => void;
+  onRestore?: (asset: Asset) => void; // admin-only — present means show restore button on archived
 }
 
-function TCard({asset,onClick,aiData,onCopyQuote}: CardProps) {
+function TCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const isV=asset.assetType==="Video Testimonial";
   const vid=extractVid(asset.videoUrl);
   let thumb=asset.thumbnail;if(!thumb&&vid?.p==="yt")thumb=ytThumb(vid.id);if(!thumb)thumb="https://images.unsplash.com/photo-1557804506-669a67965ba0?w=640&h=360&fit=crop";
   const cta=CTA_MAP[asset.assetType]||"read";
+  const isArchived=asset.status==="archived";
   return(
-    <div className="card" onClick={()=>onClick(asset)}>
+    <div className={`card${isArchived?" archived":""}`} onClick={()=>onClick(asset)}>
+      {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
+      {isArchived&&onRestore&&(
+        <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
+      )}
       <div className="card-thumb">
         {aiData&&<div className="card-rank">{aiData.rank}</div>}
         <img src={thumb} alt={asset.company} loading="lazy"/>
@@ -573,11 +588,16 @@ function TCard({asset,onClick,aiData,onCopyQuote}: CardProps) {
   );
 }
 
-function QCard({asset,onClick,aiData,onCopyQuote}: CardProps) {
+function QCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const grad=`linear-gradient(135deg, ${c} 0%, ${c}dd 40%, ${c}99 100%)`;
+  const isArchived=asset.status==="archived";
   return(
-    <div className="qcard" onClick={()=>onClick(asset)}>
+    <div className={`qcard${isArchived?" archived":""}`} onClick={()=>onClick(asset)}>
+      {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
+      {isArchived&&onRestore&&(
+        <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
+      )}
       {aiData&&<div className="card-rank" style={{position:"absolute",top:12,left:12,zIndex:3}}>{aiData.rank}</div>}
       <div className="qcard-bg" style={{["--qgrad" as string]:grad} as React.CSSProperties}/>
       <div className="qcard-content">
@@ -985,12 +1005,6 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     const existingAssets=assets.filter(a=>existingAssetIds.has(a.id));
     const existingUrls=new Set(existingAssets.map(a=>a.videoUrl));
 
-    // TEMP DIAGNOSTIC — remove once orphan detection is verified
-    console.log("[doSync] source.id:",source.id,"source.assetIds:",source.assetIds);
-    console.log("[doSync] existingAssets count:",existingAssets.length,"out of",assets.length,"total assets");
-    console.log("[doSync] existingUrls (stored in library):",[...existingUrls]);
-    console.log("[doSync] vimeo URLs (returned by API now):",videos.map(v=>v.url));
-
     // 1) New videos in Vimeo that we don't have yet — import them
     const newUrls=videos.filter(v=>!existingUrls.has(v.url));
     const newAssets: Asset[] = [];
@@ -1015,7 +1029,6 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     const orphaned=existingAssets.filter(a=>
       !currentVimeoUrls.has(a.videoUrl) && a.status!=="archived"
     );
-    console.log("[doSync] orphaned (in library, not in Vimeo):",orphaned.map(a=>({id:a.id,videoUrl:a.videoUrl,headline:a.headline})));
     if(orphaned.length>0){
       const today=new Date().toISOString().split("T")[0];
       const nowIso=new Date().toISOString();
@@ -1390,6 +1403,7 @@ export default function App(){
   const isAdmin = org?.role === "admin";
   const[adminMode,setAdminMode]=useState(true); // whether admin is viewing admin UI vs preview as sales
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
+  const[showArchived,setShowArchived]=useState(false); // admin-only: include archived assets in views
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
   // StoryMatch state
@@ -1434,6 +1448,22 @@ export default function App(){
   const goHome=()=>{window.location.hash="/";};
   const copyQuote=(t: string)=>{navigator.clipboard?.writeText(t);setToast("Copied!");setTimeout(()=>setToast(null),1800);};
 
+  // Restore an archived asset back to active. Clears archived metadata so the
+  // asset reappears in normal views and StoryMatch search.
+  const restoreAsset=async(asset: Asset)=>{
+    const update={id:asset.id,status:"active",archivedAt:null,archivedReason:null};
+    setAssets(prev=>prev.map(a=>a.id===asset.id?{...a,...update}:a));
+    setToast("Restored");
+    setTimeout(()=>setToast(null),1500);
+    try{
+      await fetch("/api/assets",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json",...(await authHeaders())},
+        body:JSON.stringify(update),
+      });
+    }catch(e){console.error("Restore failed",e);}
+  };
+
   const runStoryMatch=useCallback(async(query: string)=>{
     if(!query.trim())return;
     setSmLoading(true);setSmResults(null);
@@ -1469,15 +1499,26 @@ export default function App(){
   const descEx=["Quotes from clients with under 500 employees","Video testimonials mentioning ROI","Healthcare or financial services case studies","Legacy system migration stories","Strongest proof for enterprise buyers","Southeast clients on implementation speed"];
   const prosEx=["Series B fintech, 120 emp, selling to CFO on onboarding speed","Regional hospital, Southeast, CTO modernizing patient experience","Mid-market manufacturer, Ohio, VP Ops worried about QC"];
 
+  // Whether to include archived assets in this view. Admins viewing the admin
+  // UI can opt in via the "Show archived" toggle. Sales reps and the public
+  // preview always exclude them — archived means "this testimonial should
+  // not be presented to prospects right now".
+  const includeArchived = isAdmin && adminMode && showArchived;
+  const archivedCount = assets.filter(a=>a.status==="archived").length;
+
   // Determine what to show in the grid
   let displayAssets: Asset[];
   const aiDataMap: Record<string, AIMatchResult> = {};
   if(smResults&&smResults.length>0){
     const matchedIds=smResults.map(r=>r.id);
-    displayAssets=matchedIds.map(id=>assets.find(a=>a.id===id)).filter((a): a is Asset => a !== undefined);
+    displayAssets=matchedIds
+      .map(id=>assets.find(a=>a.id===id))
+      .filter((a): a is Asset => a !== undefined)
+      .filter(a => includeArchived || a.status !== "archived");
     smResults.forEach(r=>{aiDataMap[r.id]=r;});
   } else {
     displayAssets=assets.filter(a=>{
+      if(!includeArchived && a.status === "archived") return false;
       if(filters.vertical.length>0&&!filters.vertical.includes(a.vertical))return false;
       if(filters.assetType.length>0&&!filters.assetType.includes(a.assetType))return false;
       if(search){const s=search.toLowerCase();if(!(a.company||"").toLowerCase().includes(s)&&!(a.clientName||"").toLowerCase().includes(s)&&!(a.vertical||"").toLowerCase().includes(s)&&!(a.headline||"").toLowerCase().includes(s))return false;}
@@ -1503,7 +1544,14 @@ export default function App(){
           <div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}>
           </div>
           <div className="hdr-r">
-            <span className="badge">{assets.length} assets</span>
+            <span className="badge">{assets.length - (includeArchived?0:archivedCount)} assets{includeArchived&&archivedCount>0?` (${archivedCount} archived)`:""}</span>
+            {isAdmin && adminMode && archivedCount > 0 && (
+              <button
+                onClick={()=>setShowArchived(v=>!v)}
+                title={showArchived?"Hide archived assets":"Show archived assets"}
+                style={{padding:"5px 10px",border:"1px solid var(--border)",borderRadius:6,background:showArchived?"var(--accent-bg)":"#fff",color:showArchived?"var(--accent)":"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
+              >{showArchived?`Hide archived (${archivedCount})`:`Show archived (${archivedCount})`}</button>
+            )}
             {isAdmin && (
               <div className="mode-toggle">
                 <button
@@ -1940,9 +1988,10 @@ export default function App(){
                 <div className="grid">
                   {displayAssets.map(a=>{
                     const ai=aiDataMap[a.id]||null;
+                    const restore = (isAdmin && adminMode) ? restoreAsset : undefined;
                     return a.assetType==="Quote"
-                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote}/>
-                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote}/>;
+                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore}/>
+                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore}/>;
                   })}
                 </div>
               )}

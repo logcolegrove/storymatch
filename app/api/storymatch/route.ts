@@ -362,15 +362,36 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Exclude archived assets from the candidate pool. We do this client-side
+  // (in the API route) rather than inside match_assets() to avoid changing
+  // the SQL function signature, which would invalidate the HNSW index plan.
+  const { data: archivedRows } = await supabaseAdmin
+    .from("assets")
+    .select("id")
+    .eq("org_id", ctx.orgId)
+    .eq("status", "archived");
+  const archivedSet = new Set((archivedRows || []).map((r) => r.id as string));
+  const filteredCandidates = (candidates as CandidateAsset[]).filter(
+    (c) => !archivedSet.has(c.id)
+  );
+
+  if (filteredCandidates.length === 0) {
+    return NextResponse.json({
+      matches: [],
+      candidatesFound: 0,
+      note: "All matching assets are archived.",
+    });
+  }
+
   let matches: AIMatch[];
   try {
-    matches = await synthesizeMatches(query, candidates as CandidateAsset[]);
+    matches = await synthesizeMatches(query, filteredCandidates);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
   return NextResponse.json({
     matches: matches.map((m, i) => ({ ...m, rank: i + 1 })),
-    candidatesFound: candidates.length,
+    candidatesFound: filteredCandidates.length,
   });
 }
