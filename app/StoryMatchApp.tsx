@@ -985,6 +985,12 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     const existingAssets=assets.filter(a=>existingAssetIds.has(a.id));
     const existingUrls=new Set(existingAssets.map(a=>a.videoUrl));
 
+    // TEMP DIAGNOSTIC — remove once orphan detection is verified
+    console.log("[doSync] source.id:",source.id,"source.assetIds:",source.assetIds);
+    console.log("[doSync] existingAssets count:",existingAssets.length,"out of",assets.length,"total assets");
+    console.log("[doSync] existingUrls (stored in library):",[...existingUrls]);
+    console.log("[doSync] vimeo URLs (returned by API now):",videos.map(v=>v.url));
+
     // 1) New videos in Vimeo that we don't have yet — import them
     const newUrls=videos.filter(v=>!existingUrls.has(v.url));
     const newAssets: Asset[] = [];
@@ -1009,6 +1015,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     const orphaned=existingAssets.filter(a=>
       !currentVimeoUrls.has(a.videoUrl) && a.status!=="archived"
     );
+    console.log("[doSync] orphaned (in library, not in Vimeo):",orphaned.map(a=>({id:a.id,videoUrl:a.videoUrl,headline:a.headline})));
     if(orphaned.length>0){
       const today=new Date().toISOString().split("T")[0];
       const nowIso=new Date().toISOString();
