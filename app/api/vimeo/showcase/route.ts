@@ -64,13 +64,50 @@ function extractShowcaseId(url: string): string | null {
   return m ? m[1] : null;
 }
 
-// Pick the largest available thumbnail from Vimeo's `pictures.sizes` array
-function bestThumb(video: VimeoVideo): string {
-  const sizes = video.pictures?.sizes || [];
-  if (sizes.length === 0) return "";
-  // Simply take the largest — Vimeo's max is typically 1920×1080
-  const sorted = [...sizes].sort((a, b) => b.width - a.width);
+// Pick the largest available thumbnail from a Vimeo `sizes` array.
+// Sort by total pixel area so vertical videos correctly pick their tallest
+// variant (e.g. 1080x1920 has area 2,073,600 — same as 1920x1080).
+function pickLargestThumb(sizes: { link: string; width: number; height: number }[]): string {
+  if (!sizes || sizes.length === 0) return "";
+  const sorted = [...sizes].sort((a, b) => (b.width * b.height) - (a.width * a.height));
   return sorted[0].link;
+}
+
+// Fall-back thumbnail picker for the album-list response. The album endpoint
+// often returns an abbreviated `pictures` object with only one or two small
+// sizes (typically 295×166), even for videos whose full picture set on Vimeo
+// includes 1920×1080 or larger. We only use this if the dedicated
+// /videos/{id} fetch fails.
+function bestThumbFromVideo(video: VimeoVideo): string {
+  return pickLargestThumb(video.pictures?.sizes || []);
+}
+
+// Fetch the full pictures.sizes array for a single video via the dedicated
+// /videos/{id} endpoint. Returns the largest thumbnail URL, or "" on failure.
+// This guarantees we get every size Vimeo has generated (up to 1920×1080
+// for landscape, 1080×1920 for portrait), not the truncated set the album
+// listing returns.
+async function fetchHighResThumb(
+  videoId: string,
+  accessToken: string
+): Promise<string> {
+  try {
+    const resp = await fetch(
+      `https://api.vimeo.com/videos/${videoId}?fields=pictures.sizes`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/vnd.vimeo.*+json;version=3.4",
+        },
+      }
+    );
+    if (!resp.ok) return "";
+    const data = (await resp.json()) as { pictures?: VimeoPicture };
+    return pickLargestThumb(data?.pictures?.sizes || []);
+  } catch (e) {
+    console.warn(`Hi-res thumbnail fetch failed for video ${videoId}:`, e);
+    return "";
+  }
 }
 
 // Strip a WebVTT caption file down to just the spoken text
@@ -235,7 +272,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Transform and fetch transcripts in parallel (concurrency 5)
+  // Transform basics, then fetch transcripts AND high-res thumbnails in parallel.
+  // The album endpoint's `pictures` response is often truncated (only 295×166
+  // returned), so we hit /videos/{id}?fields=pictures.sizes directly per video
+  // to get the full size set. Falls back to whatever the album listing returned
+  // if the dedicated fetch fails.
   const basics = allVideos.map((v) => ({
     vimeoId: v.uri.split("/").pop() || "",
     url: v.link,
@@ -243,18 +284,27 @@ export async function GET(req: NextRequest) {
     description: v.description || "",
     durationSec: v.duration,
     createdAt: v.created_time,
-    thumbnail: bestThumb(v),
+    thumbnailFallback: bestThumbFromVideo(v),
     uploader: v.user?.name || "",
   }));
 
-  const transcripts = await parallelMap(basics, 5, async (b) =>
-    b.vimeoId ? await fetchTranscript(b.vimeoId, connection.access_token) : ""
-  );
+  const [transcripts, hiResThumbs] = await Promise.all([
+    parallelMap(basics, 5, async (b) =>
+      b.vimeoId ? await fetchTranscript(b.vimeoId, connection.access_token) : ""
+    ),
+    parallelMap(basics, 5, async (b) =>
+      b.vimeoId ? await fetchHighResThumb(b.vimeoId, connection.access_token) : ""
+    ),
+  ]);
 
-  const normalized = basics.map((b, i) => ({
-    ...b,
-    transcript: transcripts[i] || "",
-  }));
+  const normalized = basics.map((b, i) => {
+    const { thumbnailFallback, ...rest } = b;
+    return {
+      ...rest,
+      thumbnail: hiResThumbs[i] || thumbnailFallback,
+      transcript: transcripts[i] || "",
+    };
+  });
 
   return NextResponse.json({
     albumId,
