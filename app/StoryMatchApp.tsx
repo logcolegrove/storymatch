@@ -608,13 +608,13 @@ function DetailPage({asset,onBack,allAssets,onSelect}: DetailPageProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const vid=extractVid(asset.videoUrl);
   let thumb=asset.thumbnail;if(!thumb&&vid?.p==="yt")thumb=ytThumb(vid.id);if(!thumb)thumb="https://images.unsplash.com/photo-1557804506-669a67965ba0?w=640&h=360&fit=crop";
-  const statParts=asset.outcome.split(/[,;]/).map(s=>s.trim()).filter(Boolean);
+  const statParts=(asset.outcome||"").split(/[,;]/).map(s=>s.trim()).filter(Boolean);
   const parseStats=statParts.map(s=>{const m=s.match(/([\d.]+)(%|[A-Z])?/);if(m)return{num:m[1],unit:m[2]||"",label:s.replace(m[0],"").trim().replace(/^[:\-–—]\s*/,"")};return{num:"",unit:"",label:s};}).filter(s=>s.num);
-  const paras=asset.transcript.split(/\n\n+/).filter(Boolean);
+  const paras=(asset.transcript||"").split(/\n\n+/).filter(Boolean);
   const chapters: Chapter[] = [];
   let cur: Chapter = {title:"The Story", paras:[]};
   paras.forEach(p=>{if(p.match(/^(Background|Challenge|Solution|Results|Company|Problem|Implementation):/i)){if(cur.paras.length>0)chapters.push(cur);cur={title:p.split(":")[0].trim(),paras:[p]};}else{cur.paras.push(p);}});
-  if(cur.paras.length>0)chapters.push(cur);if(chapters.length===0)chapters.push({title:"The Story",paras:[asset.transcript]});
+  if(cur.paras.length>0)chapters.push(cur);if(chapters.length===0)chapters.push({title:"The Story",paras:[asset.transcript||""]});
   const related=(allAssets||[]).filter(a=>a.id!==asset.id).sort((a,b)=>a.vertical===asset.vertical?-1:1).slice(0,3);
   const[activeCh,setActiveCh]=useState(0);
   return(
