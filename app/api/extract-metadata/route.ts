@@ -29,6 +29,9 @@ async function getCurrentUserOrg(req: NextRequest) {
 //   3. TRANSCRIPT (auto-generated, unreliable for proper nouns)
 //   4. (admin fills manually) — leave empty if no source has it
 // ───────────────────────────────────────────────────────────
+// Note: headline is intentionally NOT in this type. The video's headline is
+// always the Vimeo title (source of truth) and must never be overwritten by
+// the LLM — see runSourceSync / addCollectionSource which write it directly.
 type ExtractedMetadata = {
   clientName: string;
   company: string;
@@ -38,7 +41,6 @@ type ExtractedMetadata = {
   challenge: string;
   outcome: string;
   pullQuote: string;
-  headline: string;
 };
 
 const EMPTY_META: ExtractedMetadata = {
@@ -50,7 +52,6 @@ const EMPTY_META: ExtractedMetadata = {
   challenge: "",
   outcome: "",
   pullQuote: "",
-  headline: "",
 };
 
 async function extractMetadata(input: {
@@ -66,8 +67,10 @@ async function extractMetadata(input: {
     (description && description.length > 10) ||
     (transcript && transcript.length > 50);
   if (!hasContent) {
-    return { ...EMPTY_META, headline: videoTitle };
+    return { ...EMPTY_META };
   }
+  // videoTitle is passed in only as context for the LLM — never as an output target.
+  void videoTitle;
 
   const systemPrompt = `You extract structured metadata from customer testimonial videos.
 
@@ -111,8 +114,7 @@ Return ONLY a JSON object with this exact shape:
   "companySize": "approximate size if stated like '50 employees', '$10M revenue', or empty string",
   "challenge": "1-sentence summary of the problem they describe, or empty string",
   "outcome": "1-sentence summary of what they achieved, or empty string",
-  "pullQuote": "a single powerful 1-2 sentence VERBATIM substring from the TRANSCRIPT (not the description), or empty string if no good quote available",
-  "headline": "a punchy 5-10 word headline (use the title if it works, otherwise summarize)"
+  "pullQuote": "a single powerful 1-2 sentence VERBATIM substring from the TRANSCRIPT (not the description), or empty string if no good quote available"
 }`;
 
   const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -155,11 +157,10 @@ Return ONLY a JSON object with this exact shape:
       challenge: parsed.challenge || "",
       outcome: parsed.outcome || "",
       pullQuote: parsed.pullQuote || "",
-      headline: parsed.headline || videoTitle || "",
     };
   } catch {
     console.error("Failed to parse Claude metadata response:", txt.slice(0, 500));
-    return { ...EMPTY_META, headline: videoTitle };
+    return { ...EMPTY_META };
   }
 }
 
@@ -227,7 +228,7 @@ export async function POST(req: NextRequest) {
               challenge: meta.challenge || null,
               outcome: meta.outcome || null,
               pull_quote: validatedQuote || null,
-              headline: meta.headline || row.headline || null,
+              // headline is NOT updated — it's the Vimeo title (source of truth).
               // Invalidate embedding so it gets regenerated with fresh metadata
               embedding: null,
               embedding_updated_at: null,
@@ -285,7 +286,7 @@ export async function POST(req: NextRequest) {
       challenge: meta.challenge || null,
       outcome: meta.outcome || null,
       pull_quote: validatedQuote || null,
-      headline: meta.headline || row.headline || null,
+      // headline is NOT updated — it's the Vimeo title (source of truth).
       embedding: null,
       embedding_updated_at: null,
     })
