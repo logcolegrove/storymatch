@@ -518,7 +518,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Grid card checkbox — appears on hover or when card is selected */
 .card-check,.qcard-check{position:absolute;top:10px;left:10px;width:20px;height:20px;cursor:pointer;accent-color:var(--accent);z-index:5;background:#fff;border-radius:4px;opacity:0;transition:opacity .15s;}
 .card:hover .card-check,.qcard:hover .qcard-check,.card.selected .card-check,.qcard.selected .qcard-check{opacity:1;}
-.card.selected,.qcard.selected{outline:2px solid var(--accent);outline-offset:-2px;}
+.card.selected,.qcard.selected{box-shadow:inset 0 0 0 2px var(--accent);}
 /* Keep the 3-dot menu visible on selected cards too, so admin can act on them */
 .card.selected .card-dots,.qcard.selected .qcard-dots{opacity:1;}
 
@@ -544,9 +544,12 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .dots-divider{height:1px;background:var(--border);margin:4px 0;}
 .lv-actions{position:relative;}
 
-/* Grid card 3-dot menu */
+/* Grid card 3-dot menu and share-link button (stacked top-right) */
 .card-dots,.qcard-dots{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.95);border-radius:5px;z-index:5;opacity:0;transition:opacity .15s;}
 .card:hover .card-dots,.qcard:hover .qcard-dots{opacity:1;}
+.card-share,.qcard-share{position:absolute;top:42px;right:8px;background:rgba(255,255,255,.95);border:none;width:30px;height:30px;border-radius:5px;cursor:pointer;color:var(--t2);display:grid;place-items:center;z-index:5;opacity:0;transition:opacity .15s,color .15s;}
+.card:hover .card-share,.qcard:hover .qcard-share,.card.selected .card-share,.qcard.selected .qcard-share{opacity:1;}
+.card-share:hover,.qcard-share:hover{color:var(--accent);background:#fff;}
 
 /* ── QUOTE CARD ── */
 .qcard{border-radius:var(--r);cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;min-height:340px;display:flex;flex-direction:column;justify-content:flex-end;}
@@ -669,9 +672,11 @@ interface CardProps {
   isSelected?: boolean;
   onToggleSelect?: (id: string, shiftKey?: boolean) => void;
   menuItems?: MenuItem[];
+  // Copy-link is available to any signed-in user (sales reps share too)
+  onCopyShareLink?: (a: Asset) => void;
 }
 
-function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems}: CardProps) {
+function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems,onCopyShareLink}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const isV=asset.assetType==="Video Testimonial";
   const vid=extractVid(asset.videoUrl);
@@ -692,6 +697,18 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       )}
       {menuItems && (
         <div className="card-dots"><DotsMenu items={menuItems}/></div>
+      )}
+      {onCopyShareLink && (
+        <button
+          className="card-share"
+          onClick={e=>{e.stopPropagation();onCopyShareLink(asset);}}
+          title="Copy share link"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+        </button>
       )}
       {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
       {isArchived&&onRestore&&!menuItems&&(
@@ -718,7 +735,7 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
   );
 }
 
-function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems}: CardProps) {
+function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems,onCopyShareLink}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const grad=`linear-gradient(135deg, ${c} 0%, ${c}dd 40%, ${c}99 100%)`;
   const isArchived=asset.status==="archived";
@@ -736,6 +753,18 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       )}
       {menuItems && (
         <div className="qcard-dots"><DotsMenu items={menuItems}/></div>
+      )}
+      {onCopyShareLink && (
+        <button
+          className="qcard-share"
+          onClick={e=>{e.stopPropagation();onCopyShareLink(asset);}}
+          title="Copy share link"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+        </button>
       )}
       {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
       {isArchived&&onRestore&&!menuItems&&(
@@ -835,6 +864,7 @@ interface ListViewProps {
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
   onDelete: (id: string) => void;
+  onCopyShareLink: (a: Asset) => void;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -997,7 +1027,7 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
   const allSelected = assets.length > 0 && assets.every(a => selectedIds.has(a.id));
   const someSelected = !allSelected && assets.some(a => selectedIds.has(a.id));
@@ -1099,6 +1129,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, o
             <div className="lv-actions">
               <DotsMenu items={[
                 { label: "Open", onClick: () => onClick(a) },
+                { label: "Copy share link", onClick: () => onCopyShareLink(a) },
                 { label: "✓ Mark verified", onClick: () => onMarkVerified(a) },
                 { divider: true },
                 isArchived
@@ -1960,6 +1991,29 @@ export default function App(){
   const goHome=()=>{window.location.hash="/";};
   const copyQuote=(t: string)=>{navigator.clipboard?.writeText(t);setToast("Copied!");setTimeout(()=>setToast(null),1800);};
 
+  // Copy a trackable share link for this asset to the clipboard. Each
+  // (rep, asset) pair has a stable URL so re-copying returns the same link.
+  // Records nothing on copy itself — the click event fires only when the
+  // recipient actually opens the link.
+  const copyShareLink=async(asset: Asset)=>{
+    setToast("Generating link…");
+    try {
+      const r=await fetch("/api/share",{
+        method:"POST",
+        headers:{"Content-Type":"application/json",...(await authHeaders())},
+        body:JSON.stringify({asset_id:asset.id}),
+      });
+      if(!r.ok)throw new Error("Failed");
+      const {url}=await r.json() as {url: string; share_id: string};
+      await navigator.clipboard?.writeText(url);
+      setToast("Link copied!");
+    } catch(e) {
+      console.error("Share link failed",e);
+      setToast("Couldn't generate link");
+    }
+    setTimeout(()=>setToast(null),1800);
+  };
+
   // Generic partial-update helper for inline edits in the list view.
   // Optimistically merges into local state, then PUTs to /api/assets.
   // Used by status flips, client_status changes, and mark-verified.
@@ -2693,6 +2747,7 @@ export default function App(){
                   onSetApproval={setApproval}
                   onMarkVerified={markVerified}
                   onDelete={deleteAssetInline}
+                  onCopyShareLink={copyShareLink}
                 />
               ) : (
                 <div className="grid">
@@ -2702,6 +2757,7 @@ export default function App(){
                     const restore = adminMgmt ? restoreAsset : undefined;
                     const cardMenu: MenuItem[] | undefined = adminMgmt ? [
                       { label: "Open", onClick: () => openAsset(a) },
+                      { label: "Copy share link", onClick: () => copyShareLink(a) },
                       { label: "✓ Mark verified", onClick: () => markVerified(a) },
                       { divider: true },
                       a.status === "archived"
@@ -2712,9 +2768,11 @@ export default function App(){
                     ] : undefined;
                     const cardSelected = selectedIds.has(a.id);
                     const cardToggle = adminMgmt ? toggleSelected : undefined;
+                    // Share link is available to all signed-in users (sales reps share too)
+                    const share = user ? copyShareLink : undefined;
                     return a.assetType==="Quote"
-                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu}/>
-                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu}/>;
+                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share}/>
+                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share}/>;
                   })}
                 </div>
               )}
