@@ -79,9 +79,12 @@ interface Props {
   // cookie set by middleware; it lets us distinguish multiple distinct
   // viewers of the same share link (i.e. detect forwards).
   shareTracking?: { shareId: string; visitorId: string | null };
+  // Internal-only — generates and copies a tracked share link for this
+  // asset. Only set in admin/sales contexts; never in publicMode.
+  onCopyShareLink?: (asset: AssetDetailAsset) => void;
 }
 
-export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSelect, shareTracking }: Props) {
+export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSelect, shareTracking, onCopyShareLink }: Props) {
   const c = VERT_CLR[asset.vertical] || "#4f46e5";
   const vid = extractVid(asset.videoUrl);
   let thumb = asset.thumbnail;
@@ -248,8 +251,23 @@ export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSe
     <>
       <style>{detailCss}</style>
       <div className="dp">
-        {!publicMode && onBack && (
-          <button className="dp-back" onClick={onBack}>← Back to library</button>
+        {!publicMode && (onBack || onCopyShareLink) && (
+          <div className="dp-top-actions">
+            {onBack && <button className="dp-back" onClick={onBack}>← Back to library</button>}
+            {onCopyShareLink && (
+              <button
+                className="dp-share"
+                onClick={() => onCopyShareLink(asset)}
+                title="Copy a trackable share link for this asset"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                Copy share link
+              </button>
+            )}
+          </div>
         )}
         <div className="dp-hero">
           <div className="dp-hero-img"><img src={thumb} alt={asset.company} /></div>
@@ -386,8 +404,11 @@ const detailCss = `
   --r:14px;--r2:10px;--r3:7px;
 }
 .dp{max-width:1100px;margin:0 auto;width:100%;padding:24px 32px 60px;font-family:var(--font);color:var(--t1);}
-.dp-back{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:var(--r3);border:1px solid var(--border);background:#fff;color:var(--t2);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;margin-bottom:20px;}
+.dp-top-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px;}
+.dp-back{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:var(--r3);border:1px solid var(--border);background:#fff;color:var(--t2);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
 .dp-back:hover{border-color:var(--border2);color:var(--t1);}
+.dp-share{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:var(--r3);border:1px solid var(--accent);background:#fff;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
+.dp-share:hover{background:var(--accentLL);}
 .dp-hero{position:relative;width:100%;min-height:400px;border-radius:20px;overflow:hidden;display:flex;align-items:flex-end;}
 .dp-hero-img{position:absolute;inset:0;}.dp-hero-img img{width:100%;height:100%;object-fit:cover;}
 .dp-hero-img::after{content:'';position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.72) 0%,rgba(0,0,0,.25) 50%,rgba(0,0,0,.12) 100%);}

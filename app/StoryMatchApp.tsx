@@ -2692,7 +2692,16 @@ export default function App(){
   if(route.page==="detail"){
     return(<React.Fragment><style>{css}</style><div style={{minHeight:"100vh",background:"var(--bg)"}}>
       <header className="hdr"><div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}></div><div className="hdr-r"><span className="badge">{assets.length} assets</span></div></header>
-      {detailAsset && <AssetDetail asset={detailAsset} onBack={goHome} allAssets={assets} onSelect={(id)=>{const a=assets.find(x=>x.id===id);if(a)openAsset(a);}}/>}
+      {detailAsset && <AssetDetail
+        asset={detailAsset}
+        onBack={goHome}
+        allAssets={assets}
+        onSelect={(id)=>{const a=assets.find(x=>x.id===id);if(a)openAsset(a);}}
+        // Share button is for internal use (admins in admin mode, or sales reps).
+        // Hidden in the admin's "Public" preview because that simulates what an
+        // external customer sees, and customers don't share testimonials.
+        onCopyShareLink={((isAdmin && adminMode) || org?.role === "sales") ? (a)=>copyShareLink(a as Asset) : undefined}
+      />}
     </div></React.Fragment>);
   }
 
@@ -3202,8 +3211,10 @@ export default function App(){
                     ] : undefined;
                     const cardSelected = selectedIds.has(a.id);
                     const cardToggle = adminMgmt ? toggleSelected : undefined;
-                    // Share link is available to all signed-in users (sales reps share too)
-                    const share = user ? copyShareLink : undefined;
+                    // Share link is for internal users only — admins in admin
+                    // mode and sales reps. Hidden in admin's Public preview
+                    // because that simulates the external customer view.
+                    const share = ((isAdmin && adminMode) || org?.role === "sales") ? copyShareLink : undefined;
                     return a.assetType==="Quote"
                       ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share}/>
                       : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share}/>;
