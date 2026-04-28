@@ -328,8 +328,9 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .src-sync-report-chev{font-size:10px;color:var(--t4);margin-left:8px;}
 .src-sync-report-body{margin-top:8px;display:flex;flex-direction:column;gap:10px;}
 .ssr-section{background:var(--bg2);border-radius:7px;padding:8px 9px;}
-.ssr-section-head{font-size:11px;font-weight:600;color:var(--t1);margin-bottom:6px;letter-spacing:.2px;display:flex;align-items:center;gap:6px;}
-.ssr-count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;}
+.ssr-section-head{font-size:11.5px;font-weight:600;color:var(--t1);margin-bottom:3px;letter-spacing:.1px;display:flex;align-items:center;gap:6px;}
+.ssr-count{font-size:11.5px;font-weight:700;color:var(--t1);}
+.ssr-icon{flex-shrink:0;color:var(--t3);display:inline-flex;align-items:center;justify-content:center;}
 .ssr-section-help{font-size:10.5px;color:var(--t3);margin-bottom:7px;line-height:1.4;}
 .ssr-row{padding:6px 0;border-top:1px solid var(--border);}
 .ssr-row:first-of-type{border-top:none;padding-top:2px;}
@@ -337,10 +338,12 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .ssr-row-title{font-size:12px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ssr-row-meta{font-size:10.5px;color:var(--t3);margin-top:1px;}
 .ssr-row-actions{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;}
-.ssr-btn{padding:3px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);font-family:var(--font);font-size:10.5px;font-weight:600;cursor:pointer;}
+.ssr-btn{padding:3px 9px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);font-family:var(--font);font-size:10.5px;font-weight:600;cursor:pointer;}
 .ssr-btn:hover{background:var(--bg2);color:var(--t1);}
-.ssr-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
-.ssr-btn.primary:hover{background:var(--accent2);}
+/* Subtle outlined accent — purple text on white, light purple fill on hover.
+   Avoids the heavy solid-purple "marketing CTA" look in this admin context. */
+.ssr-btn.primary{background:#fff;color:var(--accent);border-color:var(--accentL);}
+.ssr-btn.primary:hover{background:var(--accentLL);border-color:var(--accent);}
 /* Bottom-anchored, deliberately subtle. Style as a text link, not a CTA, so
    admins don't reach for it casually — it overwrites manual edits. */
 .ssr-pull-all-link{align-self:flex-end;background:none;border:none;color:var(--t3);font-family:var(--font);font-size:10.5px;font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-color:var(--border2);padding:6px 0 2px;}
@@ -1942,7 +1945,16 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                         <div className="src-sync-report-body">
                           {r.imported.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head"><span className="ssr-count">{r.imported.length}</span> Imported</div>
+                              <div className="ssr-section-head">
+                                <span className="ssr-icon">
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="7 10 12 15 17 10"/>
+                                    <line x1="12" y1="15" x2="12" y2="3"/>
+                                  </svg>
+                                </span>
+                                <span className="ssr-count">{r.imported.length}</span> Imported
+                              </div>
                               {r.imported.map(i => (
                                 <div key={i.assetId} className="ssr-row compact">
                                   <div className="ssr-row-title">{i.headline}</div>
@@ -1952,7 +1964,15 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                           )}
                           {r.archived.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head"><span className="ssr-count">{r.archived.length}</span> Removed from Vimeo</div>
+                              <div className="ssr-section-head">
+                                <span className="ssr-icon">
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                  </svg>
+                                </span>
+                                <span className="ssr-count">{r.archived.length}</span> Removed from Vimeo
+                              </div>
                               <div className="ssr-section-help">
                                 Auto-archived because they&apos;re no longer in your Vimeo showcase.
                               </div>
@@ -1974,7 +1994,20 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                           )}
                           {r.drifted.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head"><span className="ssr-count">{r.drifted.length}</span> One or more fields differ from Vimeo</div>
+                              <div className="ssr-section-head">
+                                <span className="ssr-icon">
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 8"/>
+                                    <polyline points="21 3 21 8 16 8"/>
+                                    <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6-2.3L3 16"/>
+                                    <polyline points="3 21 3 16 8 16"/>
+                                  </svg>
+                                </span>
+                                <span className="ssr-count">{r.drifted.length}</span> Drifted
+                              </div>
+                              <div className="ssr-section-help">
+                                One or more fields differ from Vimeo.
+                              </div>
                               {r.drifted.map(d => (
                                 <div key={d.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{d.headline}</div>
@@ -1999,7 +2032,15 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                           )}
                           {r.previouslyDeleted.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head"><span className="ssr-count">{r.previouslyDeleted.length}</span> Previously deleted, still in Vimeo</div>
+                              <div className="ssr-section-head">
+                                <span className="ssr-icon">
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M3 12a9 9 0 1 0 9-9"/>
+                                    <polyline points="3 4 3 12 11 12"/>
+                                  </svg>
+                                </span>
+                                <span className="ssr-count">{r.previouslyDeleted.length}</span> Previously deleted, still in Vimeo
+                              </div>
                               <div className="ssr-section-help">
                                 Not auto-imported because you previously deleted them. Resync to bring them back.
                               </div>
