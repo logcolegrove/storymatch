@@ -340,7 +340,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .ssr-btn:hover{background:var(--bg2);color:var(--t1);}
 .ssr-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
 .ssr-btn.primary:hover{background:var(--accent2);}
-.ssr-foot{display:flex;justify-content:flex-end;margin-top:2px;}
+.ssr-pull-all{align-self:stretch;padding:7px 10px;font-size:11.5px;display:inline-flex;align-items:center;justify-content:center;gap:5px;}
 .src-progress{margin-top:10px;padding:10px 12px;background:var(--accentLL);border-radius:7px;border-left:2px solid var(--accent);font-size:11.5px;color:var(--accent);line-height:1.55;}
 .src-progress-step{display:flex;align-items:center;gap:6px;}
 .src-add-form{padding:14px;background:var(--bg);border-radius:10px;border:1px solid var(--border);margin-bottom:14px;}
@@ -1878,40 +1878,82 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                 </div>
                 <div className="src-card-url">{s.url}</div>
                 {/* Subtle inline sync report — only renders if the most recent
-                    sync produced something worth surfacing. Click the link to
-                    expand into a per-item action list. */}
+                    sync produced something worth surfacing. Click to expand. */}
                 {(() => {
                   const r = syncReports[s.id];
                   if (!r) return null;
                   const total = r.imported.length + r.drifted.length + r.archived.length + r.previouslyDeleted.length;
                   if (total === 0) return null;
                   const isOpen = expandedReportId === s.id;
-                  const summary: string[] = [];
-                  if (r.imported.length) summary.push(`${r.imported.length} imported`);
-                  if (r.drifted.length) summary.push(`${r.drifted.length} drifted`);
-                  if (r.archived.length) summary.push(`${r.archived.length} archived`);
-                  if (r.previouslyDeleted.length) summary.push(`${r.previouslyDeleted.length} previously deleted`);
-                  const close = () => setSyncReports(prev => { const n = { ...prev }; delete n[s.id]; return n; });
                   const removeFromReport = (key: keyof Pick<SyncReport, "drifted" | "archived" | "previouslyDeleted" | "imported">, assetId: string) => {
                     setSyncReports(prev => ({
                       ...prev,
                       [s.id]: { ...prev[s.id], [key]: (prev[s.id][key] as Array<{ assetId: string }>).filter(x => x.assetId !== assetId) } as SyncReport,
                     }));
                   };
+                  // Bulk apply Vimeo's values across drift + previously-deleted in one click.
+                  // Removed-from-Vimeo items aren't touched (Vimeo's "answer" for those
+                  // is that they're gone, so leaving them archived IS the Vimeo-as-master
+                  // outcome). Imports already happened during the sync itself.
+                  const pullAllFromVimeo = () => {
+                    const updates: Array<Partial<Asset> & { id: string }> = [];
+                    for (const d of r.drifted) {
+                      updates.push({
+                        id: d.assetId,
+                        headline: d.vimeo.title,
+                        description: d.vimeo.description,
+                        ...(d.vimeo.thumbnail ? { thumbnail: d.vimeo.thumbnail } : {}),
+                      });
+                    }
+                    for (const p of r.previouslyDeleted) {
+                      updates.push({
+                        id: p.assetId,
+                        status: "published",
+                        headline: p.vimeo.title,
+                        description: p.vimeo.description,
+                        ...(p.vimeo.thumbnail ? { thumbnail: p.vimeo.thumbnail } : {}),
+                      });
+                    }
+                    if (updates.length > 0) onUpdateAssets(updates);
+                    setSyncReports(prev => ({
+                      ...prev,
+                      [s.id]: { ...prev[s.id], drifted: [], previouslyDeleted: [] } as SyncReport,
+                    }));
+                  };
+                  const hasPullable = r.drifted.length + r.previouslyDeleted.length > 0;
                   return (
                     <div className={`src-sync-report${isOpen ? " open" : ""}`}>
                       <button
                         className="src-sync-report-toggle"
                         onClick={() => setExpandedReportId(isOpen ? null : s.id)}
                       >
-                        <span className="src-sync-report-summary">Sync report — {summary.join(" · ")}</span>
+                        <span className="src-sync-report-summary">Sync report</span>
                         <span className="src-sync-report-chev">{isOpen ? "▴" : "▾"}</span>
                       </button>
                       {isOpen && (
                         <div className="src-sync-report-body">
+                          {hasPullable && (
+                            <button
+                              className="ssr-btn primary ssr-pull-all"
+                              onClick={pullAllFromVimeo}
+                              title="Apply Vimeo's current values to every drifted and previously-deleted item"
+                            >
+                              ↻ Pull all from Vimeo
+                            </button>
+                          )}
+                          {r.imported.length > 0 && (
+                            <div className="ssr-section">
+                              <div className="ssr-section-head">+ Imported ({r.imported.length})</div>
+                              {r.imported.map(i => (
+                                <div key={i.assetId} className="ssr-row compact">
+                                  <div className="ssr-row-title">{i.headline}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                           {r.drifted.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head">⚠ Differs from Vimeo</div>
+                              <div className="ssr-section-head">⚠ Differs from Vimeo ({r.drifted.length})</div>
                               {r.drifted.map(d => (
                                 <div key={d.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{d.headline}</div>
@@ -1929,10 +1971,6 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                                         removeFromReport("drifted", d.assetId);
                                       }}
                                     >Pull from Vimeo</button>
-                                    <button
-                                      className="ssr-btn"
-                                      onClick={() => removeFromReport("drifted", d.assetId)}
-                                    >Keep mine</button>
                                   </div>
                                 </div>
                               ))}
@@ -1940,9 +1978,9 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                           )}
                           {r.previouslyDeleted.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head">↩ Detected in Vimeo, was deleted in StoryMatch</div>
+                              <div className="ssr-section-head">↩ Previously deleted, still in Vimeo ({r.previouslyDeleted.length})</div>
                               <div className="ssr-section-help">
-                                These weren&apos;t auto-imported because you previously deleted them. Resync to bring them back with current Vimeo values.
+                                Not auto-imported because you previously deleted them. Resync to bring them back.
                               </div>
                               {r.previouslyDeleted.map(p => (
                                 <div key={p.assetId} className="ssr-row">
@@ -1961,10 +1999,6 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                                         removeFromReport("previouslyDeleted", p.assetId);
                                       }}
                                     >Resync from Vimeo</button>
-                                    <button
-                                      className="ssr-btn"
-                                      onClick={() => removeFromReport("previouslyDeleted", p.assetId)}
-                                    >Keep deleted</button>
                                   </div>
                                 </div>
                               ))}
@@ -1972,7 +2006,10 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                           )}
                           {r.archived.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head">✗ Removed from Vimeo (auto-archived)</div>
+                              <div className="ssr-section-head">✗ Removed from Vimeo ({r.archived.length})</div>
+                              <div className="ssr-section-help">
+                                Auto-archived because they&apos;re no longer in your Vimeo showcase.
+                              </div>
                               {r.archived.map(a => (
                                 <div key={a.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{a.headline}</div>
@@ -1984,28 +2021,11 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                                         removeFromReport("archived", a.assetId);
                                       }}
                                     >Restore</button>
-                                    <button
-                                      className="ssr-btn"
-                                      onClick={() => removeFromReport("archived", a.assetId)}
-                                    >Keep archived</button>
                                   </div>
                                 </div>
                               ))}
                             </div>
                           )}
-                          {r.imported.length > 0 && (
-                            <div className="ssr-section">
-                              <div className="ssr-section-head">+ Imported</div>
-                              {r.imported.map(i => (
-                                <div key={i.assetId} className="ssr-row compact">
-                                  <div className="ssr-row-title">{i.headline}</div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          <div className="ssr-foot">
-                            <button className="ssr-btn" onClick={close}>Dismiss report</button>
-                          </div>
                         </div>
                       )}
                     </div>
