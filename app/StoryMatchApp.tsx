@@ -470,10 +470,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.lv-pub-select{font-family:var(--font);font-size:11.5px;font-weight:600;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;cursor:pointer;width:100%;}
-.lv-pub-select.published{color:var(--green);border-color:#a7f3d0;background:#ecfdf5;}
-.lv-pub-select.archived{color:var(--amber);border-color:#fcd34d;background:var(--amberL);}
-.lv-pub-select.draft{color:var(--t3);background:var(--bg2);}
+.lv-pub-select{font-family:var(--font);font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);cursor:pointer;width:100%;}
+.lv-pub-select:hover{background:var(--bg2);}
 .lv-actions{display:flex;gap:5px;justify-content:flex-end;}
 .lv-act-btn{font-family:var(--font);font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
 .lv-act-btn:hover{background:var(--bg2);color:var(--t1);}
@@ -504,6 +502,49 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-mini-btn:hover{background:var(--bg2);color:var(--t1);}
 .cl-mini-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
 .cl-mini-btn.primary:hover{background:var(--accent2);}
+
+/* Empty Cleared state — no admin engagement yet */
+.cl-trigger.unset{color:var(--t4);}
+.cl-trigger.unset:hover{color:var(--t2);}
+.cl-trigger.unset .cl-set-hint{font-size:11px;}
+
+/* ── MULTI-SELECT (checkboxes + bulk action bar) ── */
+.lv-row{padding-left:38px;}
+.lv-head{padding-left:38px;}
+.lv-check{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:16px;height:16px;cursor:pointer;accent-color:var(--accent);}
+.lv-row.selected{background:var(--accentLL);}
+.lv-row.selected:hover{background:var(--accentL);}
+
+/* Grid card checkbox — appears on hover or when card is selected */
+.card-check,.qcard-check{position:absolute;top:10px;left:10px;width:20px;height:20px;cursor:pointer;accent-color:var(--accent);z-index:5;background:#fff;border-radius:4px;opacity:0;transition:opacity .15s;}
+.card:hover .card-check,.qcard:hover .qcard-check,.card-check.checked,.qcard-check.checked{opacity:1;}
+.card.selected,.qcard.selected{outline:2px solid var(--accent);outline-offset:-2px;}
+
+/* Bulk action bar — fixed at bottom, slides up when ≥1 selected */
+.bulk-bar{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1f;color:#fff;border-radius:11px;padding:10px 14px;display:flex;align-items:center;gap:8px;box-shadow:0 12px 36px rgba(0,0,0,.25);z-index:100;font-family:var(--font);font-size:13px;animation:bulkbarUp .2s ease-out;}
+@keyframes bulkbarUp{from{transform:translate(-50%,12px);opacity:0;}to{transform:translate(-50%,0);opacity:1;}}
+.bulk-count{padding:0 10px 0 4px;font-weight:600;color:#fff;border-right:1px solid #444;margin-right:4px;}
+.bulk-btn{background:none;border:none;color:#e2e2e6;font-size:13px;font-weight:500;padding:7px 11px;border-radius:6px;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;}
+.bulk-btn:hover{background:rgba(255,255,255,.1);color:#fff;}
+.bulk-btn.danger{color:#fca5a5;}
+.bulk-btn.danger:hover{background:rgba(220,38,38,.2);color:#fca5a5;}
+.bulk-close{background:none;border:none;color:#8888a0;cursor:pointer;padding:6px 8px;margin-left:4px;font-size:14px;border-radius:6px;}
+.bulk-close:hover{background:rgba(255,255,255,.1);color:#fff;}
+
+/* ── 3-DOT MENU ── */
+.dots-btn{background:none;border:none;color:var(--t3);cursor:pointer;padding:5px 7px;border-radius:5px;display:grid;place-items:center;}
+.dots-btn:hover{background:var(--bg2);color:var(--t1);}
+.dots-pop{position:absolute;top:calc(100% + 4px);right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px;z-index:55;min-width:160px;}
+.dots-item{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;background:none;border:none;color:var(--t1);font-size:12.5px;font-family:var(--font);cursor:pointer;border-radius:5px;text-align:left;}
+.dots-item:hover{background:var(--bg2);}
+.dots-item.danger{color:var(--red);}
+.dots-item.danger:hover{background:#fef2f2;}
+.dots-divider{height:1px;background:var(--border);margin:4px 0;}
+.lv-actions{position:relative;}
+
+/* Grid card 3-dot menu */
+.card-dots,.qcard-dots{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.95);border-radius:5px;z-index:5;opacity:0;transition:opacity .15s;}
+.card:hover .card-dots,.qcard:hover .qcard-dots{opacity:1;}
 
 /* ── QUOTE CARD ── */
 .qcard{border-radius:var(--r);cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;min-height:340px;display:flex;flex-direction:column;justify-content:flex-end;}
@@ -622,9 +663,13 @@ interface CardProps {
   aiData?: AIMatchResult | null;
   onCopyQuote: (q: string) => void;
   onRestore?: (asset: Asset) => void; // admin-only — present means show restore button on archived
+  // Multi-select + dots menu (admin only — pass undefined for sales/public preview)
+  isSelected?: boolean;
+  onToggleSelect?: (id: string) => void;
+  menuItems?: MenuItem[];
 }
 
-function TCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
+function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const isV=asset.assetType==="Video Testimonial";
   const vid=extractVid(asset.videoUrl);
@@ -632,9 +677,22 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
   const cta=CTA_MAP[asset.assetType]||"read";
   const isArchived=asset.status==="archived";
   return(
-    <div className={`card${isArchived?" archived":""}`} onClick={()=>onClick(asset)}>
+    <div className={`card${isArchived?" archived":""}${isSelected?" selected":""}`} onClick={()=>onClick(asset)}>
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          className={`card-check${isSelected?" checked":""}`}
+          checked={!!isSelected}
+          onChange={()=>onToggleSelect(asset.id)}
+          onClick={e=>e.stopPropagation()}
+          title="Select for bulk actions"
+        />
+      )}
+      {menuItems && (
+        <div className="card-dots"><DotsMenu items={menuItems}/></div>
+      )}
       {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
-      {isArchived&&onRestore&&(
+      {isArchived&&onRestore&&!menuItems&&(
         <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
       )}
       <div className="card-thumb">
@@ -658,14 +716,27 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
   );
 }
 
-function QCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
+function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems}: CardProps) {
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const grad=`linear-gradient(135deg, ${c} 0%, ${c}dd 40%, ${c}99 100%)`;
   const isArchived=asset.status==="archived";
   return(
-    <div className={`qcard${isArchived?" archived":""}`} onClick={()=>onClick(asset)}>
+    <div className={`qcard${isArchived?" archived":""}${isSelected?" selected":""}`} onClick={()=>onClick(asset)}>
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          className={`qcard-check${isSelected?" checked":""}`}
+          checked={!!isSelected}
+          onChange={()=>onToggleSelect(asset.id)}
+          onClick={e=>e.stopPropagation()}
+          title="Select for bulk actions"
+        />
+      )}
+      {menuItems && (
+        <div className="qcard-dots"><DotsMenu items={menuItems}/></div>
+      )}
       {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
-      {isArchived&&onRestore&&(
+      {isArchived&&onRestore&&!menuItems&&(
         <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
       )}
       {aiData&&<div className="card-rank" style={{position:"absolute",top:12,left:12,zIndex:3}}>{aiData.rank}</div>}
@@ -697,22 +768,94 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
 // each row without leaving the page. Sales reps and the public preview never
 // see this view — it's strictly an admin governance tool.
 
+// ─── DOTS MENU (per-row, per-card actions) ─────────────────────────────────
+type MenuItem = { label: string; onClick: () => void; danger?: boolean } | { divider: true };
+function DotsMenu({ items }: { items: MenuItem[] }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const t = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
+      <button className="dots-btn" onClick={() => setOpen(o => !o)} title="Actions">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+      {open && (
+        <div className="dots-pop">
+          {items.map((it, i) => "divider" in it
+            ? <div key={`d${i}`} className="dots-divider"/>
+            : <button key={i} className={`dots-item${it.danger ? " danger" : ""}`} onClick={() => { setOpen(false); it.onClick(); }}>{it.label}</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── BULK ACTION BAR (floating, appears when any rows are selected) ──────────
+interface BulkBarProps {
+  count: number;
+  onPublish: () => void;
+  onDraft: () => void;
+  onArchive: () => void;
+  onMarkVerified: () => void;
+  onDelete: () => void;
+  onClear: () => void;
+}
+function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear }: BulkBarProps) {
+  return (
+    <div className="bulk-bar">
+      <span className="bulk-count">{count} selected</span>
+      <button className="bulk-btn" onClick={onPublish}>Publish</button>
+      <button className="bulk-btn" onClick={onDraft}>Move to draft</button>
+      <button className="bulk-btn" onClick={onArchive}>Archive</button>
+      <button className="bulk-btn" onClick={onMarkVerified}>✓ Mark verified</button>
+      <button className="bulk-btn danger" onClick={onDelete}>Delete</button>
+      <button className="bulk-close" onClick={onClear} title="Clear selection">✕</button>
+    </div>
+  );
+}
+
 interface ListViewProps {
   assets: Asset[];
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
   onClick: (a: Asset) => void;
   onSetPublicationStatus: (a: Asset, next: "published" | "draft" | "archived") => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
+  onDelete: (id: string) => void;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
 // and freshness. Worst-of-three logic. Returns the level (green / yellow / red)
 // and a per-signal breakdown for the popover.
-type ClearedLevel = "green" | "yellow" | "red";
-interface ClearedReason { signal: "approval" | "client" | "freshness"; level: ClearedLevel; label: string; }
+//
+// Default state when no admin has engaged: `unset` — no dot, no nag. The dot
+// only appears once an admin records approval or actively sets client status,
+// because that's when the lifecycle data is meaningful enough to display.
+type ClearedLevel = "green" | "yellow" | "red" | "unset";
+interface ClearedReason { signal: "approval" | "client" | "freshness"; level: "green" | "yellow" | "red"; label: string; }
+
+function isClearedEngaged(asset: Asset): boolean {
+  const approvalEngaged = !!asset.approvalStatus && asset.approvalStatus !== "unset";
+  const clientEngaged = asset.clientStatusSource === "manual" || asset.clientStatusSource === "crm";
+  return approvalEngaged || clientEngaged;
+}
 
 function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedReason[] } {
+  // No admin engagement yet — leave the cell empty, don't nag.
+  if (!isClearedEngaged(asset)) {
+    return { level: "unset", reasons: [] };
+  }
+
   const reasons: ClearedReason[] = [];
 
   // Approval
@@ -728,17 +871,17 @@ function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedRe
   else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "Former client" });
   else reasons.push({ signal: "client", level: "yellow", label: "Client status unknown" });
 
-  // Freshness
+  // Freshness — only contributes if engaged (otherwise we don't want to nag)
   if (asset.lastVerifiedAt) {
     const months = (Date.now() - new Date(asset.lastVerifiedAt).getTime()) / (1000 * 60 * 60 * 24 * 30);
     if (months < 6) reasons.push({ signal: "freshness", level: "green", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)}` });
     else if (months < 18) reasons.push({ signal: "freshness", level: "yellow", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)} — getting stale` });
     else reasons.push({ signal: "freshness", level: "red", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)} — too old` });
   } else {
-    reasons.push({ signal: "freshness", level: "red", label: "Never verified" });
+    reasons.push({ signal: "freshness", level: "yellow", label: "Never verified" });
   }
 
-  let level: ClearedLevel = "green";
+  let level: "green" | "yellow" | "red" = "green";
   for (const r of reasons) {
     if (r.level === "red") { level = "red"; break; }
     if (r.level === "yellow") level = "yellow";
@@ -845,7 +988,7 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
   );
 }
 
-function ListView({ assets, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -863,6 +1006,7 @@ function ListView({ assets, onClick, onSetPublicationStatus, onSetClientStatus, 
       </div>
       {assets.map((a) => {
         const isArchived = a.status === "archived";
+        const isSelected = selectedIds.has(a.id);
         const cleared = computeCleared(a);
         const open = openClearedFor === a.id;
         const vid = extractVid(a.videoUrl);
@@ -873,9 +1017,17 @@ function ListView({ assets, onClick, onSetPublicationStatus, onSetClientStatus, 
         return (
           <div
             key={a.id}
-            className={`lv-row${isArchived ? " archived" : ""}`}
+            className={`lv-row${isArchived ? " archived" : ""}${isSelected ? " selected" : ""}`}
             onClick={() => onClick(a)}
           >
+            <input
+              type="checkbox"
+              className="lv-check"
+              checked={isSelected}
+              onChange={() => onToggleSelect(a.id)}
+              onClick={(e) => e.stopPropagation()}
+              title="Select for bulk actions"
+            />
             <div className="lv-thumb">
               <img src={thumb} alt={a.company} loading="lazy" />
             </div>
@@ -886,7 +1038,7 @@ function ListView({ assets, onClick, onSetPublicationStatus, onSetClientStatus, 
             <div className="lv-vert">{a.vertical || "—"}</div>
             <div onClick={(e) => e.stopPropagation()}>
               <select
-                className={`lv-pub-select ${pubStatus}`}
+                className="lv-pub-select"
                 value={pubStatus}
                 onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
               >
@@ -897,12 +1049,18 @@ function ListView({ assets, onClick, onSetPublicationStatus, onSetClientStatus, 
             </div>
             <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
               <div
-                className={`cl-trigger${open ? " open" : ""}`}
+                className={`cl-trigger${open ? " open" : ""}${cleared.level === "unset" ? " unset" : ""}`}
                 onClick={() => setOpenClearedFor(open ? null : a.id)}
-                title="Cleared for use: approval, client status, freshness"
+                title={cleared.level === "unset" ? "Click to set approval & client status" : "Cleared for use: approval, client status, freshness"}
               >
-                <span className={`cl-circle ${cleared.level}`}/>
-                <span>{cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"}</span>
+                {cleared.level === "unset" ? (
+                  <span className="cl-set-hint">—</span>
+                ) : (
+                  <>
+                    <span className={`cl-circle ${cleared.level}`}/>
+                    <span>{cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"}</span>
+                  </>
+                )}
               </div>
               {open && (
                 <ClearedPopover
@@ -915,8 +1073,17 @@ function ListView({ assets, onClick, onSetPublicationStatus, onSetClientStatus, 
                 />
               )}
             </div>
-            <div className="lv-actions" onClick={(e) => e.stopPropagation()}>
-              <button className="lv-act-btn" onClick={() => onClick(a)}>Open</button>
+            <div className="lv-actions">
+              <DotsMenu items={[
+                { label: "Open", onClick: () => onClick(a) },
+                { label: "✓ Mark verified", onClick: () => onMarkVerified(a) },
+                { divider: true },
+                isArchived
+                  ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
+                  : { label: "Archive", onClick: () => onSetPublicationStatus(a, "archived") },
+                { divider: true },
+                { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) onDelete(a.id); }, danger: true },
+              ]}/>
             </div>
           </div>
         );
@@ -1281,13 +1448,13 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       if(!info||info.kind==="unknown")continue;
       setProgress({step:`Processing ${v.title||v.url}…`,count:i+1,total:videos.length});
       const asset=await importSingleVideo(info,sourceId);
-      // Override with rich data we already have from Vimeo
-      if(v.title&&!asset.headline)asset.headline=v.title;
-      if(v.thumbnail)asset.thumbnail=v.thumbnail;
-      // Description is the human-written field — keep it separate from transcript
-      if(v.description)asset.description=v.description;
-      // Transcript is the auto-generated caption text
-      if(v.transcript)asset.transcript=v.transcript;
+      // Vimeo is the source of truth for title and description. Always overwrite
+      // — don't let oEmbed-derived or LLM-guessed values win over what the admin
+      // typed into Vimeo itself.
+      if(v.title) asset.headline=v.title;
+      if(v.description) asset.description=v.description;
+      if(v.thumbnail) asset.thumbnail=v.thumbnail;
+      if(v.transcript) asset.transcript=v.transcript;
       newAssets.push(asset);
     }
     const source: Source = {id:sourceId,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"synced",lastSync:new Date().toISOString(),videoCount:newAssets.length,assetIds:newAssets.map(a=>a.id)};
@@ -1333,13 +1500,11 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       const info=detectUrlType(v.url);
       if(!info||info.kind==="unknown")continue;
       const asset=await importSingleVideo(info,source.id);
-      // Override with rich data we already have from Vimeo
-      if(v.title&&!asset.headline)asset.headline=v.title;
-      if(v.thumbnail)asset.thumbnail=v.thumbnail;
-      // Description is the human-written field — keep it separate from transcript
-      if(v.description)asset.description=v.description;
-      // Transcript is the auto-generated caption text
-      if(v.transcript)asset.transcript=v.transcript;
+      // Vimeo is source of truth for title/description (see addCollectionSource).
+      if(v.title) asset.headline=v.title;
+      if(v.description) asset.description=v.description;
+      if(v.thumbnail) asset.thumbnail=v.thumbnail;
+      if(v.transcript) asset.transcript=v.transcript;
       newAssets.push(asset);
     }
 
@@ -1726,6 +1891,7 @@ export default function App(){
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
   const[showArchived,setShowArchived]=useState(false); // admin-only: include archived assets in views
   const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
+  const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
   // StoryMatch state
@@ -1836,6 +2002,71 @@ export default function App(){
         archivedReason:null,
       },next==="published"?"Published":"Moved to draft");
     }
+  };
+
+  // Delete an asset (irreversible). Used by per-row 3-dot menu and bulk bar.
+  const deleteAssetInline=async(id: string)=>{
+    setAssets(prev=>prev.filter(a=>a.id!==id));
+    try{
+      await fetch(`/api/assets?id=${id}`,{
+        method:"DELETE",
+        headers:await authHeaders(),
+      });
+    }catch(e){console.error("Delete failed",e);}
+  };
+
+  // ── MULTI-SELECT HELPERS ──
+  const toggleSelected=(id: string)=>{
+    setSelectedIds(prev=>{
+      const next=new Set(prev);
+      if(next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const clearSelection=()=>setSelectedIds(new Set());
+
+  // ── BULK ACTIONS ──
+  // All bulk actions iterate the current selection, apply, then clear the selection.
+  const bulkSetPublication=async(next: "published"|"draft"|"archived")=>{
+    const ids=Array.from(selectedIds);
+    if(next==="archived"){
+      const today=new Date().toISOString().split("T")[0];
+      const patch={status:"archived" as const,archivedAt:new Date().toISOString(),archivedReason:`Manually archived on ${today}`};
+      setAssets(prev=>prev.map(a=>ids.includes(a.id)?{...a,...patch}:a));
+    } else {
+      const patch={status:next,archivedAt:null,archivedReason:null};
+      setAssets(prev=>prev.map(a=>ids.includes(a.id)?{...a,...patch}:a));
+    }
+    setToast(`${ids.length} → ${next}`);setTimeout(()=>setToast(null),1800);
+    for(const id of ids){
+      try{
+        const patch=next==="archived"
+          ?{id,status:"archived",archivedAt:new Date().toISOString(),archivedReason:"Bulk archive"}
+          :{id,status:next,archivedAt:null,archivedReason:null};
+        await fetch("/api/assets",{method:"PUT",headers:{"Content-Type":"application/json",...(await authHeaders())},body:JSON.stringify(patch)});
+      }catch(e){console.error(e);}
+    }
+    clearSelection();
+  };
+  const bulkMarkVerified=async()=>{
+    const ids=Array.from(selectedIds);
+    const nowIso=new Date().toISOString();
+    setAssets(prev=>prev.map(a=>ids.includes(a.id)?{...a,lastVerifiedAt:nowIso}:a));
+    setToast(`${ids.length} marked verified`);setTimeout(()=>setToast(null),1800);
+    for(const id of ids){
+      try{await fetch("/api/assets",{method:"PUT",headers:{"Content-Type":"application/json",...(await authHeaders())},body:JSON.stringify({id,lastVerifiedAt:nowIso})});}catch(e){console.error(e);}
+    }
+    clearSelection();
+  };
+  const bulkDelete=async()=>{
+    const ids=Array.from(selectedIds);
+    if(!confirm(`Delete ${ids.length} ${ids.length===1?"asset":"assets"} permanently? This can't be undone.`))return;
+    setAssets(prev=>prev.filter(a=>!selectedIds.has(a.id)));
+    setToast(`${ids.length} deleted`);setTimeout(()=>setToast(null),1800);
+    for(const id of ids){
+      try{await fetch(`/api/assets?id=${id}`,{method:"DELETE",headers:await authHeaders()});}catch(e){console.error(e);}
+    }
+    clearSelection();
   };
 
   const runStoryMatch=useCallback(async(query: string)=>{
@@ -2391,20 +2622,36 @@ export default function App(){
               ) : (isAdmin && adminMode && viewMode === "list") ? (
                 <ListView
                   assets={displayAssets}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleSelected}
                   onClick={openAsset}
                   onSetPublicationStatus={setPublicationStatus}
                   onSetClientStatus={setClientStatus}
                   onSetApproval={setApproval}
                   onMarkVerified={markVerified}
+                  onDelete={deleteAssetInline}
                 />
               ) : (
                 <div className="grid">
                   {displayAssets.map(a=>{
                     const ai=aiDataMap[a.id]||null;
-                    const restore = (isAdmin && adminMode) ? restoreAsset : undefined;
+                    const adminMgmt = isAdmin && adminMode;
+                    const restore = adminMgmt ? restoreAsset : undefined;
+                    const cardMenu: MenuItem[] | undefined = adminMgmt ? [
+                      { label: "Open", onClick: () => openAsset(a) },
+                      { label: "✓ Mark verified", onClick: () => markVerified(a) },
+                      { divider: true },
+                      a.status === "archived"
+                        ? { label: "Restore", onClick: () => setPublicationStatus(a, "published") }
+                        : { label: "Archive", onClick: () => setPublicationStatus(a, "archived") },
+                      { divider: true },
+                      { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) deleteAssetInline(a.id); }, danger: true },
+                    ] : undefined;
+                    const cardSelected = selectedIds.has(a.id);
+                    const cardToggle = adminMgmt ? toggleSelected : undefined;
                     return a.assetType==="Quote"
-                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore}/>
-                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore}/>;
+                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu}/>
+                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu}/>;
                   })}
                 </div>
               )}
@@ -2414,6 +2661,17 @@ export default function App(){
         </div>
 
         {toast && <div className="toast">{toast}</div>}
+        {isAdmin && adminMode && selectedIds.size > 0 && (
+          <BulkBar
+            count={selectedIds.size}
+            onPublish={() => bulkSetPublication("published")}
+            onDraft={() => bulkSetPublication("draft")}
+            onArchive={() => bulkSetPublication("archived")}
+            onMarkVerified={bulkMarkVerified}
+            onDelete={bulkDelete}
+            onClear={clearSelection}
+          />
+        )}
       </div>
     </React.Fragment>
   );
