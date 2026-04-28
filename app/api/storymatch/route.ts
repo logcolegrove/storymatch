@@ -362,24 +362,26 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Exclude archived assets from the candidate pool. We do this client-side
-  // (in the API route) rather than inside match_assets() to avoid changing
-  // the SQL function signature, which would invalidate the HNSW index plan.
-  const { data: archivedRows } = await supabaseAdmin
+  // Exclude any non-published assets (archived OR draft) from the candidate
+  // pool. Drafts are admin work-in-progress and shouldn't surface to sales
+  // reps; archived assets are explicitly hidden from the live library. We
+  // do this in the API route rather than in match_assets() to avoid
+  // invalidating the HNSW index plan.
+  const { data: hiddenRows } = await supabaseAdmin
     .from("assets")
     .select("id")
     .eq("org_id", ctx.orgId)
-    .eq("status", "archived");
-  const archivedSet = new Set((archivedRows || []).map((r) => r.id as string));
+    .neq("status", "published");
+  const hiddenSet = new Set((hiddenRows || []).map((r) => r.id as string));
   const filteredCandidates = (candidates as CandidateAsset[]).filter(
-    (c) => !archivedSet.has(c.id)
+    (c) => !hiddenSet.has(c.id)
   );
 
   if (filteredCandidates.length === 0) {
     return NextResponse.json({
       matches: [],
       candidatesFound: 0,
-      note: "All matching assets are archived.",
+      note: "No published matches in your library.",
     });
   }
 

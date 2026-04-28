@@ -437,11 +437,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .card-ai-q:hover::after{opacity:1;}
 .card-rank{position:absolute;top:12px;left:12px;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;z-index:2;box-shadow:0 2px 8px rgba(109,40,217,.3);}
 
-/* ── ARCHIVED ASSET TREATMENT ── */
-.card.archived,.qcard.archived{opacity:.55;}
-.card.archived:hover,.qcard.archived:hover{opacity:.8;}
-.card.archived .card-thumb img,.qcard.archived .qcard-bg{filter:grayscale(.9);}
-.archived-badge{position:absolute;top:10px;right:10px;background:var(--amberL);color:var(--amber);font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:4px 7px;border-radius:5px;z-index:3;border:1px solid var(--amber);}
+/* ── NON-PUBLISHED ASSET TREATMENT (archived + draft) ── */
+.card.archived,.qcard.archived,.card.draft,.qcard.draft{opacity:.55;}
+.card.archived:hover,.qcard.archived:hover,.card.draft:hover,.qcard.draft:hover{opacity:.8;}
+.card.archived .card-thumb img,.qcard.archived .qcard-bg,.card.draft .card-thumb img,.qcard.draft .qcard-bg{filter:grayscale(.9);}
+.status-badge{position:absolute;top:10px;right:10px;font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:4px 7px;border-radius:5px;z-index:3;border:1px solid;}
+.status-badge.archived{background:var(--amberL);color:var(--amber);border-color:var(--amber);}
+.status-badge.draft{background:var(--bg2);color:var(--t2);border-color:var(--border2);}
 .archived-restore{position:absolute;bottom:10px;right:10px;background:#fff;color:var(--accent);font-size:11px;font-weight:600;padding:5px 9px;border-radius:6px;border:1px solid var(--accent);cursor:pointer;z-index:3;font-family:var(--font);opacity:0;transition:opacity .2s;}
 .card.archived:hover .archived-restore,.qcard.archived:hover .archived-restore{opacity:1;}
 .archived-restore:hover{background:var(--accent);color:#fff;}
@@ -477,10 +479,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 130px 130px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;}
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
-.lv-row.archived{opacity:.65;}
+.lv-row.archived,.lv-row.draft{opacity:.65;}
 .lv-thumb{width:72px;height:48px;border-radius:6px;overflow:hidden;background:var(--bg3);position:relative;}
 .lv-thumb img{width:100%;height:100%;object-fit:cover;}
-.lv-row.archived .lv-thumb img{filter:grayscale(.9);}
+.lv-row.archived .lv-thumb img,.lv-row.draft .lv-thumb img{filter:grayscale(.9);}
 .lv-title{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -701,8 +703,10 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
   let thumb=asset.thumbnail;if(!thumb&&vid?.p==="yt")thumb=ytThumb(vid.id);if(!thumb)thumb="https://images.unsplash.com/photo-1557804506-669a67965ba0?w=640&h=360&fit=crop";
   const cta=CTA_MAP[asset.assetType]||"read";
   const isArchived=asset.status==="archived";
+  const isDraft=asset.status==="draft";
+  const statusClass=isArchived?" archived":isDraft?" draft":"";
   return(
-    <div className={`card${isArchived?" archived":""}${isSelected?" selected":""}`} onClick={()=>onClick(asset)}>
+    <div className={`card${statusClass}${isSelected?" selected":""}`} onClick={()=>onClick(asset)}>
       {onToggleSelect && (
         <input
           type="checkbox"
@@ -728,7 +732,8 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           </svg>
         </button>
       )}
-      {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
+      {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
+      {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
       {isArchived&&onRestore&&!menuItems&&(
         <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
       )}
@@ -757,8 +762,10 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
   const c=VERT_CLR[asset.vertical]||"#4f46e5";
   const grad=`linear-gradient(135deg, ${c} 0%, ${c}dd 40%, ${c}99 100%)`;
   const isArchived=asset.status==="archived";
+  const isDraft=asset.status==="draft";
+  const statusClass=isArchived?" archived":isDraft?" draft":"";
   return(
-    <div className={`qcard${isArchived?" archived":""}${isSelected?" selected":""}`} onClick={()=>onClick(asset)}>
+    <div className={`qcard${statusClass}${isSelected?" selected":""}`} onClick={()=>onClick(asset)}>
       {onToggleSelect && (
         <input
           type="checkbox"
@@ -784,7 +791,8 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           </svg>
         </button>
       )}
-      {isArchived&&<div className="archived-badge" title={asset.archivedReason||""}>Archived</div>}
+      {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
+      {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
       {isArchived&&onRestore&&!menuItems&&(
         <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
       )}
@@ -1065,6 +1073,8 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
       </div>
       {assets.map((a) => {
         const isArchived = a.status === "archived";
+        const isDraft = a.status === "draft";
+        const statusCls = isArchived ? " archived" : isDraft ? " draft" : "";
         const isSelected = selectedIds.has(a.id);
         const cleared = computeCleared(a);
         const open = openClearedFor === a.id;
@@ -1076,7 +1086,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         return (
           <div
             key={a.id}
-            className={`lv-row${isArchived ? " archived" : ""}${isSelected ? " selected" : ""}`}
+            className={`lv-row${statusCls}${isSelected ? " selected" : ""}`}
             onClick={() => onClick(a)}
           >
             <input
@@ -2084,9 +2094,11 @@ export default function App(){
   // UI can opt in via the "Show archived" toggle. Sales reps and the public
   // preview always exclude them — archived means "this testimonial should
   // not be presented to prospects right now".
-  // Admins in admin mode see archived assets always (greyed out inline).
-  // Sales reps and admins-previewing-public never see archived.
-  const includeArchived = isAdmin && adminMode;
+  // Admins in admin mode see ALL statuses (published, draft, archived) — non-
+  // published ones render greyed-out inline with a status badge. Sales reps
+  // and admins-previewing-public only see published assets; drafts and
+  // archived are hidden entirely.
+  const showAllStatuses = isAdmin && adminMode;
 
   // Determine what to show in the grid
   let displayAssets: Asset[];
@@ -2096,11 +2108,11 @@ export default function App(){
     displayAssets=matchedIds
       .map(id=>assets.find(a=>a.id===id))
       .filter((a): a is Asset => a !== undefined)
-      .filter(a => includeArchived || a.status !== "archived");
+      .filter(a => showAllStatuses || a.status === "published");
     smResults.forEach(r=>{aiDataMap[r.id]=r;});
   } else {
     displayAssets=assets.filter(a=>{
-      if(!includeArchived && a.status === "archived") return false;
+      if(!showAllStatuses && a.status !== "published") return false;
       if(filters.vertical.length>0&&!filters.vertical.includes(a.vertical))return false;
       if(filters.assetType.length>0&&!filters.assetType.includes(a.assetType))return false;
       if(search){const s=search.toLowerCase();if(!(a.company||"").toLowerCase().includes(s)&&!(a.clientName||"").toLowerCase().includes(s)&&!(a.vertical||"").toLowerCase().includes(s)&&!(a.headline||"").toLowerCase().includes(s))return false;}
