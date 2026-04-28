@@ -68,7 +68,10 @@ interface Props {
   // Internal-only props
   onBack?: () => void;
   allAssets?: AssetDetailAsset[];
-  onSelect?: (a: AssetDetailAsset) => void;
+  // We pass back just the id (not the full asset) to avoid TS variance
+  // issues when the parent's stricter Asset type has fields the shared
+  // AssetDetailAsset doesn't model. Parent looks up the full asset itself.
+  onSelect?: (id: string) => void;
 }
 
 export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSelect }: Props) {
@@ -209,7 +212,7 @@ export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSe
                 const rvid = extractVid(r.videoUrl);
                 const rt = r.thumbnail || (rvid?.p === "yt" ? ytThumb(rvid.id) : "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=400&h=225&fit=crop");
                 return (
-                  <div className="dp-rel-card" key={r.id} onClick={() => onSelect?.(r)}>
+                  <div className="dp-rel-card" key={r.id} onClick={() => onSelect?.(r.id)}>
                     {r.assetType !== "Quote" && <div className="dp-rel-thumb"><img src={rt} alt={r.company} loading="lazy" /></div>}
                     <div className="dp-rel-body">
                       <div className="dp-rel-label">{r.assetType}</div>
