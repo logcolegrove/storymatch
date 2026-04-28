@@ -6,6 +6,7 @@ import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
+import SyncReportModal from "./components/SyncReportModal";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -1349,6 +1350,19 @@ async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Pro
 }
 
 // ─── ADMIN: SOURCES PANEL ────────────────────────────────────────────────────
+interface SyncReport {
+  imported: { assetId: string; headline: string }[];
+  drifted: {
+    assetId: string;
+    headline: string;
+    fields: ("title" | "description")[];
+    storyMatch: { headline: string; description: string };
+    vimeo: { title: string; description: string; thumbnail: string };
+  }[];
+  archived: { assetId: string; headline: string }[];
+  inSyncCount: number;
+}
+
 interface SourcesPanelProps {
   sources: Source[];
   assets: Asset[];
@@ -1358,6 +1372,8 @@ interface SourcesPanelProps {
   onAddAssets: (arr: Asset[]) => void;
   // Apply partial updates to existing assets (used for auto-archive on Vimeo removal)
   onUpdateAssets: (updates: Array<Partial<Asset> & { id: string }>) => void;
+  // Show the sync-results modal after a refresh (drift, imports, orphans).
+  onSyncComplete: (report: SyncReport) => void;
 }
 
 interface Progress {
@@ -1368,7 +1384,7 @@ interface Progress {
   error?: boolean;
 }
 
-function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets,onUpdateAssets}: SourcesPanelProps) {
+function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets,onUpdateAssets,onSyncComplete}: SourcesPanelProps) {
   const[view,setView]=useState<"list"|"add">("list");
   const[mode,setMode]=useState<"source"|"single">("source");
   const[url,setUrl]=useState("");
@@ -1554,8 +1570,43 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       onUpdateAssets(updates);
     }
 
+    // 3) Drift detection — for assets that exist on BOTH sides (not new, not
+    //    orphaned), compare title and description. If StoryMatch's value
+    //    differs from Vimeo's current value, surface it so the admin can
+    //    decide whether to overwrite. Skip already-archived assets.
+    const vimeoByUrl = new Map(videos.map(v => [v.url, v]));
+    const orphanIds = new Set(orphaned.map(a => a.id));
+    const drifted: SyncReport["drifted"] = [];
+    let inSyncCount = 0;
+    for (const a of existingAssets) {
+      if (orphanIds.has(a.id)) continue;          // counted as orphan
+      if (a.status === "archived") continue;       // already archived, ignore
+      const v = vimeoByUrl.get(a.videoUrl);
+      if (!v) continue;
+      const fields: ("title" | "description")[] = [];
+      if (v.title && v.title !== a.headline) fields.push("title");
+      if (v.description && v.description !== a.description) fields.push("description");
+      if (fields.length > 0) {
+        drifted.push({
+          assetId: a.id,
+          headline: a.headline || v.title || "Untitled",
+          fields,
+          storyMatch: { headline: a.headline || "", description: a.description || "" },
+          vimeo: { title: v.title || "", description: v.description || "", thumbnail: v.thumbnail || "" },
+        });
+      } else {
+        inSyncCount++;
+      }
+    }
+
     if(newAssets.length>0)onAddAssets(newAssets);
     onSyncSource(source.id,newAssets.map(a=>a.id),videos.length);
+    onSyncComplete({
+      imported: newAssets.map(a => ({ assetId: a.id, headline: a.headline || "Untitled" })),
+      drifted,
+      archived: orphaned.map(a => ({ assetId: a.id, headline: a.headline || "Untitled" })),
+      inSyncCount,
+    });
     setSyncingId(null);
   };
 
@@ -1794,6 +1845,7 @@ export default function App(){
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
+  const[syncReport,setSyncReport]=useState<SyncReport|null>(null); // sync-results modal (drift, imports, archived)
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
   // StoryMatch state
@@ -2368,6 +2420,13 @@ export default function App(){
                     }
                     setTimeout(()=>setToast(null),2000);
                   }}
+                  onSyncComplete={(report)=>{
+                    // Only show the modal if there's something worth surfacing:
+                    // imports, drift, or archives. A clean refresh stays silent.
+                    if (report.imported.length || report.drifted.length || report.archived.length) {
+                      setSyncReport(report);
+                    }
+                  }}
                 />
               )}
               {/* Assets panel removed — admins now use Edit on the 3-dot menu of any
@@ -2664,6 +2723,37 @@ export default function App(){
           onPreview={(id)=>{const a=assets.find(x=>x.id===id);if(a){setEditingAssetId(null);openAsset(a);}}}
           onClose={()=>setEditingAssetId(null)}
         />
+        {syncReport && (
+          <SyncReportModal
+            imported={syncReport.imported}
+            drifted={syncReport.drifted}
+            archived={syncReport.archived}
+            inSyncCount={syncReport.inSyncCount}
+            onPullFromVimeo={(item)=>{
+              // Overwrite the StoryMatch values with what's currently in Vimeo,
+              // then drop the item from the drift list so the modal updates.
+              updateAssetInline(item.assetId, {
+                headline: item.vimeo.title,
+                description: item.vimeo.description,
+                thumbnail: item.vimeo.thumbnail || undefined,
+              }, "Pulled from Vimeo");
+              setSyncReport(prev => prev ? { ...prev, drifted: prev.drifted.filter(d => d.assetId !== item.assetId), inSyncCount: prev.inSyncCount + 1 } : prev);
+            }}
+            onKeepStoryMatch={(assetId)=>{
+              // Just acknowledge — admin chose to keep their edits. Drop from list.
+              setSyncReport(prev => prev ? { ...prev, drifted: prev.drifted.filter(d => d.assetId !== assetId) } : prev);
+            }}
+            onRestoreFromArchive={(assetId)=>{
+              const a = assets.find(x => x.id === assetId);
+              if (a) restoreAsset(a);
+              setSyncReport(prev => prev ? { ...prev, archived: prev.archived.filter(x => x.assetId !== assetId) } : prev);
+            }}
+            onKeepArchived={(assetId)=>{
+              setSyncReport(prev => prev ? { ...prev, archived: prev.archived.filter(x => x.assetId !== assetId) } : prev);
+            }}
+            onClose={()=>setSyncReport(null)}
+          />
+        )}
       </div>
     </React.Fragment>
   );
