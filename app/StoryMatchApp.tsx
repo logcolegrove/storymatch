@@ -314,6 +314,15 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .src-list{display:flex;flex-direction:column;gap:8px;}
 .src-card{border:1px solid var(--border);border-radius:10px;background:#fff;padding:12px 14px;transition:all .12s;}
 .src-card:hover{border-color:var(--border2);}
+/* Compact variant for single-video sources — sits below showcases as a
+   thinner row. Keeps full functionality but trims visual weight. */
+.src-card.mini{padding:8px 12px;border-radius:8px;background:var(--bg);}
+.src-card.mini .src-card-icon{width:22px;height:22px;font-size:10px;}
+.src-card.mini .src-card-name{font-size:12px;}
+.src-card.mini .src-card-sub{font-size:10px;}
+.src-card.mini .src-card-top{margin-bottom:0;}
+.src-card.mini .src-card-url{display:none;}
+.src-card.mini .src-auto-btn{font-size:10px;padding:1px 3px;}
 .src-card-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
 .src-card-icon{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;flex-shrink:0;font-weight:700;font-size:11px;}
 .src-card-icon.vm{background:#e5f3ff;color:#1580b8;}
@@ -1462,7 +1471,7 @@ interface SyncReport {
 interface SourcesPanelProps {
   sources: Source[];
   assets: Asset[];
-  onAddSource: (s: Source) => void;
+  onAddSource: (s: Source) => Promise<void> | void;
   onRemoveSource: (id: string) => void;
   onAddAssets: (arr: Asset[]) => void;
   // Apply partial updates to existing assets (used for pull-from-Vimeo on drift,
@@ -1612,16 +1621,73 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
     setTimeout(()=>{setProgress(null);setView("list");setUrl("");setName("");},1800);
   };
 
-  // Add a single video (not tracked as a source)
+  // Add a single video — now tracked as a source (type "vm-video") so it
+  // gets the same lifecycle treatment as showcases: hi-res thumbs, transcript
+  // pull, drift detection, auto-archive when removed from Vimeo, and a
+  // permanent entry in the admin Sources panel.
   const addSingleVideo=async()=>{
     if(!detected||!isSingle)return;
+    // Only Vimeo singles get the full pipeline (server-side sync needs Vimeo
+    // API). YouTube singles fall back to the legacy oEmbed import for now.
+    if(detected.kind!=="vm-video"){
+      setWorking(true);
+      setProgress({step:"Fetching video details…",count:0,total:1});
+      const asset=await importSingleVideo(detected,null);
+      onAddAssets([asset]);
+      setProgress({step:"Done",count:1,total:1,done:true});
+      setWorking(false);
+      setTimeout(()=>{setProgress(null);setView("list");setUrl("");setName("");},1500);
+      return;
+    }
+    if(!vimeoStatus?.connected){
+      alert("Connect your Vimeo account first to import single videos.");
+      return;
+    }
     setWorking(true);
-    setProgress({step:"Fetching video details…",count:0,total:1});
-    const asset=await importSingleVideo(detected,null);
-    onAddAssets([asset]);
-    setProgress({step:"Done",count:1,total:1,done:true});
+    setProgress({step:"Creating source…",count:0,total:1});
+    const sourceId=`src-${Date.now()}`;
+    // Create a thin Source row first so the sync endpoint has something to
+    // hang the import off of. Vimeo metadata (real title) gets filled by the
+    // sync — we use a placeholder name until then.
+    const source: Source = {
+      id:sourceId,
+      name:name||"Vimeo video",
+      url:detected.url,
+      type:"vm-video",
+      status:"syncing",
+      lastSync:null,
+      videoCount:0,
+      assetIds:[],
+    };
+    // Await so the source row is persisted in DB before we trigger the sync
+    // endpoint (which needs to look it up).
+    await onAddSource(source);
+    setProgress({step:"Importing from Vimeo…",count:0,total:1});
+    try{
+      const r=await fetch(`/api/sources/${sourceId}/sync`,{
+        method:"POST",
+        headers:await authHeaders(),
+      });
+      if(!r.ok){
+        const body=await r.json().catch(()=>({}));
+        console.error("Single-video sync failed",body);
+        setProgress({step:`Import failed: ${body.error||"unknown error"}`,count:0,total:1,done:true,error:true});
+        setWorking(false);
+        setTimeout(()=>setProgress(null),2500);
+        return;
+      }
+    }catch(e){
+      console.error("Single-video sync error",e);
+      setProgress({step:"Import failed",count:0,total:1,done:true,error:true});
+      setWorking(false);
+      setTimeout(()=>setProgress(null),2500);
+      return;
+    }
+    setProgress({step:"Imported",count:1,total:1,done:true});
     setWorking(false);
-    setTimeout(()=>{setProgress(null);setView("list");setUrl("");setName("");},1500);
+    // Pull fresh server state so the new source + asset show up
+    await onRefresh();
+    setTimeout(()=>{setProgress(null);setView("list");setUrl("");setName("");},1200);
   };
 
   // Re-sync an existing source — server-side now. The server endpoint:
@@ -1718,7 +1784,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                   </React.Fragment>
                 ):(
                   <React.Fragment>
-                    <strong>Single videos</strong> are added as standalone assets. Use this for one-off imports when you just want to add a specific video.
+                    <strong>Single videos</strong> are tracked just like showcases — Vimeo title, description, transcript and thumbnail stay in sync, and the video shows up in your Sources list so you can re-sync, auto-sync, or remove it later.
                   </React.Fragment>
                 )}
               </div>
@@ -1818,8 +1884,17 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
           </div>
         ):(
           <div className="src-list">
-            {sources.map(s=>(
-              <div className="src-card" key={s.id}>
+            {/* Render showcases (and any non-single sources) first, then single
+                videos below in a compact "mini" style — see Logan's spec:
+                "should be a much simpler appearing item just below the
+                showcase box". Each group keeps insertion order within itself. */}
+            {[...sources].sort((a,b)=>{
+              const rank=(t: string|undefined)=>t==="vm-video"?1:0;
+              return rank(a.type)-rank(b.type);
+            }).map(s=>{
+              const isSingleVideo=s.type==="vm-video";
+              return (
+              <div className={`src-card${isSingleVideo?" mini":""}`} key={s.id}>
                 <div className="src-card-top">
                   <div className={`src-card-icon ${iconFor(s.type)}`}>
                     {s.type?.startsWith("vm")?"V":"Y"}
@@ -1828,7 +1903,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                     <div className="src-card-name">{s.name}</div>
                     <div className="src-card-sub">
                       <span className={`src-sync-dot ${syncingId===s.id?"syncing":s.status==="error"?"error":s.lastSync?"synced":"never"}`}/>
-                      {syncingId===s.id?"Syncing…":`${s.videoCount} video${s.videoCount===1?"":"s"} · ${timeAgo(s.lastSync)}`}
+                      {syncingId===s.id?"Syncing…":isSingleVideo?timeAgo(s.lastSync):`${s.videoCount} video${s.videoCount===1?"":"s"} · ${timeAgo(s.lastSync)}`}
                     </div>
                     <div className="src-auto-row">
                       <button
@@ -2167,7 +2242,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                   );
                 })()}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

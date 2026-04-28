@@ -80,6 +80,15 @@ function extractShowcaseId(url: string): string | null {
   return m ? m[1] : null;
 }
 
+function extractVimeoVideoId(url: string): string | null {
+  // Matches vimeo.com/123456789, vimeo.com/video/123456789, plus optional
+  // hash suffix like vimeo.com/123456789/abc123 (private link). Skips
+  // showcase/album URLs which have a non-numeric path segment.
+  if (/vimeo\.com\/(?:showcase|album)\//.test(url)) return null;
+  const m = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  return m ? m[1] : null;
+}
+
 function pickLargestThumb(sizes?: { link: string; width: number; height: number }[]): string {
   if (!sizes || sizes.length === 0) return "";
   const sorted = [...sizes].sort((a, b) => (b.width * b.height) - (a.width * a.height));
@@ -212,6 +221,41 @@ async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Pr
   }));
 }
 
+// Fetch a single video as a one-element NormalizedVideo[] (or empty if the
+// video is gone from Vimeo — caller treats empty as "orphan, auto-archive").
+// Returns null only on hard failure (no token, network error). Reuses the
+// same hi-res thumb + transcript fetches as showcase sync so single videos
+// get the same quality as showcase imports.
+async function fetchSingleVideo(videoUrl: string, accessToken: string): Promise<NormalizedVideo[] | null> {
+  const videoId = extractVimeoVideoId(videoUrl);
+  if (!videoId) return null;
+  try {
+    const resp = await fetch(
+      `https://api.vimeo.com/videos/${videoId}?fields=uri,link,name,description,duration,created_time,pictures`,
+      { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/vnd.vimeo.*+json;version=3.4" } },
+    );
+    // 404 → video deleted from Vimeo. Return empty so the orphan-check
+    // logic auto-archives the existing asset. Don't surface as an error.
+    if (resp.status === 404) return [];
+    if (!resp.ok) return null;
+    const v = await resp.json() as VimeoVideo;
+    const [transcript, hiResThumb] = await Promise.all([
+      fetchTranscript(videoId, accessToken),
+      fetchHighResThumb(videoId, accessToken),
+    ]);
+    return [{
+      vimeoId: videoId,
+      url: v.link,
+      title: v.name,
+      description: v.description || "",
+      thumbnail: hiResThumb || pickLargestThumb(v.pictures?.sizes),
+      transcript: transcript || "",
+    }];
+  } catch {
+    return null;
+  }
+}
+
 // ── Org's Vimeo connection lookup ──────────────────────────────────────
 async function getVimeoTokenForOrg(orgId: string): Promise<string | null> {
   // Find any admin in this org that has a connected Vimeo account.
@@ -284,9 +328,14 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   const token = await getVimeoTokenForOrg(orgId);
   if (!token) return { ok: false, error: "No connected Vimeo account in this org", status: 400 };
 
-  // Fetch current showcase videos
-  const videos = await fetchShowcaseVideos(source.url as string, token);
-  if (!videos) return { ok: false, error: "Failed to fetch Vimeo showcase", status: 502 };
+  // Fetch the current Vimeo state for this source. Showcase sources fetch
+  // many videos; single-video sources fetch just one. Both return the same
+  // NormalizedVideo[] shape so the rest of the sync logic is identical.
+  const sourceType = String(source.type || "");
+  const videos = sourceType === "vm-video"
+    ? await fetchSingleVideo(source.url as string, token)
+    : await fetchShowcaseVideos(source.url as string, token);
+  if (!videos) return { ok: false, error: `Failed to fetch Vimeo ${sourceType === "vm-video" ? "video" : "showcase"}`, status: 502 };
 
   // Look up all existing assets attached to this source. Include soft-deleted
   // (status='deleted') so we can detect "previously deleted, still in Vimeo".
@@ -593,15 +642,30 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
 
   // ── 5. Update source row ──
   const newAssetIds = [...existingAssetIds, ...insertedAssets.map(a => a.id)];
+  // For single-video sources, mirror the Vimeo video's title into source.name
+  // so the admin sees the actual title in the sources list (instead of the
+  // placeholder "Vimeo video"). Showcase sources keep their admin-set name.
+  type SourceUpdate = {
+    pending_sync_report: PendingSyncReport;
+    last_sync: string;
+    video_count: number;
+    asset_ids: string[];
+    status: string;
+    name?: string;
+  };
+  const sourceUpdate: SourceUpdate = {
+    pending_sync_report: merged,
+    last_sync: new Date().toISOString(),
+    video_count: videos.length,
+    asset_ids: newAssetIds,
+    status: "synced",
+  };
+  if (sourceType === "vm-video" && videos.length > 0 && videos[0].title) {
+    sourceUpdate.name = videos[0].title;
+  }
   await supabaseAdmin
     .from("sources")
-    .update({
-      pending_sync_report: merged,
-      last_sync: new Date().toISOString(),
-      video_count: videos.length,
-      asset_ids: newAssetIds,
-      status: "synced",
-    })
+    .update(sourceUpdate)
     .eq("id", sourceId);
 
   return {
