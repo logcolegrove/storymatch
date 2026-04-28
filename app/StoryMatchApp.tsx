@@ -1420,9 +1420,9 @@ interface SyncReport {
   drifted: {
     assetId: string;
     headline: string;
-    fields: ("title" | "description")[];
+    fields: ("title" | "description" | "thumbnail" | "transcript")[];
     storyMatch: { headline: string; description: string };
-    vimeo: { title: string; description: string; thumbnail: string };
+    vimeo: { title: string; description: string; thumbnail: string; transcript: string };
     detectedAt: string;
   }[];
   archived: { assetId: string; headline: string; detectedAt: string }[];
@@ -1433,7 +1433,7 @@ interface SyncReport {
     assetId: string;
     headline: string;
     videoUrl: string;
-    vimeo: { title: string; description: string; thumbnail: string };
+    vimeo: { title: string; description: string; thumbnail: string; transcript: string };
     detectedAt: string;
   }[];
 }
@@ -1900,7 +1900,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                   const pullAllFromVimeo = () => {
                     if (!confirm(
                       "Resync all Vimeo properties for this source?\n\n" +
-                      "This will overwrite the title and description on every drifted asset with Vimeo's current values, " +
+                      "This will overwrite the title, description, thumbnail, and transcript on every drifted asset with Vimeo's current values, " +
                       "and bring back every previously-deleted asset that's still in Vimeo.\n\n" +
                       "Any intentional StoryMatch edits to those fields will be lost. Continue?"
                     )) return;
@@ -1911,6 +1911,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                         headline: d.vimeo.title,
                         description: d.vimeo.description,
                         ...(d.vimeo.thumbnail ? { thumbnail: d.vimeo.thumbnail } : {}),
+                        ...(d.vimeo.transcript ? { transcript: d.vimeo.transcript } : {}),
                       });
                     }
                     for (const p of r.previouslyDeleted) {
@@ -1920,6 +1921,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                         headline: p.vimeo.title,
                         description: p.vimeo.description,
                         ...(p.vimeo.thumbnail ? { thumbnail: p.vimeo.thumbnail } : {}),
+                        ...(p.vimeo.transcript ? { transcript: p.vimeo.transcript } : {}),
                       });
                     }
                     if (updates.length > 0) onUpdateAssets(updates);
@@ -2002,11 +2004,14 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                               <div className="ssr-section-help">
                                 One or more fields differ from Vimeo.
                               </div>
-                              {r.drifted.map(d => (
+                              {r.drifted.map(d => {
+                                const fieldLabels: Record<string, string> = { title: "Title", description: "Description", thumbnail: "Thumbnail", transcript: "Transcript" };
+                                const pretty = d.fields.map(f => fieldLabels[f] || f).join(", ");
+                                return (
                                 <div key={d.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{d.headline}</div>
                                   <div className="ssr-row-meta">
-                                    {d.fields.join(", ")} differ
+                                    {pretty} {d.fields.length === 1 ? "differs" : "differ"}
                                     <span className="ssr-when-sep">·</span>
                                     {timeAgoShort(d.detectedAt)}
                                   </div>
@@ -2019,13 +2024,15 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                                           headline: d.vimeo.title,
                                           description: d.vimeo.description,
                                           ...(d.vimeo.thumbnail ? { thumbnail: d.vimeo.thumbnail } : {}),
+                                          ...(d.vimeo.transcript ? { transcript: d.vimeo.transcript } : {}),
                                         }]);
                                         removeFromReport("drifted", d.assetId);
                                       }}
                                     >Pull from Vimeo</button>
                                   </div>
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                           {r.previouslyDeleted.length > 0 && (
@@ -2056,6 +2063,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                                           headline: p.vimeo.title,
                                           description: p.vimeo.description,
                                           ...(p.vimeo.thumbnail ? { thumbnail: p.vimeo.thumbnail } : {}),
+                                          ...(p.vimeo.transcript ? { transcript: p.vimeo.transcript } : {}),
                                         }]);
                                         removeFromReport("previouslyDeleted", p.assetId);
                                       }}

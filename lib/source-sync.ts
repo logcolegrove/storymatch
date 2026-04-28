@@ -20,19 +20,22 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 // ago", etc. so admins can tell new findings from stale ones at a glance.
 export interface ImportedItem { assetId: string; headline: string; detectedAt: string; }
 export interface ArchivedItem { assetId: string; headline: string; detectedAt: string; }
+export type DriftField = "title" | "description" | "thumbnail" | "transcript";
 export interface DriftedItem {
   assetId: string;
   headline: string;
-  fields: ("title" | "description")[];
+  fields: DriftField[];
   storyMatch: { headline: string; description: string };
-  vimeo: { title: string; description: string; thumbnail: string };
+  // vimeo carries the *current* value for every field we know how to pull,
+  // so the FE can apply them all in one update when admin clicks "Pull from Vimeo".
+  vimeo: { title: string; description: string; thumbnail: string; transcript: string };
   detectedAt: string;
 }
 export interface PreviouslyDeletedItem {
   assetId: string;
   headline: string;
   videoUrl: string;
-  vimeo: { title: string; description: string; thumbnail: string };
+  vimeo: { title: string; description: string; thumbnail: string; transcript: string };
   detectedAt: string;
 }
 export interface PendingSyncReport {
@@ -220,6 +223,8 @@ interface AssetRow {
   video_url: string;
   headline: string | null;
   description: string | null;
+  thumbnail: string | null;
+  transcript: string | null;
 }
 
 function genAssetId(): string {
@@ -267,7 +272,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   if (existingAssetIds.length > 0) {
     const { data: rows } = await supabaseAdmin
       .from("assets")
-      .select("id, source_id, status, video_url, headline, description")
+      .select("id, source_id, status, video_url, headline, description, thumbnail, transcript")
       .in("id", existingAssetIds);
     existingAssets = (rows || []) as AssetRow[];
   }
@@ -343,20 +348,35 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
         assetId: a.id,
         headline: a.headline || v.title || "Untitled",
         videoUrl: a.video_url,
-        vimeo: { title: v.title || "", description: v.description || "", thumbnail: v.thumbnail || "" },
+        vimeo: {
+          title: v.title || "",
+          description: v.description || "",
+          thumbnail: v.thumbnail || "",
+          transcript: v.transcript || "",
+        },
       });
       continue;
     }
-    const fields: ("title" | "description")[] = [];
+    // Compare each field admins can edit on Vimeo. Empty Vimeo values don't
+    // count as drift (Vimeo strips trailing whitespace etc.) — we only flag
+    // when Vimeo has a non-empty value that differs from what's in StoryMatch.
+    const fields: DriftField[] = [];
     if (v.title && v.title !== a.headline) fields.push("title");
     if (v.description && v.description !== a.description) fields.push("description");
+    if (v.thumbnail && v.thumbnail !== (a.thumbnail || "")) fields.push("thumbnail");
+    if (v.transcript && v.transcript !== (a.transcript || "")) fields.push("transcript");
     if (fields.length > 0) {
       drifted.push({
         assetId: a.id,
         headline: a.headline || v.title || "Untitled",
         fields,
         storyMatch: { headline: a.headline || "", description: a.description || "" },
-        vimeo: { title: v.title || "", description: v.description || "", thumbnail: v.thumbnail || "" },
+        vimeo: {
+          title: v.title || "",
+          description: v.description || "",
+          thumbnail: v.thumbnail || "",
+          transcript: v.transcript || "",
+        },
       });
     } else {
       inSyncCount++;
