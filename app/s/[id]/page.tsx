@@ -86,27 +86,22 @@ export default async function SharePage({
     // Always log the event, but only bump the public click_count counter for
     // non-self views. (We aggregate from share_events anyway in /api/share/list,
     // but keep the denorm counter useful too.)
-    const ops: Promise<unknown>[] = [
-      supabaseAdmin.from("share_events").insert({
-        share_id: shareLink.id,
-        event_type: "click",
-        ip_hash: ipHash,
-        user_agent: ua,
-        is_self: isSelf,
-      }),
-    ];
+    await supabaseAdmin.from("share_events").insert({
+      share_id: shareLink.id,
+      event_type: "click",
+      ip_hash: ipHash,
+      user_agent: ua,
+      is_self: isSelf,
+    });
     if (!isSelf) {
-      ops.push(
-        supabaseAdmin
-          .from("share_links")
-          .update({
-            click_count: (shareLink.click_count || 0) + 1,
-            last_clicked_at: new Date().toISOString(),
-          })
-          .eq("id", shareLink.id)
-      );
+      await supabaseAdmin
+        .from("share_links")
+        .update({
+          click_count: (shareLink.click_count || 0) + 1,
+          last_clicked_at: new Date().toISOString(),
+        })
+        .eq("id", shareLink.id);
     }
-    await Promise.all(ops);
   } catch (e) {
     // Tracking failure should never block the prospect from seeing the testimonial
     console.error("share click tracking failed:", e);
