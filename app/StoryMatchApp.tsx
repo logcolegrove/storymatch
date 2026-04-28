@@ -101,6 +101,13 @@ interface Source {
   lastSync: string | null;
   videoCount: number;
   assetIds: string[];
+  // Auto-sync settings + persistent inbox (set/managed server-side)
+  autoSyncEnabled?: boolean;
+  autoSyncFrequency?: string; // 'hourly' | 'daily' | 'weekly'
+  autoSyncTime?: string;       // 'HH:MM' UTC
+  autoSyncDay?: string;        // weekday for weekly
+  lastAutoSyncAt?: string | null;
+  pendingSyncReport?: SyncReport | null;
 }
 
 type UrlKind = "yt-video" | "yt-playlist" | "vm-video" | "vm-showcase" | "unknown";
@@ -344,9 +351,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    Avoids the heavy solid-purple "marketing CTA" look in this admin context. */
 .ssr-btn.primary{background:#fff;color:var(--accent);border-color:var(--accentL);}
 .ssr-btn.primary:hover{background:var(--accentLL);border-color:var(--accent);}
-/* Bottom-anchored, deliberately subtle. Style as a text link, not a CTA, so
-   admins don't reach for it casually — it overwrites manual edits. */
-.ssr-pull-all-link{align-self:flex-end;background:none;border:none;color:var(--t3);font-family:var(--font);font-size:10.5px;font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-color:var(--border2);padding:6px 0 2px;}
+/* Bottom row: Mark all reviewed (left) + Completely resync (right). */
+.ssr-foot-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:4px;}
+.ssr-mark-reviewed-link,.ssr-pull-all-link{background:none;border:none;font-family:var(--font);font-size:10.5px;font-weight:500;cursor:pointer;text-decoration:underline;padding:4px 0;}
+.ssr-mark-reviewed-link{color:var(--t3);text-decoration-color:var(--border2);}
+.ssr-mark-reviewed-link:hover{color:var(--accent);text-decoration-color:var(--accent);}
+/* Pull-all is intentionally subtle and turns red on hover — overwrites manual edits. */
+.ssr-pull-all-link{color:var(--t3);text-decoration-color:var(--border2);margin-left:auto;}
 .ssr-pull-all-link:hover{color:var(--red);text-decoration-color:var(--red);}
 .src-progress{margin-top:10px;padding:10px 12px;background:var(--accentLL);border-radius:7px;border-left:2px solid var(--accent);font-size:11.5px;color:var(--accent);line-height:1.55;}
 .src-progress-step{display:flex;align-items:center;gap:6px;}
@@ -1408,11 +1419,15 @@ interface SourcesPanelProps {
   assets: Asset[];
   onAddSource: (s: Source) => void;
   onRemoveSource: (id: string) => void;
-  onSyncSource: (id: string, newAssetIds: string[], videoCount: number) => void;
   onAddAssets: (arr: Asset[]) => void;
-  // Apply partial updates to existing assets (used for auto-archive on Vimeo removal,
-  // pull-from-Vimeo on drift, restore-from-archive, resync-previously-deleted).
+  // Apply partial updates to existing assets (used for pull-from-Vimeo on drift,
+  // restore-from-archive, resync-previously-deleted).
   onUpdateAssets: (updates: Array<Partial<Asset> & { id: string }>) => void;
+  // Update a source row in place (optimistic local + persist to server).
+  onUpdateSource: (updates: Partial<Source> & { id: string }) => void;
+  // Re-pull sources + assets from server. Called after server-side sync to
+  // pick up newly-imported assets and merged pending_sync_report.
+  onRefresh: () => Promise<void>;
 }
 
 interface Progress {
@@ -1423,12 +1438,9 @@ interface Progress {
   error?: boolean;
 }
 
-function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets,onUpdateAssets}: SourcesPanelProps) {
-  // Per-source sync results, kept in memory for the lifetime of the panel.
-  // Click "Sync details" on a source row to expand and act on drift / archives /
-  // previously-deleted entries. Closing the panel discards these — admin can
-  // re-sync anytime to recompute.
-  const [syncReports, setSyncReports] = useState<Record<string, SyncReport>>({});
+function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onUpdateAssets,onUpdateSource,onRefresh}: SourcesPanelProps) {
+  // Sync reports now live on each source row server-side (source.pendingSyncReport).
+  // Per-source UI state for which row is expanded, plus syncing-now indicators.
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
   const[view,setView]=useState<"list"|"add">("list");
   const[mode,setMode]=useState<"source"|"single">("source");
@@ -1565,115 +1577,28 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     setTimeout(()=>{setProgress(null);setView("list");setUrl("");setName("");},1500);
   };
 
-  // Re-sync an existing source.
-  //
-  // For each newly-detected video, we mirror the same override pattern that
-  // `addCollectionSource` uses on initial import: importSingleVideo gives us
-  // a baseline asset from oEmbed, then we layer the rich Vimeo data we
-  // already fetched in extractShowcaseVideos on top — hi-res thumbnail,
-  // human-written description, and auto-generated transcript. Without these
-  // overrides, re-synced videos came in with low-res thumbnails, no
-  // transcript, and nothing for Claude's metadata extraction to work with.
+  // Re-sync an existing source — server-side now. The server endpoint:
+  //   • Fetches the showcase from Vimeo
+  //   • Imports new videos, auto-archives orphans
+  //   • Computes drift + previously-deleted
+  //   • Merges everything into source.pending_sync_report (the persistent inbox)
+  // FE just refreshes its local state afterward.
   const doSync=async(source: Source)=>{
     setSyncingId(source.id);
-    const videos=await extractShowcaseVideos(source.url);
-    const existingAssetIds=new Set(source.assetIds||[]);
-    const existingAssets=assets.filter(a=>existingAssetIds.has(a.id));
-    const existingUrls=new Set(existingAssets.map(a=>a.videoUrl));
-
-    // Build a quick URL → existing asset lookup so we can spot videos that
-    // were previously soft-deleted in StoryMatch but still live in Vimeo.
-    const existingByUrl = new Map(existingAssets.map(a => [a.videoUrl, a]));
-
-    // 1) New videos in Vimeo that we don't have any record of — import them.
-    //    Note: a previously-deleted asset still has a row in `assets`, so its
-    //    URL IS in existingUrls. That means it won't be picked up here, and
-    //    we'll surface it instead in the "previouslyDeleted" bucket below.
-    const newUrls=videos.filter(v=>!existingUrls.has(v.url));
-    const newAssets: Asset[] = [];
-    for(const v of newUrls){
-      const info=detectUrlType(v.url);
-      if(!info||info.kind==="unknown")continue;
-      const asset=await importSingleVideo(info,source.id);
-      // Vimeo is source of truth for title/description (see addCollectionSource).
-      if(v.title) asset.headline=v.title;
-      if(v.description) asset.description=v.description;
-      if(v.thumbnail) asset.thumbnail=v.thumbnail;
-      if(v.transcript) asset.transcript=v.transcript;
-      newAssets.push(asset);
-    }
-
-    // 2) Orphaned assets — we have them, Vimeo no longer does. Auto-archive
-    //    rather than delete: preserves enrichment data, embeddings, manual edits,
-    //    and lets admin restore with one click. Skip already-archived AND
-    //    soft-deleted assets (those are intentionally gone).
-    const currentVimeoUrls=new Set(videos.map(v=>v.url));
-    const orphaned=existingAssets.filter(a=>
-      !currentVimeoUrls.has(a.videoUrl) && a.status!=="archived" && a.status!=="deleted"
-    );
-    if(orphaned.length>0){
-      const today=new Date().toISOString().split("T")[0];
-      const nowIso=new Date().toISOString();
-      const updates=orphaned.map(a=>({
-        id:a.id,
-        status:"archived",
-        archivedAt:nowIso,
-        archivedReason:`Removed from Vimeo showcase on ${today}`,
-      }));
-      onUpdateAssets(updates);
-    }
-
-    // 3) Drift + previously-deleted detection. Walk each video Vimeo currently
-    //    has and bucket it against the existing asset (if any).
-    const drifted: SyncReport["drifted"] = [];
-    const previouslyDeleted: SyncReport["previouslyDeleted"] = [];
-    let inSyncCount = 0;
-    for (const v of videos) {
-      const a = existingByUrl.get(v.url);
-      if (!a) continue; // it's a new import, handled above
-      if (a.status === "archived") continue; // archived = handled in section 2
-      if (a.status === "deleted") {
-        // Admin previously deleted this asset, but Vimeo still has the video.
-        // Surface so they can choose to resync (un-delete + pull current Vimeo
-        // values) rather than silently re-importing.
-        previouslyDeleted.push({
-          assetId: a.id,
-          headline: a.headline || v.title || "Untitled",
-          videoUrl: a.videoUrl,
-          vimeo: { title: v.title || "", description: v.description || "", thumbnail: v.thumbnail || "" },
-        });
-        continue;
+    try {
+      const r = await fetch(`/api/sources/${source.id}/sync`, {
+        method: "POST",
+        headers: await authHeaders(),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        console.error("Sync failed", body);
       }
-      const fields: ("title" | "description")[] = [];
-      if (v.title && v.title !== a.headline) fields.push("title");
-      if (v.description && v.description !== a.description) fields.push("description");
-      if (fields.length > 0) {
-        drifted.push({
-          assetId: a.id,
-          headline: a.headline || v.title || "Untitled",
-          fields,
-          storyMatch: { headline: a.headline || "", description: a.description || "" },
-          vimeo: { title: v.title || "", description: v.description || "", thumbnail: v.thumbnail || "" },
-        });
-      } else {
-        inSyncCount++;
-      }
+    } catch (e) {
+      console.error("Sync error", e);
     }
-
-    if(newAssets.length>0)onAddAssets(newAssets);
-    onSyncSource(source.id,newAssets.map(a=>a.id),videos.length);
-    const report: SyncReport = {
-      syncedAt: new Date().toISOString(),
-      videoCount: videos.length,
-      inSyncCount,
-      imported: newAssets.map(a => ({ assetId: a.id, headline: a.headline || "Untitled" })),
-      drifted,
-      archived: orphaned.map(a => ({ assetId: a.id, headline: a.headline || "Untitled" })),
-      previouslyDeleted,
-    };
-    setSyncReports(prev => ({ ...prev, [source.id]: report }));
-    // Don't auto-expand — keeps the post-sync UI quiet. Admin clicks "Sync
-    // report ▾" if they want to dig in.
+    // Re-pull sources + assets so the FE reflects what the server just changed
+    await onRefresh();
     setSyncingId(null);
   };
 
@@ -1883,19 +1808,24 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                   </div>
                 </div>
                 <div className="src-card-url">{s.url}</div>
-                {/* Subtle inline sync report — only renders if the most recent
-                    sync produced something worth surfacing. Click to expand. */}
+                {/* Subtle inline sync report — read from server-persisted
+                    source.pendingSyncReport. Click to expand. */}
                 {(() => {
-                  const r = syncReports[s.id];
+                  const r = s.pendingSyncReport as SyncReport | null | undefined;
                   if (!r) return null;
                   const total = r.imported.length + r.drifted.length + r.archived.length + r.previouslyDeleted.length;
                   if (total === 0) return null;
                   const isOpen = expandedReportId === s.id;
                   const removeFromReport = (key: keyof Pick<SyncReport, "drifted" | "archived" | "previouslyDeleted" | "imported">, assetId: string) => {
-                    setSyncReports(prev => ({
-                      ...prev,
-                      [s.id]: { ...prev[s.id], [key]: (prev[s.id][key] as Array<{ assetId: string }>).filter(x => x.assetId !== assetId) } as SyncReport,
-                    }));
+                    const updated: SyncReport = {
+                      ...r,
+                      [key]: (r[key] as Array<{ assetId: string }>).filter(x => x.assetId !== assetId),
+                    };
+                    onUpdateSource({ id: s.id, pendingSyncReport: updated });
+                  };
+                  const markAllReviewed = () => {
+                    onUpdateSource({ id: s.id, pendingSyncReport: null });
+                    setExpandedReportId(null);
                   };
                   // Nuclear option — apply Vimeo's current values to everything
                   // that's drifted or previously-deleted. Confirms first because
@@ -1926,10 +1856,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                       });
                     }
                     if (updates.length > 0) onUpdateAssets(updates);
-                    setSyncReports(prev => ({
-                      ...prev,
-                      [s.id]: { ...prev[s.id], drifted: [], previouslyDeleted: [] } as SyncReport,
-                    }));
+                    const updated: SyncReport = { ...r, drifted: [], previouslyDeleted: [] };
+                    onUpdateSource({ id: s.id, pendingSyncReport: updated });
                   };
                   const hasPullable = r.drifted.length + r.previouslyDeleted.length > 0;
                   return (
@@ -1947,10 +1875,9 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                             <div className="ssr-section">
                               <div className="ssr-section-head">
                                 <span className="ssr-icon">
-                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                    <polyline points="7 10 12 15 17 10"/>
-                                    <line x1="12" y1="15" x2="12" y2="3"/>
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="12" y1="5" x2="12" y2="19"/>
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
                                   </svg>
                                 </span>
                                 <span className="ssr-count">{r.imported.length}</span> Imported
@@ -1966,9 +1893,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                             <div className="ssr-section">
                               <div className="ssr-section-head">
                                 <span className="ssr-icon">
-                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <polyline points="3 6 5 6 21 6"/>
-                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
                                   </svg>
                                 </span>
                                 <span className="ssr-count">{r.archived.length}</span> Removed from Vimeo
@@ -1997,10 +1923,9 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                               <div className="ssr-section-head">
                                 <span className="ssr-icon">
                                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 8"/>
-                                    <polyline points="21 3 21 8 16 8"/>
-                                    <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6-2.3L3 16"/>
-                                    <polyline points="3 21 3 16 8 16"/>
+                                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                    <line x1="12" y1="9" x2="12" y2="13"/>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"/>
                                   </svg>
                                 </span>
                                 <span className="ssr-count">{r.drifted.length}</span> Drifted
@@ -2035,8 +1960,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                               <div className="ssr-section-head">
                                 <span className="ssr-icon">
                                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M3 12a9 9 0 1 0 9-9"/>
-                                    <polyline points="3 4 3 12 11 12"/>
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
                                   </svg>
                                 </span>
                                 <span className="ssr-count">{r.previouslyDeleted.length}</span> Previously deleted, still in Vimeo
@@ -2066,15 +1991,24 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                               ))}
                             </div>
                           )}
-                          {hasPullable && (
+                          <div className="ssr-foot-row">
                             <button
-                              className="ssr-pull-all-link"
-                              onClick={pullAllFromVimeo}
-                              title="Overwrite all drifted and previously-deleted items with Vimeo's current values. Asks for confirmation."
+                              className="ssr-mark-reviewed-link"
+                              onClick={markAllReviewed}
+                              title="Clear this report. Next sync starts fresh."
                             >
-                              Completely resync all Vimeo properties
+                              Mark all reviewed
                             </button>
-                          )}
+                            {hasPullable && (
+                              <button
+                                className="ssr-pull-all-link"
+                                onClick={pullAllFromVimeo}
+                                title="Overwrite all drifted and previously-deleted items with Vimeo's current values. Asks for confirmation."
+                              >
+                                Completely resync all Vimeo properties
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -2605,26 +2539,29 @@ export default function App(){
                       setTimeout(()=>setToast(null),2000);
                     }
                   }}
-                  onSyncSource={async (id,newAssetIds,videoCount)=>{
-                    const updated=sources.find(s=>s.id===id);
-                    if(!updated)return;
-                    const nextSource={
-                      ...updated,
-                      lastSync:new Date().toISOString(),
-                      status:"synced",
-                      videoCount,
-                      assetIds:[...(updated.assetIds||[]),...newAssetIds],
-                    };
-                    setSources(p=>p.map(s=>s.id===id?nextSource:s));
-                    setToast(newAssetIds.length>0?`Synced — ${newAssetIds.length} new`:"Synced — no new videos");
-                    setTimeout(()=>setToast(null),2000);
+                  onUpdateSource={async (updates)=>{
+                    // Optimistic local merge
+                    setSources(prev=>prev.map(s=>s.id===updates.id?{...s,...updates}:s));
                     try{
                       await fetch("/api/sources",{
                         method:"PUT",
                         headers:{"Content-Type":"application/json",...(await authHeaders())},
-                        body:JSON.stringify(nextSource)
+                        body:JSON.stringify(updates),
                       });
-                    }catch(e){console.error(e);}
+                    }catch(e){console.error("Source update failed",e);}
+                  }}
+                  onRefresh={async ()=>{
+                    // Pull both sources (for pendingSyncReport + last_sync) and assets
+                    // (for newly-imported + auto-archived) from the server.
+                    try{
+                      const [sR, aR] = await Promise.all([
+                        fetch("/api/sources",{headers:await authHeaders()}),
+                        fetch("/api/assets",{headers:await authHeaders()}),
+                      ]);
+                      if(sR.ok){const data=await sR.json() as Source[];setSources(data);}
+                      if(aR.ok){const data=await aR.json() as Asset[];setAssets(data);}
+                    }catch(e){console.error("Refresh failed",e);}
+                    setToast("Synced");setTimeout(()=>setToast(null),1500);
                   }}
                   onUpdateAssets={async updates=>{
                     if(updates.length===0)return;

@@ -35,6 +35,13 @@ type SourceDB = {
   last_sync: string | null;
   video_count: number;
   asset_ids: string[];
+  // Auto-sync (added in auto-sync migration)
+  auto_sync_enabled?: boolean;
+  auto_sync_frequency?: string;
+  auto_sync_time?: string;
+  auto_sync_day?: string;
+  last_auto_sync_at?: string | null;
+  pending_sync_report?: unknown;
   created_at?: string;
   updated_at?: string;
 };
@@ -48,6 +55,12 @@ type SourceFE = {
   lastSync: string | null;
   videoCount: number;
   assetIds: string[];
+  autoSyncEnabled?: boolean;
+  autoSyncFrequency?: string;
+  autoSyncTime?: string;
+  autoSyncDay?: string;
+  lastAutoSyncAt?: string | null;
+  pendingSyncReport?: unknown;
 };
 
 function dbToFe(r: SourceDB): SourceFE {
@@ -60,6 +73,12 @@ function dbToFe(r: SourceDB): SourceFE {
     lastSync: r.last_sync,
     videoCount: r.video_count,
     assetIds: r.asset_ids || [],
+    autoSyncEnabled: r.auto_sync_enabled ?? false,
+    autoSyncFrequency: r.auto_sync_frequency || "daily",
+    autoSyncTime: r.auto_sync_time || "02:00",
+    autoSyncDay: r.auto_sync_day || "monday",
+    lastAutoSyncAt: r.last_auto_sync_at ?? null,
+    pendingSyncReport: r.pending_sync_report ?? null,
   };
 }
 
@@ -72,6 +91,12 @@ function feToDb(s: Partial<SourceFE> & { id: string }, orgId: string): Partial<S
   if (s.lastSync !== undefined) o.last_sync = s.lastSync;
   if (s.videoCount !== undefined) o.video_count = s.videoCount;
   if (s.assetIds !== undefined) o.asset_ids = s.assetIds;
+  if (s.autoSyncEnabled !== undefined) o.auto_sync_enabled = s.autoSyncEnabled;
+  if (s.autoSyncFrequency !== undefined) o.auto_sync_frequency = s.autoSyncFrequency;
+  if (s.autoSyncTime !== undefined) o.auto_sync_time = s.autoSyncTime;
+  if (s.autoSyncDay !== undefined) o.auto_sync_day = s.autoSyncDay;
+  if (s.lastAutoSyncAt !== undefined) o.last_auto_sync_at = s.lastAutoSyncAt;
+  if (s.pendingSyncReport !== undefined) o.pending_sync_report = s.pendingSyncReport;
   return o;
 }
 
