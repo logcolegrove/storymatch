@@ -6,7 +6,6 @@ import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
-import SyncReportModal from "./components/SyncReportModal";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -319,6 +318,29 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .src-sync-dot.never{background:var(--t4);}
 .src-sync-dot.syncing{background:var(--accent);animation:pulse 1s infinite;}
 .src-sync-dot.error{background:var(--red);}
+
+/* ── INLINE SYNC REPORT under each source row ── */
+.src-sync-report{margin-top:8px;border-top:1px dashed var(--border);padding-top:6px;}
+.src-sync-report-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;background:none;border:none;padding:5px 2px;cursor:pointer;font-family:var(--font);font-size:11px;font-weight:500;color:var(--t3);text-align:left;}
+.src-sync-report-toggle:hover{color:var(--t1);}
+.src-sync-report.open .src-sync-report-toggle{color:var(--t1);}
+.src-sync-report-summary{flex:1;line-height:1.4;}
+.src-sync-report-chev{font-size:10px;color:var(--t4);margin-left:8px;}
+.src-sync-report-body{margin-top:8px;display:flex;flex-direction:column;gap:10px;}
+.ssr-section{background:var(--bg2);border-radius:7px;padding:8px 9px;}
+.ssr-section-head{font-size:10.5px;font-weight:700;color:var(--t2);margin-bottom:6px;letter-spacing:.2px;}
+.ssr-section-help{font-size:10.5px;color:var(--t3);margin-bottom:7px;line-height:1.4;}
+.ssr-row{padding:6px 0;border-top:1px solid var(--border);}
+.ssr-row:first-of-type{border-top:none;padding-top:2px;}
+.ssr-row.compact{padding:4px 0;}
+.ssr-row-title{font-size:12px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ssr-row-meta{font-size:10.5px;color:var(--t3);margin-top:1px;}
+.ssr-row-actions{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;}
+.ssr-btn{padding:3px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);font-family:var(--font);font-size:10.5px;font-weight:600;cursor:pointer;}
+.ssr-btn:hover{background:var(--bg2);color:var(--t1);}
+.ssr-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+.ssr-btn.primary:hover{background:var(--accent2);}
+.ssr-foot{display:flex;justify-content:flex-end;margin-top:2px;}
 .src-progress{margin-top:10px;padding:10px 12px;background:var(--accentLL);border-radius:7px;border-left:2px solid var(--accent);font-size:11.5px;color:var(--accent);line-height:1.55;}
 .src-progress-step{display:flex;align-items:center;gap:6px;}
 .src-add-form{padding:14px;background:var(--bg);border-radius:10px;border:1px solid var(--border);margin-bottom:14px;}
@@ -1351,6 +1373,9 @@ async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Pro
 
 // ─── ADMIN: SOURCES PANEL ────────────────────────────────────────────────────
 interface SyncReport {
+  syncedAt: string;
+  videoCount: number;
+  inSyncCount: number;
   imported: { assetId: string; headline: string }[];
   drifted: {
     assetId: string;
@@ -1360,7 +1385,15 @@ interface SyncReport {
     vimeo: { title: string; description: string; thumbnail: string };
   }[];
   archived: { assetId: string; headline: string }[];
-  inSyncCount: number;
+  // Detected in Vimeo but admin previously soft-deleted in StoryMatch.
+  // Surface so admin can choose to resync (un-delete) rather than silently
+  // re-importing a video they deliberately removed.
+  previouslyDeleted: {
+    assetId: string;
+    headline: string;
+    videoUrl: string;
+    vimeo: { title: string; description: string; thumbnail: string };
+  }[];
 }
 
 interface SourcesPanelProps {
@@ -1370,10 +1403,9 @@ interface SourcesPanelProps {
   onRemoveSource: (id: string) => void;
   onSyncSource: (id: string, newAssetIds: string[], videoCount: number) => void;
   onAddAssets: (arr: Asset[]) => void;
-  // Apply partial updates to existing assets (used for auto-archive on Vimeo removal)
+  // Apply partial updates to existing assets (used for auto-archive on Vimeo removal,
+  // pull-from-Vimeo on drift, restore-from-archive, resync-previously-deleted).
   onUpdateAssets: (updates: Array<Partial<Asset> & { id: string }>) => void;
-  // Show the sync-results modal after a refresh (drift, imports, orphans).
-  onSyncComplete: (report: SyncReport) => void;
 }
 
 interface Progress {
@@ -1384,7 +1416,13 @@ interface Progress {
   error?: boolean;
 }
 
-function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets,onUpdateAssets,onSyncComplete}: SourcesPanelProps) {
+function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,onAddAssets,onUpdateAssets}: SourcesPanelProps) {
+  // Per-source sync results, kept in memory for the lifetime of the panel.
+  // Click "Sync details" on a source row to expand and act on drift / archives /
+  // previously-deleted entries. Closing the panel discards these — admin can
+  // re-sync anytime to recompute.
+  const [syncReports, setSyncReports] = useState<Record<string, SyncReport>>({});
+  const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
   const[view,setView]=useState<"list"|"add">("list");
   const[mode,setMode]=useState<"source"|"single">("source");
   const[url,setUrl]=useState("");
@@ -1536,7 +1574,14 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
     const existingAssets=assets.filter(a=>existingAssetIds.has(a.id));
     const existingUrls=new Set(existingAssets.map(a=>a.videoUrl));
 
-    // 1) New videos in Vimeo that we don't have yet — import them
+    // Build a quick URL → existing asset lookup so we can spot videos that
+    // were previously soft-deleted in StoryMatch but still live in Vimeo.
+    const existingByUrl = new Map(existingAssets.map(a => [a.videoUrl, a]));
+
+    // 1) New videos in Vimeo that we don't have any record of — import them.
+    //    Note: a previously-deleted asset still has a row in `assets`, so its
+    //    URL IS in existingUrls. That means it won't be picked up here, and
+    //    we'll surface it instead in the "previouslyDeleted" bucket below.
     const newUrls=videos.filter(v=>!existingUrls.has(v.url));
     const newAssets: Asset[] = [];
     for(const v of newUrls){
@@ -1553,10 +1598,11 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
 
     // 2) Orphaned assets — we have them, Vimeo no longer does. Auto-archive
     //    rather than delete: preserves enrichment data, embeddings, manual edits,
-    //    and lets admin restore with one click. Skip already-archived assets.
+    //    and lets admin restore with one click. Skip already-archived AND
+    //    soft-deleted assets (those are intentionally gone).
     const currentVimeoUrls=new Set(videos.map(v=>v.url));
     const orphaned=existingAssets.filter(a=>
-      !currentVimeoUrls.has(a.videoUrl) && a.status!=="archived"
+      !currentVimeoUrls.has(a.videoUrl) && a.status!=="archived" && a.status!=="deleted"
     );
     if(orphaned.length>0){
       const today=new Date().toISOString().split("T")[0];
@@ -1570,19 +1616,27 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       onUpdateAssets(updates);
     }
 
-    // 3) Drift detection — for assets that exist on BOTH sides (not new, not
-    //    orphaned), compare title and description. If StoryMatch's value
-    //    differs from Vimeo's current value, surface it so the admin can
-    //    decide whether to overwrite. Skip already-archived assets.
-    const vimeoByUrl = new Map(videos.map(v => [v.url, v]));
-    const orphanIds = new Set(orphaned.map(a => a.id));
+    // 3) Drift + previously-deleted detection. Walk each video Vimeo currently
+    //    has and bucket it against the existing asset (if any).
     const drifted: SyncReport["drifted"] = [];
+    const previouslyDeleted: SyncReport["previouslyDeleted"] = [];
     let inSyncCount = 0;
-    for (const a of existingAssets) {
-      if (orphanIds.has(a.id)) continue;          // counted as orphan
-      if (a.status === "archived") continue;       // already archived, ignore
-      const v = vimeoByUrl.get(a.videoUrl);
-      if (!v) continue;
+    for (const v of videos) {
+      const a = existingByUrl.get(v.url);
+      if (!a) continue; // it's a new import, handled above
+      if (a.status === "archived") continue; // archived = handled in section 2
+      if (a.status === "deleted") {
+        // Admin previously deleted this asset, but Vimeo still has the video.
+        // Surface so they can choose to resync (un-delete + pull current Vimeo
+        // values) rather than silently re-importing.
+        previouslyDeleted.push({
+          assetId: a.id,
+          headline: a.headline || v.title || "Untitled",
+          videoUrl: a.videoUrl,
+          vimeo: { title: v.title || "", description: v.description || "", thumbnail: v.thumbnail || "" },
+        });
+        continue;
+      }
       const fields: ("title" | "description")[] = [];
       if (v.title && v.title !== a.headline) fields.push("title");
       if (v.description && v.description !== a.description) fields.push("description");
@@ -1601,12 +1655,19 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
 
     if(newAssets.length>0)onAddAssets(newAssets);
     onSyncSource(source.id,newAssets.map(a=>a.id),videos.length);
-    onSyncComplete({
+    const report: SyncReport = {
+      syncedAt: new Date().toISOString(),
+      videoCount: videos.length,
+      inSyncCount,
       imported: newAssets.map(a => ({ assetId: a.id, headline: a.headline || "Untitled" })),
       drifted,
       archived: orphaned.map(a => ({ assetId: a.id, headline: a.headline || "Untitled" })),
-      inSyncCount,
-    });
+      previouslyDeleted,
+    };
+    setSyncReports(prev => ({ ...prev, [source.id]: report }));
+    // Auto-expand the report only if there's something the admin should act on
+    const hasActionable = report.drifted.length || report.archived.length || report.previouslyDeleted.length;
+    if (hasActionable) setExpandedReportId(source.id);
     setSyncingId(null);
   };
 
@@ -1816,6 +1877,140 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                   </div>
                 </div>
                 <div className="src-card-url">{s.url}</div>
+                {/* Subtle inline sync report — only renders if the most recent
+                    sync produced something worth surfacing. Click the link to
+                    expand into a per-item action list. */}
+                {(() => {
+                  const r = syncReports[s.id];
+                  if (!r) return null;
+                  const total = r.imported.length + r.drifted.length + r.archived.length + r.previouslyDeleted.length;
+                  if (total === 0) return null;
+                  const isOpen = expandedReportId === s.id;
+                  const summary: string[] = [];
+                  if (r.imported.length) summary.push(`${r.imported.length} imported`);
+                  if (r.drifted.length) summary.push(`${r.drifted.length} drifted`);
+                  if (r.archived.length) summary.push(`${r.archived.length} archived`);
+                  if (r.previouslyDeleted.length) summary.push(`${r.previouslyDeleted.length} previously deleted`);
+                  const close = () => setSyncReports(prev => { const n = { ...prev }; delete n[s.id]; return n; });
+                  const removeFromReport = (key: keyof Pick<SyncReport, "drifted" | "archived" | "previouslyDeleted" | "imported">, assetId: string) => {
+                    setSyncReports(prev => ({
+                      ...prev,
+                      [s.id]: { ...prev[s.id], [key]: (prev[s.id][key] as Array<{ assetId: string }>).filter(x => x.assetId !== assetId) } as SyncReport,
+                    }));
+                  };
+                  return (
+                    <div className={`src-sync-report${isOpen ? " open" : ""}`}>
+                      <button
+                        className="src-sync-report-toggle"
+                        onClick={() => setExpandedReportId(isOpen ? null : s.id)}
+                      >
+                        <span className="src-sync-report-summary">Sync report — {summary.join(" · ")}</span>
+                        <span className="src-sync-report-chev">{isOpen ? "▴" : "▾"}</span>
+                      </button>
+                      {isOpen && (
+                        <div className="src-sync-report-body">
+                          {r.drifted.length > 0 && (
+                            <div className="ssr-section">
+                              <div className="ssr-section-head">⚠ Differs from Vimeo</div>
+                              {r.drifted.map(d => (
+                                <div key={d.assetId} className="ssr-row">
+                                  <div className="ssr-row-title">{d.headline}</div>
+                                  <div className="ssr-row-meta">{d.fields.join(", ")} differ</div>
+                                  <div className="ssr-row-actions">
+                                    <button
+                                      className="ssr-btn primary"
+                                      onClick={() => {
+                                        onUpdateAssets([{
+                                          id: d.assetId,
+                                          headline: d.vimeo.title,
+                                          description: d.vimeo.description,
+                                          ...(d.vimeo.thumbnail ? { thumbnail: d.vimeo.thumbnail } : {}),
+                                        }]);
+                                        removeFromReport("drifted", d.assetId);
+                                      }}
+                                    >Pull from Vimeo</button>
+                                    <button
+                                      className="ssr-btn"
+                                      onClick={() => removeFromReport("drifted", d.assetId)}
+                                    >Keep mine</button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {r.previouslyDeleted.length > 0 && (
+                            <div className="ssr-section">
+                              <div className="ssr-section-head">↩ Detected in Vimeo, was deleted in StoryMatch</div>
+                              <div className="ssr-section-help">
+                                These weren&apos;t auto-imported because you previously deleted them. Resync to bring them back with current Vimeo values.
+                              </div>
+                              {r.previouslyDeleted.map(p => (
+                                <div key={p.assetId} className="ssr-row">
+                                  <div className="ssr-row-title">{p.headline}</div>
+                                  <div className="ssr-row-actions">
+                                    <button
+                                      className="ssr-btn primary"
+                                      onClick={() => {
+                                        onUpdateAssets([{
+                                          id: p.assetId,
+                                          status: "published",
+                                          headline: p.vimeo.title,
+                                          description: p.vimeo.description,
+                                          ...(p.vimeo.thumbnail ? { thumbnail: p.vimeo.thumbnail } : {}),
+                                        }]);
+                                        removeFromReport("previouslyDeleted", p.assetId);
+                                      }}
+                                    >Resync from Vimeo</button>
+                                    <button
+                                      className="ssr-btn"
+                                      onClick={() => removeFromReport("previouslyDeleted", p.assetId)}
+                                    >Keep deleted</button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {r.archived.length > 0 && (
+                            <div className="ssr-section">
+                              <div className="ssr-section-head">✗ Removed from Vimeo (auto-archived)</div>
+                              {r.archived.map(a => (
+                                <div key={a.assetId} className="ssr-row">
+                                  <div className="ssr-row-title">{a.headline}</div>
+                                  <div className="ssr-row-actions">
+                                    <button
+                                      className="ssr-btn primary"
+                                      onClick={() => {
+                                        onUpdateAssets([{ id: a.assetId, status: "published", archivedAt: null, archivedReason: null }]);
+                                        removeFromReport("archived", a.assetId);
+                                      }}
+                                    >Restore</button>
+                                    <button
+                                      className="ssr-btn"
+                                      onClick={() => removeFromReport("archived", a.assetId)}
+                                    >Keep archived</button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {r.imported.length > 0 && (
+                            <div className="ssr-section">
+                              <div className="ssr-section-head">+ Imported</div>
+                              {r.imported.map(i => (
+                                <div key={i.assetId} className="ssr-row compact">
+                                  <div className="ssr-row-title">{i.headline}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div className="ssr-foot">
+                            <button className="ssr-btn" onClick={close}>Dismiss report</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
@@ -1845,7 +2040,6 @@ export default function App(){
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
-  const[syncReport,setSyncReport]=useState<SyncReport|null>(null); // sync-results modal (drift, imports, archived)
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
   // StoryMatch state
@@ -2004,15 +2198,23 @@ export default function App(){
     setEditingAssetId(null);
   };
 
-  // Delete an asset (irreversible). Used by per-row 3-dot menu and bulk bar.
+  // Soft-delete an asset by flipping status to "deleted". Used by per-row
+  // 3-dot menu and bulk bar. We keep the row in the DB so:
+  //   • All enrichment (embeddings, transcript, manual edits) is preserved
+  //   • If the underlying Vimeo video is still in the showcase, the next
+  //     sync can detect this and offer to "resync this previously-deleted
+  //     asset from Vimeo" rather than silently re-importing it.
+  // The displayAssets filter hides status="deleted" from every view, so
+  // visually it's the same as a hard delete from the user's perspective.
   const deleteAssetInline=async(id: string)=>{
-    setAssets(prev=>prev.filter(a=>a.id!==id));
+    setAssets(prev=>prev.map(a=>a.id===id?{...a,status:"deleted"}:a));
     try{
-      await fetch(`/api/assets?id=${id}`,{
-        method:"DELETE",
-        headers:await authHeaders(),
+      await fetch("/api/assets",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json",...(await authHeaders())},
+        body:JSON.stringify({id,status:"deleted"}),
       });
-    }catch(e){console.error("Delete failed",e);}
+    }catch(e){console.error("Soft-delete failed",e);}
   };
 
   // ── MULTI-SELECT HELPERS ──
@@ -2098,11 +2300,14 @@ export default function App(){
   };
   const bulkDelete=async()=>{
     const ids=Array.from(selectedIds);
-    if(!confirm(`Delete ${ids.length} ${ids.length===1?"asset":"assets"} permanently? This can't be undone.`))return;
-    setAssets(prev=>prev.filter(a=>!selectedIds.has(a.id)));
+    if(!confirm(`Delete ${ids.length} ${ids.length===1?"asset":"assets"}? They'll be hidden from every view, but kept in the database so a future sync can offer to restore them if their Vimeo source still exists.`))return;
+    // Soft-delete: mark status="deleted" rather than removing the row
+    setAssets(prev=>prev.map(a=>selectedIds.has(a.id)?{...a,status:"deleted"}:a));
     setToast(`${ids.length} deleted`);setTimeout(()=>setToast(null),1800);
     for(const id of ids){
-      try{await fetch(`/api/assets?id=${id}`,{method:"DELETE",headers:await authHeaders()});}catch(e){console.error(e);}
+      try{
+        await fetch("/api/assets",{method:"PUT",headers:{"Content-Type":"application/json",...(await authHeaders())},body:JSON.stringify({id,status:"deleted"})});
+      }catch(e){console.error(e);}
     }
     clearSelection();
   };
@@ -2160,10 +2365,12 @@ export default function App(){
     displayAssets=matchedIds
       .map(id=>assets.find(a=>a.id===id))
       .filter((a): a is Asset => a !== undefined)
+      .filter(a => a.status !== "deleted")
       .filter(a => showAllStatuses || a.status === "published");
     smResults.forEach(r=>{aiDataMap[r.id]=r;});
   } else {
     displayAssets=assets.filter(a=>{
+      if(a.status === "deleted") return false; // soft-deleted: hidden everywhere
       if(!showAllStatuses && a.status !== "published") return false;
       if(filters.vertical.length>0&&!filters.vertical.includes(a.vertical))return false;
       if(filters.assetType.length>0&&!filters.assetType.includes(a.assetType))return false;
@@ -2419,13 +2626,6 @@ export default function App(){
                       setToast("Save failed");
                     }
                     setTimeout(()=>setToast(null),2000);
-                  }}
-                  onSyncComplete={(report)=>{
-                    // Only show the modal if there's something worth surfacing:
-                    // imports, drift, or archives. A clean refresh stays silent.
-                    if (report.imported.length || report.drifted.length || report.archived.length) {
-                      setSyncReport(report);
-                    }
                   }}
                 />
               )}
@@ -2723,37 +2923,6 @@ export default function App(){
           onPreview={(id)=>{const a=assets.find(x=>x.id===id);if(a){setEditingAssetId(null);openAsset(a);}}}
           onClose={()=>setEditingAssetId(null)}
         />
-        {syncReport && (
-          <SyncReportModal
-            imported={syncReport.imported}
-            drifted={syncReport.drifted}
-            archived={syncReport.archived}
-            inSyncCount={syncReport.inSyncCount}
-            onPullFromVimeo={(item)=>{
-              // Overwrite the StoryMatch values with what's currently in Vimeo,
-              // then drop the item from the drift list so the modal updates.
-              updateAssetInline(item.assetId, {
-                headline: item.vimeo.title,
-                description: item.vimeo.description,
-                thumbnail: item.vimeo.thumbnail || undefined,
-              }, "Pulled from Vimeo");
-              setSyncReport(prev => prev ? { ...prev, drifted: prev.drifted.filter(d => d.assetId !== item.assetId), inSyncCount: prev.inSyncCount + 1 } : prev);
-            }}
-            onKeepStoryMatch={(assetId)=>{
-              // Just acknowledge — admin chose to keep their edits. Drop from list.
-              setSyncReport(prev => prev ? { ...prev, drifted: prev.drifted.filter(d => d.assetId !== assetId) } : prev);
-            }}
-            onRestoreFromArchive={(assetId)=>{
-              const a = assets.find(x => x.id === assetId);
-              if (a) restoreAsset(a);
-              setSyncReport(prev => prev ? { ...prev, archived: prev.archived.filter(x => x.assetId !== assetId) } : prev);
-            }}
-            onKeepArchived={(assetId)=>{
-              setSyncReport(prev => prev ? { ...prev, archived: prev.archived.filter(x => x.assetId !== assetId) } : prev);
-            }}
-            onClose={()=>setSyncReport(null)}
-          />
-        )}
       </div>
     </React.Fragment>
   );
