@@ -108,7 +108,7 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
                   <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
                   <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                 </svg>
-                Team
+                Manage team
               </button>
             )}
             <button className="am-item" onClick={() => { setOpen(false); setHelpOpen(true); }}>
@@ -402,7 +402,7 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
                 <div className="am-team-cell">
                   <div className="am-team-email">{p.invited_email || "(no email recorded)"}</div>
                   <div className="am-team-meta">
-                    Sent {timeAgo(p.created_at)}
+                    Invite link generated {timeAgo(p.created_at)}
                   </div>
                 </div>
                 <button
@@ -457,8 +457,14 @@ function RoleMenu({
   const toggle = () => {
     if (!open && triggerRef.current) {
       const r = triggerRef.current.getBoundingClientRect();
-      // Anchor the popup's right edge to the trigger's right edge, just below it.
-      setPopPos({ top: r.bottom + 4, left: r.right - POP_WIDTH });
+      // Place the popup directly below the trigger, left-aligned to it.
+      // If that would overflow the right side of the viewport, flip to
+      // right-aligned so the menu stays on screen.
+      const wouldOverflow = r.left + POP_WIDTH > window.innerWidth - 16;
+      setPopPos({
+        top: r.bottom + 4,
+        left: wouldOverflow ? r.right - POP_WIDTH : r.left,
+      });
     }
     setOpen(o => !o);
   };
