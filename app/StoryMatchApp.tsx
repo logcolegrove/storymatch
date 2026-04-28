@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
 import AssetEditPanel from "./components/AssetEditPanel";
+import AccountMenu from "./components/AccountMenu";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -205,6 +206,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* ── ADMIN LEFT RAIL + PANEL ── */
 .layout{display:flex;min-height:calc(100vh - 56px);}
 .admin-rail{width:64px;background:#fff;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:12px 0;flex-shrink:0;position:sticky;top:56px;height:calc(100vh - 56px);align-self:flex-start;overflow-y:auto;z-index:20;}
+.rail-spacer{flex:1;}
+.rail-foot{width:100%;padding:12px 0 4px;border-top:1px solid var(--border);display:flex;justify-content:center;}
 .rail-btn{width:44px;height:44px;border-radius:10px;border:none;background:none;color:var(--t3);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-family:var(--font);font-size:9px;font-weight:600;transition:all .12s;margin-bottom:4px;position:relative;}
 .rail-btn:hover{background:var(--bg2);color:var(--t1);}
 .rail-btn.on{background:var(--accentL);color:var(--accent);}
@@ -2153,10 +2156,15 @@ export default function App(){
               </div>
             )}
             <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:8,paddingLeft:12,borderLeft:"1px solid var(--border)"}}>
-              <div style={{fontSize:11,color:"var(--t3)",textAlign:"right",lineHeight:1.3}}>
-                <div style={{fontWeight:600,color:"var(--t2)"}}>{user?.email}</div>
-                <div>{org?.name||"No workspace"} · {org?.role||"—"}</div>
-              </div>
+              {/* Email/workspace/sign-out moved to AccountMenu in the rail bottom
+                  for admins-in-admin-mode. Show the inline header info only when
+                  the rail isn't visible (sales reps, or admin previewing public). */}
+              {!(isAdmin && adminMode) && (
+                <div style={{fontSize:11,color:"var(--t3)",textAlign:"right",lineHeight:1.3}}>
+                  <div style={{fontWeight:600,color:"var(--t2)"}}>{user?.email}</div>
+                  <div>{org?.name||"No workspace"} · {org?.role||"—"}</div>
+                </div>
+              )}
               <button
                 onClick={()=>{window.location.hash="/shares";}}
                 title="See your shared links and engagement"
@@ -2168,11 +2176,13 @@ export default function App(){
                 </svg>
                 My shares
               </button>
-              <button
-                onClick={signOut}
-                title="Sign out"
-                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
-              >Sign out</button>
+              {!(isAdmin && adminMode) && (
+                <button
+                  onClick={signOut}
+                  title="Sign out"
+                  style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
+                >Sign out</button>
+              )}
             </div>
           </div>
         </header>
@@ -2201,6 +2211,17 @@ export default function App(){
                 Embed
                 <span className="rail-soon">SOON</span>
               </button>
+              <div className="rail-spacer"/>
+              <div className="rail-foot">
+                <AccountMenu
+                  userEmail={user?.email || ""}
+                  workspaceName={org?.name || "No workspace"}
+                  role={org?.role || ""}
+                  isAdmin={isAdmin}
+                  onSignOut={signOut}
+                  authHeaders={authHeaders}
+                />
+              </div>
             </aside>
           )}
 
