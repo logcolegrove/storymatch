@@ -42,15 +42,36 @@ function colorFromEmail(email: string): string {
 
 export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, onSignOut, authHeaders }: Props) {
   const [open, setOpen] = useState(false);
+  const [popPos, setPopPos] = useState<{ left: number; bottom: number } | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+
+  // Toggle the popup; on open, compute the fixed-position coordinates from the
+  // trigger's bounding rect. This is required because the admin rail uses
+  // overflow:auto, which would otherwise clip an absolutely-positioned child.
+  const toggleOpen = () => {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setPopPos({
+        left: r.left,
+        bottom: window.innerHeight - r.top + 8, // 8px gap above the avatar
+      });
+    }
+    setOpen(o => !o);
+  };
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      // Don't close on clicks inside the trigger OR the popup (both live in
+      // different DOM trees because the popup is fixed-positioned).
+      if (ref.current?.contains(target) || popRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const t = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
     return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
@@ -64,14 +85,15 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
       <style>{css}</style>
       <div className="am-wrap" ref={ref}>
         <button
+          ref={triggerRef}
           className={`am-trigger${open ? " open" : ""}`}
-          onClick={() => setOpen(o => !o)}
+          onClick={toggleOpen}
           title={`${userEmail} — Account & settings`}
         >
           <span className="am-avatar" style={{ background: color }}>{initials}</span>
         </button>
-        {open && (
-          <div className="am-pop">
+        {open && popPos && (
+          <div className="am-pop" ref={popRef} style={{ left: popPos.left, bottom: popPos.bottom }}>
             <div className="am-pop-head">
               <span className="am-avatar lg" style={{ background: color }}>{initials}</span>
               <div className="am-pop-head-text">
@@ -267,7 +289,9 @@ const css = `
 .am-avatar{width:32px;height:32px;border-radius:50%;flex-shrink:0;color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;letter-spacing:.4px;}
 .am-avatar.lg{width:40px;height:40px;font-size:14px;}
 
-.am-pop{position:absolute;bottom:calc(100% + 8px);left:0;width:260px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 14px 36px rgba(0,0,0,.16);padding:6px;z-index:60;}
+/* position:fixed escapes the rail's overflow:auto clipping context. The
+   exact left/bottom coordinates are set inline from the trigger's rect. */
+.am-pop{position:fixed;width:260px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 14px 36px rgba(0,0,0,.16);padding:6px;z-index:150;}
 .am-pop-head{display:flex;align-items:center;gap:11px;padding:10px 8px 8px;}
 .am-pop-head-text{min-width:0;flex:1;}
 .am-pop-email{font-size:13px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
