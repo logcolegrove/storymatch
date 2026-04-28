@@ -9,6 +9,7 @@
 //   • Sign out
 
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface Props {
   userEmail: string;
@@ -480,6 +481,24 @@ function RoleMenu({
     return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
   }, [open]);
 
+  // Portal to document.body so the popup escapes the modal's transform-based
+  // containing block. (Without this, position:fixed coordinates would be
+  // interpreted relative to the centered modal, not the viewport.)
+  const popup = (open && popPos) ? (
+    <div ref={popRef} className="am-rolemenu-pop" style={{ top: popPos.top, left: popPos.left, width: POP_WIDTH }}>
+      <button className="am-rolemenu-item" onClick={() => { setOpen(false); if (role !== "sales") onChange("sales"); }}>
+        <span>{role === "sales" ? "✓" : ""}</span> Sales
+      </button>
+      <button className="am-rolemenu-item" onClick={() => { setOpen(false); if (role !== "admin") onChange("admin"); }}>
+        <span>{role === "admin" ? "✓" : ""}</span> Admin
+      </button>
+      <div className="am-rolemenu-divider"/>
+      <button className="am-rolemenu-item danger" onClick={() => { setOpen(false); onRemove(); }}>
+        <span></span> {removeLabel}
+      </button>
+    </div>
+  ) : null;
+
   return (
     <>
       <button ref={triggerRef} className={`am-team-role ${role} am-rolemenu-trigger`} onClick={toggle}>
@@ -488,20 +507,7 @@ function RoleMenu({
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </button>
-      {open && popPos && (
-        <div ref={popRef} className="am-rolemenu-pop" style={{ top: popPos.top, left: popPos.left, width: POP_WIDTH }}>
-          <button className="am-rolemenu-item" onClick={() => { setOpen(false); if (role !== "sales") onChange("sales"); }}>
-            <span>{role === "sales" ? "✓" : ""}</span> Sales
-          </button>
-          <button className="am-rolemenu-item" onClick={() => { setOpen(false); if (role !== "admin") onChange("admin"); }}>
-            <span>{role === "admin" ? "✓" : ""}</span> Admin
-          </button>
-          <div className="am-rolemenu-divider"/>
-          <button className="am-rolemenu-item danger" onClick={() => { setOpen(false); onRemove(); }}>
-            <span></span> {removeLabel}
-          </button>
-        </div>
-      )}
+      {popup && typeof window !== "undefined" && createPortal(popup, document.body)}
     </>
   );
 }
