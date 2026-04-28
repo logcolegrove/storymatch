@@ -90,6 +90,13 @@ interface Asset {
   approvalStatus?: ApprovalStatus | string;
   approvalNote?: string | null;
   approvalRecordedAt?: string | null;
+  // Vimeo conflict-detection snapshot — last value pulled from Vimeo. The
+  // sync engine compares headline/description/transcript against these to
+  // tell "user hasn't edited locally" apart from "user has overridden".
+  // Not exposed in the UI; only set by sync + Pull-from-Vimeo handlers.
+  lastSyncedTitle?: string | null;
+  lastSyncedDescription?: string | null;
+  lastSyncedTranscript?: string | null;
 }
 
 interface Source {
@@ -1405,7 +1412,11 @@ async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Pro
     transcript:"",
     // description holds the human-written video description (more reliable than transcript for proper nouns)
     description:desc,
-    thumbnail:thumb||""
+    thumbnail:thumb||"",
+    // Snapshot for the auto-sync conflict-detection model — see source-sync.ts.
+    lastSyncedTitle:title,
+    lastSyncedDescription:desc,
+    lastSyncedTranscript:"",
   };
 }
 
@@ -1420,7 +1431,9 @@ interface SyncReport {
   drifted: {
     assetId: string;
     headline: string;
-    fields: ("title" | "description" | "thumbnail" | "transcript")[];
+    // Thumbnail is auto-applied (never user-editable in StoryMatch), so it's
+    // not in this union — only fields that can have a true conflict.
+    fields: ("title" | "description" | "transcript")[];
     storyMatch: { headline: string; description: string };
     vimeo: { title: string; description: string; thumbnail: string; transcript: string };
     detectedAt: string;
@@ -1575,11 +1588,12 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
       const asset=await importSingleVideo(info,sourceId);
       // Vimeo is the source of truth for title and description. Always overwrite
       // — don't let oEmbed-derived or LLM-guessed values win over what the admin
-      // typed into Vimeo itself.
-      if(v.title) asset.headline=v.title;
-      if(v.description) asset.description=v.description;
+      // typed into Vimeo itself. Mirror into lastSynced* so the auto-sync
+      // engine can tell future local edits apart from Vimeo-side changes.
+      if(v.title){asset.headline=v.title;asset.lastSyncedTitle=v.title;}
+      if(v.description){asset.description=v.description;asset.lastSyncedDescription=v.description;}
       if(v.thumbnail) asset.thumbnail=v.thumbnail;
-      if(v.transcript) asset.transcript=v.transcript;
+      if(v.transcript){asset.transcript=v.transcript;asset.lastSyncedTranscript=v.transcript;}
       newAssets.push(asset);
     }
     const source: Source = {id:sourceId,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"synced",lastSync:new Date().toISOString(),videoCount:newAssets.length,assetIds:newAssets.map(a=>a.id)};
@@ -1900,18 +1914,23 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                   const pullAllFromVimeo = () => {
                     if (!confirm(
                       "Resync all Vimeo properties for this source?\n\n" +
-                      "This will overwrite the title, description, thumbnail, and transcript on every drifted asset with Vimeo's current values, " +
+                      "This will overwrite your local edits to title, description, and transcript on every drifted asset with Vimeo's current values, " +
                       "and bring back every previously-deleted asset that's still in Vimeo.\n\n" +
-                      "Any intentional StoryMatch edits to those fields will be lost. Continue?"
+                      "Continue?"
                     )) return;
                     const updates: Array<Partial<Asset> & { id: string }> = [];
                     for (const d of r.drifted) {
+                      // Advance the lastSynced snapshots so the conflict
+                      // is fully resolved — next sync sees no drift.
                       updates.push({
                         id: d.assetId,
                         headline: d.vimeo.title,
                         description: d.vimeo.description,
                         ...(d.vimeo.thumbnail ? { thumbnail: d.vimeo.thumbnail } : {}),
                         ...(d.vimeo.transcript ? { transcript: d.vimeo.transcript } : {}),
+                        lastSyncedTitle: d.vimeo.title,
+                        lastSyncedDescription: d.vimeo.description,
+                        lastSyncedTranscript: d.vimeo.transcript,
                       });
                     }
                     for (const p of r.previouslyDeleted) {
@@ -1922,6 +1941,9 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                         description: p.vimeo.description,
                         ...(p.vimeo.thumbnail ? { thumbnail: p.vimeo.thumbnail } : {}),
                         ...(p.vimeo.transcript ? { transcript: p.vimeo.transcript } : {}),
+                        lastSyncedTitle: p.vimeo.title,
+                        lastSyncedDescription: p.vimeo.description,
+                        lastSyncedTranscript: p.vimeo.transcript,
                       });
                     }
                     if (updates.length > 0) onUpdateAssets(updates);
@@ -1999,13 +2021,13 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                                     <line x1="12" y1="17" x2="12.01" y2="17"/>
                                   </svg>
                                 </span>
-                                <span className="ssr-count">{r.drifted.length}</span> Drifted
+                                <span className="ssr-count">{r.drifted.length}</span> Conflicts
                               </div>
                               <div className="ssr-section-help">
-                                One or more fields differ from Vimeo.
+                                You edited these fields in StoryMatch and Vimeo&apos;s value also changed. Pull from Vimeo to overwrite your edit.
                               </div>
                               {r.drifted.map(d => {
-                                const fieldLabels: Record<string, string> = { title: "Title", description: "Description", thumbnail: "Thumbnail", transcript: "Transcript" };
+                                const fieldLabels: Record<string, string> = { title: "Title", description: "Description", transcript: "Transcript" };
                                 const pretty = d.fields.map(f => fieldLabels[f] || f).join(", ");
                                 return (
                                 <div key={d.assetId} className="ssr-row">
@@ -2025,6 +2047,11 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                                           description: d.vimeo.description,
                                           ...(d.vimeo.thumbnail ? { thumbnail: d.vimeo.thumbnail } : {}),
                                           ...(d.vimeo.transcript ? { transcript: d.vimeo.transcript } : {}),
+                                          // Resolve the conflict by advancing
+                                          // the lastSynced snapshot.
+                                          lastSyncedTitle: d.vimeo.title,
+                                          lastSyncedDescription: d.vimeo.description,
+                                          lastSyncedTranscript: d.vimeo.transcript,
                                         }]);
                                         removeFromReport("drifted", d.assetId);
                                       }}
@@ -2064,6 +2091,9 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                                           description: p.vimeo.description,
                                           ...(p.vimeo.thumbnail ? { thumbnail: p.vimeo.thumbnail } : {}),
                                           ...(p.vimeo.transcript ? { transcript: p.vimeo.transcript } : {}),
+                                          lastSyncedTitle: p.vimeo.title,
+                                          lastSyncedDescription: p.vimeo.description,
+                                          lastSyncedTranscript: p.vimeo.transcript,
                                         }]);
                                         removeFromReport("previouslyDeleted", p.assetId);
                                       }}

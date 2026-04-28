@@ -64,6 +64,10 @@ type AssetDB = {
   approval_status: string;
   approval_note: string | null;
   approval_recorded_at: string | null;
+  // Vimeo sync conflict-detection markers (auto-sync migration)
+  last_synced_title: string | null;
+  last_synced_description: string | null;
+  last_synced_transcript: string | null;
 };
 
 type AssetFE = {
@@ -97,6 +101,11 @@ type AssetFE = {
   approvalStatus?: string;
   approvalNote?: string | null;
   approvalRecordedAt?: string | null;
+  // Vimeo sync conflict-detection markers — only set when admin pulls from
+  // Vimeo via the drift report (so we know their local edit was overridden).
+  lastSyncedTitle?: string | null;
+  lastSyncedDescription?: string | null;
+  lastSyncedTranscript?: string | null;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -129,6 +138,9 @@ function dbToFe(r: AssetDB): AssetFE {
     approvalStatus: r.approval_status,
     approvalNote: r.approval_note,
     approvalRecordedAt: r.approval_recorded_at,
+    lastSyncedTitle: r.last_synced_title,
+    lastSyncedDescription: r.last_synced_description,
+    lastSyncedTranscript: r.last_synced_transcript,
   };
 }
 
@@ -161,6 +173,9 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string): Partial<As
   if (a.approvalStatus !== undefined) o.approval_status = a.approvalStatus;
   if (a.approvalNote !== undefined) o.approval_note = a.approvalNote;
   if (a.approvalRecordedAt !== undefined) o.approval_recorded_at = a.approvalRecordedAt;
+  if (a.lastSyncedTitle !== undefined) o.last_synced_title = a.lastSyncedTitle;
+  if (a.lastSyncedDescription !== undefined) o.last_synced_description = a.lastSyncedDescription;
+  if (a.lastSyncedTranscript !== undefined) o.last_synced_transcript = a.lastSyncedTranscript;
   return o;
 }
 

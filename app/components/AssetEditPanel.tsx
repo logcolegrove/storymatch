@@ -123,8 +123,8 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           <div className="aep-fld"><label>Outcome</label><input className="aep-in" value={form.outcome} onChange={e => set("outcome", e.target.value)}/></div>
           <div className="aep-fld"><label>Pull Quote</label><textarea className="aep-tx" style={{ minHeight: 60 }} value={form.pullQuote} onChange={e => set("pullQuote", e.target.value)}/></div>
           <div className="aep-fld"><label>Video URL</label><input className="aep-in" value={form.videoUrl} onChange={e => set("videoUrl", e.target.value)}/></div>
-          <div className="aep-fld"><label>Thumbnail URL</label><input className="aep-in" value={form.thumbnail} onChange={e => set("thumbnail", e.target.value)} placeholder="Auto from Vimeo / YouTube"/></div>
-          <div className="aep-fld"><label>Transcript / Content</label><textarea className="aep-tx" value={form.transcript} onChange={e => set("transcript", e.target.value)}/></div>
+          {/* Thumbnail is auto-synced from Vimeo and not editable in StoryMatch. */}
+          <div className="aep-fld"><label>Transcript / Content <span className="aep-hint">(synced from Vimeo)</span></label><textarea className="aep-tx" value={form.transcript} onChange={e => set("transcript", e.target.value)}/></div>
         </div>
         <div className="aep-foot">
           <button className="aep-save" onClick={save}>Save changes</button>

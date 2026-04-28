@@ -20,14 +20,17 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 // ago", etc. so admins can tell new findings from stale ones at a glance.
 export interface ImportedItem { assetId: string; headline: string; detectedAt: string; }
 export interface ArchivedItem { assetId: string; headline: string; detectedAt: string; }
-export type DriftField = "title" | "description" | "thumbnail" | "transcript";
+// Drift fields are only the ones the admin can edit in StoryMatch and where a
+// conflict is possible (Vimeo changed AND local edit exists). Thumbnail is
+// always auto-applied and never user-editable, so it's not in this union.
+export type DriftField = "title" | "description" | "transcript";
 export interface DriftedItem {
   assetId: string;
   headline: string;
   fields: DriftField[];
   storyMatch: { headline: string; description: string };
-  // vimeo carries the *current* value for every field we know how to pull,
-  // so the FE can apply them all in one update when admin clicks "Pull from Vimeo".
+  // vimeo carries the *current* Vimeo values + last-synced markers, so the FE
+  // can write both atomically when admin overrides their local edit.
   vimeo: { title: string; description: string; thumbnail: string; transcript: string };
   detectedAt: string;
 }
@@ -225,6 +228,13 @@ interface AssetRow {
   description: string | null;
   thumbnail: string | null;
   transcript: string | null;
+  // last_synced_* track what the corresponding Vimeo field was at the most
+  // recent successful sync. Lets us tell "user hasn't edited locally"
+  // (current === last_synced) apart from "user has edited" (current !==
+  // last_synced). Backfilled to current StoryMatch values via migration.
+  last_synced_title: string | null;
+  last_synced_description: string | null;
+  last_synced_transcript: string | null;
 }
 
 function genAssetId(): string {
@@ -272,7 +282,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   if (existingAssetIds.length > 0) {
     const { data: rows } = await supabaseAdmin
       .from("assets")
-      .select("id, source_id, status, video_url, headline, description, thumbnail, transcript")
+      .select("id, source_id, status, video_url, headline, description, thumbnail, transcript, last_synced_title, last_synced_description, last_synced_transcript")
       .in("id", existingAssetIds);
     existingAssets = (rows || []) as AssetRow[];
   }
@@ -306,6 +316,11 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       transcript: v.transcript || "",
       description: v.description || "",
       thumbnail: v.thumbnail || "",
+      // Snapshot Vimeo's current values so future syncs can tell whether the
+      // admin has edited a field locally vs. just hasn't touched it.
+      last_synced_title: v.title || "",
+      last_synced_description: v.description || "",
+      last_synced_transcript: v.transcript || "",
     });
     if (insertError) {
       console.error("Sync: failed to insert asset", v.url, insertError);
@@ -334,11 +349,35 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
     }
   }
 
-  // ── 3. Drift + previously-deleted detection ──
-  // detectedAt is added below via .map at lines 403/404, so omit it here
+  // ── 3. Drift detection + auto-apply ──
+  // Behavior:
+  //   • thumbnail → ALWAYS auto-applied (never user-editable in StoryMatch)
+  //   • title / description / transcript → auto-applied IF the local value
+  //     still matches last_synced (i.e. user hasn't edited locally). If the
+  //     user has edited locally AND Vimeo also changed, we flag it as drift
+  //     so the admin can decide whether to keep their edit or pull from Vimeo.
+  //
+  // Each sync builds three buckets:
+  //   • autoUpdates  — written to assets table directly, no admin attention
+  //   • drifted      — true conflicts surfaced in the inbox
+  //   • previouslyDeleted — admin previously soft-deleted, still in Vimeo
+  // detectedAt is added below via .map at lines 403/404, so omit it here.
   const drifted: Omit<DriftedItem, "detectedAt">[] = [];
   const previouslyDeleted: Omit<PreviouslyDeletedItem, "detectedAt">[] = [];
+  // Snake-case payloads ready to send to supabase (matches DB column names).
+  type AssetUpdatePayload = {
+    headline?: string;
+    description?: string;
+    transcript?: string;
+    thumbnail?: string;
+    last_synced_title?: string;
+    last_synced_description?: string;
+    last_synced_transcript?: string;
+  };
+  const autoUpdates: { assetId: string; updates: AssetUpdatePayload }[] = [];
   let inSyncCount = 0;
+  let autoAppliedCount = 0;
+
   for (const v of videos) {
     const a = existingByUrl.get(v.url);
     if (!a) continue;
@@ -357,19 +396,82 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       });
       continue;
     }
-    // Compare each field admins can edit on Vimeo. Empty Vimeo values don't
-    // count as drift (Vimeo strips trailing whitespace etc.) — we only flag
-    // when Vimeo has a non-empty value that differs from what's in StoryMatch.
-    const fields: DriftField[] = [];
-    if (v.title && v.title !== a.headline) fields.push("title");
-    if (v.description && v.description !== a.description) fields.push("description");
-    if (v.thumbnail && v.thumbnail !== (a.thumbnail || "")) fields.push("thumbnail");
-    if (v.transcript && v.transcript !== (a.transcript || "")) fields.push("transcript");
-    if (fields.length > 0) {
+
+    const conflictFields: DriftField[] = [];
+    const updates: AssetUpdatePayload = {};
+
+    // Per-field decision: 4 cases based on (vimeoChanged, userEdited)
+    //   • A) neither changed   → fully in sync, do nothing
+    //   • B) only Vimeo changed → auto-pull (no conflict)
+    //   • C) only user edited   → keep local, do nothing
+    //   • D) both changed       → CONFLICT — flag as drift
+    // `userEdited` requires a non-null last_synced; if null we treat as
+    // no-edit (eager auto-pull), which matches the migration backfill
+    // semantics.
+    const fieldDecide = (
+      label: DriftField,
+      vimeoVal: string,
+      localVal: string,
+      lastSynced: string | null,
+      assignAuto: () => void,
+      assignSnapshot: () => void,
+    ) => {
+      // Empty Vimeo values never trigger sync (Vimeo strips trivial edits)
+      if (!vimeoVal) return;
+      const vimeoChanged = vimeoVal !== (lastSynced ?? "");
+      const userEdited = lastSynced !== null && localVal !== lastSynced;
+      if (vimeoChanged && userEdited) {
+        conflictFields.push(label);
+      } else if (vimeoChanged && !userEdited) {
+        // Auto-pull from Vimeo, advance the snapshot
+        assignAuto();
+      } else if (!vimeoChanged && lastSynced === null) {
+        // Bootstrapping: snapshot was never set and Vimeo matches an
+        // already-correct local value. Just record the snapshot.
+        assignSnapshot();
+      }
+      // Other cases: no action needed
+    };
+
+    // THUMBNAIL — always auto-apply, never a conflict
+    if (v.thumbnail && v.thumbnail !== (a.thumbnail || "")) {
+      updates.thumbnail = v.thumbnail;
+    }
+
+    fieldDecide(
+      "title",
+      v.title || "",
+      a.headline || "",
+      a.last_synced_title,
+      () => { updates.headline = v.title; updates.last_synced_title = v.title; },
+      () => { updates.last_synced_title = v.title; },
+    );
+    fieldDecide(
+      "description",
+      v.description || "",
+      a.description || "",
+      a.last_synced_description,
+      () => { updates.description = v.description; updates.last_synced_description = v.description; },
+      () => { updates.last_synced_description = v.description; },
+    );
+    fieldDecide(
+      "transcript",
+      v.transcript || "",
+      a.transcript || "",
+      a.last_synced_transcript,
+      () => { updates.transcript = v.transcript; updates.last_synced_transcript = v.transcript; },
+      () => { updates.last_synced_transcript = v.transcript; },
+    );
+
+    if (Object.keys(updates).length > 0) {
+      autoUpdates.push({ assetId: a.id, updates });
+      autoAppliedCount++;
+    }
+    if (conflictFields.length > 0) {
       drifted.push({
         assetId: a.id,
         headline: a.headline || v.title || "Untitled",
-        fields,
+        fields: conflictFields,
         storyMatch: { headline: a.headline || "", description: a.description || "" },
         vimeo: {
           title: v.title || "",
@@ -378,10 +480,18 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
           transcript: v.transcript || "",
         },
       });
-    } else {
+    } else if (Object.keys(updates).length === 0) {
       inSyncCount++;
     }
   }
+
+  // Apply auto-updates. Sequential to avoid overwhelming the DB; small per
+  // showcase. Failures here just leave the asset in its previous state and
+  // get re-attempted next sync — no need to abort the whole run.
+  for (const u of autoUpdates) {
+    await supabaseAdmin.from("assets").update(u.updates).eq("id", u.assetId).eq("org_id", orgId);
+  }
+  void autoAppliedCount;
 
   // ── 4. Merge into source.pending_sync_report ──
   // imported + archived accumulate by assetId (deduped, earlier detectedAt
