@@ -20,6 +20,16 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 // ago", etc. so admins can tell new findings from stale ones at a glance.
 export interface ImportedItem { assetId: string; headline: string; detectedAt: string; }
 export interface ArchivedItem { assetId: string; headline: string; detectedAt: string; }
+// AutoAppliedItem records changes that flowed Vimeo → StoryMatch silently
+// because the admin hadn't edited the field locally. Includes thumbnail
+// (which is *only* ever auto-applied — never user-editable in StoryMatch).
+export type AutoAppliedField = "title" | "description" | "transcript" | "thumbnail";
+export interface AutoAppliedItem {
+  assetId: string;
+  headline: string;
+  fields: AutoAppliedField[];
+  detectedAt: string;
+}
 // Drift fields are only the ones the admin can edit in StoryMatch and where a
 // conflict is possible (Vimeo changed AND local edit exists). Thumbnail is
 // always auto-applied and never user-editable, so it's not in this union.
@@ -49,6 +59,9 @@ export interface PendingSyncReport {
   drifted: DriftedItem[];
   archived: ArchivedItem[];
   previouslyDeleted: PreviouslyDeletedItem[];
+  // Vimeo → StoryMatch changes that auto-applied silently. Informational
+  // only; admin doesn't need to take action (they're already applied).
+  autoApplied: AutoAppliedItem[];
 }
 
 // ── Vimeo fetching (subset of /api/vimeo/showcase logic) ───────────────
@@ -350,20 +363,32 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   }
 
   // ── 3. Drift detection + auto-apply ──
-  // Behavior:
-  //   • thumbnail → ALWAYS auto-applied (never user-editable in StoryMatch)
-  //   • title / description / transcript → auto-applied IF the local value
-  //     still matches last_synced (i.e. user hasn't edited locally). If the
-  //     user has edited locally AND Vimeo also changed, we flag it as drift
-  //     so the admin can decide whether to keep their edit or pull from Vimeo.
+  // Per-field decision (for title / description / transcript):
+  //   • local === current Vimeo                → in sync, no action
+  //   • local !== current Vimeo, user edited   → DRIFT (admin sees in inbox,
+  //     can choose to keep their edit or pull from Vimeo)
+  //   • local !== current Vimeo, user untouched → AUTO-PULL from Vimeo, also
+  //     log to autoApplied so the admin sees what changed
   //
-  // Each sync builds three buckets:
-  //   • autoUpdates  — written to assets table directly, no admin attention
-  //   • drifted      — true conflicts surfaced in the inbox
-  //   • previouslyDeleted — admin previously soft-deleted, still in Vimeo
-  // detectedAt is added below via .map at lines 403/404, so omit it here.
+  // Thumbnail is special: never user-editable in StoryMatch, so any Vimeo
+  // change just auto-applies and gets logged to autoApplied. Never drift.
+  //
+  // "user edited" = last_synced is non-null AND differs from current local.
+  // last_synced null is treated as "no edit recorded" (eager auto-pull) —
+  // matches the migration backfill semantics.
+  // detectedAt is added below via .map, so omit it here.
   const drifted: Omit<DriftedItem, "detectedAt">[] = [];
   const previouslyDeleted: Omit<PreviouslyDeletedItem, "detectedAt">[] = [];
+  // Per-asset list of fields that auto-applied this sync run.
+  const autoAppliedThisRun = new Map<string, { headline: string; fields: AutoAppliedField[] }>();
+  const noteAutoApplied = (assetId: string, headline: string, field: AutoAppliedField) => {
+    const existing = autoAppliedThisRun.get(assetId);
+    if (existing) {
+      if (!existing.fields.includes(field)) existing.fields.push(field);
+    } else {
+      autoAppliedThisRun.set(assetId, { headline, fields: [field] });
+    }
+  };
   // Snake-case payloads ready to send to supabase (matches DB column names).
   type AssetUpdatePayload = {
     headline?: string;
@@ -376,7 +401,6 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   };
   const autoUpdates: { assetId: string; updates: AssetUpdatePayload }[] = [];
   let inSyncCount = 0;
-  let autoAppliedCount = 0;
 
   for (const v of videos) {
     const a = existingByUrl.get(v.url);
@@ -397,17 +421,10 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       continue;
     }
 
+    const displayHeadline = a.headline || v.title || "Untitled";
     const conflictFields: DriftField[] = [];
     const updates: AssetUpdatePayload = {};
 
-    // Per-field decision: 4 cases based on (vimeoChanged, userEdited)
-    //   • A) neither changed   → fully in sync, do nothing
-    //   • B) only Vimeo changed → auto-pull (no conflict)
-    //   • C) only user edited   → keep local, do nothing
-    //   • D) both changed       → CONFLICT — flag as drift
-    // `userEdited` requires a non-null last_synced; if null we treat as
-    // no-edit (eager auto-pull), which matches the migration backfill
-    // semantics.
     const fieldDecide = (
       label: DriftField,
       vimeoVal: string,
@@ -416,26 +433,25 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       assignAuto: () => void,
       assignSnapshot: () => void,
     ) => {
-      // Empty Vimeo values never trigger sync (Vimeo strips trivial edits)
-      if (!vimeoVal) return;
-      const vimeoChanged = vimeoVal !== (lastSynced ?? "");
-      const userEdited = lastSynced !== null && localVal !== lastSynced;
-      if (vimeoChanged && userEdited) {
-        conflictFields.push(label);
-      } else if (vimeoChanged && !userEdited) {
-        // Auto-pull from Vimeo, advance the snapshot
-        assignAuto();
-      } else if (!vimeoChanged && lastSynced === null) {
-        // Bootstrapping: snapshot was never set and Vimeo matches an
-        // already-correct local value. Just record the snapshot.
-        assignSnapshot();
+      if (!vimeoVal) return;                  // Empty Vimeo values never trigger
+      if (vimeoVal === localVal) {
+        // In sync. Refresh snapshot if it's stale (e.g. lastSynced null after migration).
+        if (lastSynced !== vimeoVal) assignSnapshot();
+        return;
       }
-      // Other cases: no action needed
+      const userEdited = lastSynced !== null && localVal !== lastSynced;
+      if (userEdited) {
+        conflictFields.push(label);
+      } else {
+        assignAuto();
+        noteAutoApplied(a.id, displayHeadline, label);
+      }
     };
 
     // THUMBNAIL — always auto-apply, never a conflict
     if (v.thumbnail && v.thumbnail !== (a.thumbnail || "")) {
       updates.thumbnail = v.thumbnail;
+      noteAutoApplied(a.id, displayHeadline, "thumbnail");
     }
 
     fieldDecide(
@@ -465,12 +481,11 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
 
     if (Object.keys(updates).length > 0) {
       autoUpdates.push({ assetId: a.id, updates });
-      autoAppliedCount++;
     }
     if (conflictFields.length > 0) {
       drifted.push({
         assetId: a.id,
-        headline: a.headline || v.title || "Untitled",
+        headline: displayHeadline,
         fields: conflictFields,
         storyMatch: { headline: a.headline || "", description: a.description || "" },
         vimeo: {
@@ -495,7 +510,6 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       console.error("[runSourceSync] auto-update failed", { assetId: u.assetId, error: error.message, hint: error.hint, updates: Object.keys(u.updates) });
     }
   }
-  void autoAppliedCount;
 
   // ── 4. Merge into source.pending_sync_report ──
   // imported + archived accumulate by assetId (deduped, earlier detectedAt
@@ -533,10 +547,38 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
     return newList.map(item => ({ ...item, detectedAt: prevById.get(item.assetId)?.detectedAt || item.detectedAt }));
   };
 
+  // autoApplied accumulates by assetId, but unions the field set so an asset
+  // that auto-applied a title last week and a description today shows both.
+  // Earliest detectedAt wins. Headline always reflects the most recent value
+  // so the row label stays useful as titles change.
+  const accumAutoApplied = (
+    prevList: AutoAppliedItem[] | undefined,
+    newList: AutoAppliedItem[]
+  ): AutoAppliedItem[] => {
+    const map = new Map<string, AutoAppliedItem>();
+    for (const item of (prevList || [])) map.set(item.assetId, item);
+    for (const item of newList) {
+      const existing = map.get(item.assetId);
+      if (existing) {
+        const fields = Array.from(new Set([...existing.fields, ...item.fields])) as AutoAppliedField[];
+        map.set(item.assetId, { ...existing, fields, headline: item.headline });
+      } else {
+        map.set(item.assetId, item);
+      }
+    }
+    return Array.from(map.values());
+  };
+
   const importedNow: ImportedItem[] = insertedAssets.map(a => ({ assetId: a.id, headline: a.headline, detectedAt: nowIso }));
   const archivedNow: ArchivedItem[] = orphaned.map(a => ({ assetId: a.id, headline: a.headline || "Untitled", detectedAt: nowIso }));
   const driftedNow: DriftedItem[] = drifted.map(d => ({ ...d, detectedAt: nowIso }));
   const previouslyDeletedNow: PreviouslyDeletedItem[] = previouslyDeleted.map(p => ({ ...p, detectedAt: nowIso }));
+  const autoAppliedNow: AutoAppliedItem[] = Array.from(autoAppliedThisRun.entries()).map(([assetId, info]) => ({
+    assetId,
+    headline: info.headline,
+    fields: info.fields,
+    detectedAt: nowIso,
+  }));
 
   const merged: PendingSyncReport = {
     syncedAt: nowIso,
@@ -546,6 +588,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
     archived: dedupedAccum(prev?.archived, archivedNow),
     drifted: liftDetectedAt(prev?.drifted, driftedNow),
     previouslyDeleted: liftDetectedAt(prev?.previouslyDeleted, previouslyDeletedNow),
+    autoApplied: accumAutoApplied(prev?.autoApplied, autoAppliedNow),
   };
 
   // ── 5. Update source row ──

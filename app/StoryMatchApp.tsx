@@ -1438,6 +1438,14 @@ interface SyncReport {
     vimeo: { title: string; description: string; thumbnail: string; transcript: string };
     detectedAt: string;
   }[];
+  // Vimeo → StoryMatch changes that auto-applied silently because no local
+  // edit existed. Informational only — already applied.
+  autoApplied: {
+    assetId: string;
+    headline: string;
+    fields: ("title" | "description" | "transcript" | "thumbnail")[];
+    detectedAt: string;
+  }[];
   archived: { assetId: string; headline: string; detectedAt: string }[];
   // Detected in Vimeo but admin previously soft-deleted in StoryMatch.
   // Surface so admin can choose to resync (un-delete) rather than silently
@@ -1889,10 +1897,12 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                 {(() => {
                   const r = s.pendingSyncReport as SyncReport | null | undefined;
                   if (!r) return null;
-                  const total = r.imported.length + r.drifted.length + r.archived.length + r.previouslyDeleted.length;
+                  // Defensive default for reports written before autoApplied existed.
+                  const autoApplied = r.autoApplied ?? [];
+                  const total = r.imported.length + r.drifted.length + r.archived.length + r.previouslyDeleted.length + autoApplied.length;
                   if (total === 0) return null;
                   const isOpen = expandedReportId === s.id;
-                  const removeFromReport = (key: keyof Pick<SyncReport, "drifted" | "archived" | "previouslyDeleted" | "imported">, assetId: string) => {
+                  const removeFromReport = (key: keyof Pick<SyncReport, "drifted" | "archived" | "previouslyDeleted" | "imported" | "autoApplied">, assetId: string) => {
                     const updated: SyncReport = {
                       ...r,
                       [key]: (r[key] as Array<{ assetId: string }>).filter(x => x.assetId !== assetId),
@@ -1981,6 +1991,36 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                               ))}
                             </div>
                           )}
+                          {autoApplied.length > 0 && (
+                            <div className="ssr-section">
+                              <div className="ssr-section-head">
+                                <span className="ssr-icon">
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 12a9 9 0 1 1-3-6.7"/>
+                                    <polyline points="21 4 21 12 13 12"/>
+                                  </svg>
+                                </span>
+                                <span className="ssr-count">{autoApplied.length}</span> Updated from Vimeo
+                              </div>
+                              <div className="ssr-section-help">
+                                Vimeo&apos;s value changed and you hadn&apos;t edited locally — applied automatically.
+                              </div>
+                              {autoApplied.map(u => {
+                                const labels: Record<string, string> = { title: "Title", description: "Description", transcript: "Transcript", thumbnail: "Thumbnail" };
+                                const pretty = u.fields.map(f => labels[f] || f).join(", ");
+                                return (
+                                  <div key={u.assetId} className="ssr-row compact">
+                                    <div className="ssr-row-title">{u.headline}</div>
+                                    <div className="ssr-row-meta">
+                                      {pretty} {u.fields.length === 1 ? "updated" : "updated"}
+                                      <span className="ssr-when-sep">·</span>
+                                      {timeAgoShort(u.detectedAt)}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                           {r.archived.length > 0 && (
                             <div className="ssr-section">
                               <div className="ssr-section-head">
@@ -2021,10 +2061,10 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                                     <line x1="12" y1="17" x2="12.01" y2="17"/>
                                   </svg>
                                 </span>
-                                <span className="ssr-count">{r.drifted.length}</span> Conflicts
+                                <span className="ssr-count">{r.drifted.length}</span> Edited in StoryMatch
                               </div>
                               <div className="ssr-section-help">
-                                You edited these fields in StoryMatch and Vimeo&apos;s value also changed. Pull from Vimeo to overwrite your edit.
+                                You edited these fields in StoryMatch and they no longer match Vimeo. Pull from Vimeo to overwrite your local edit.
                               </div>
                               {r.drifted.map(d => {
                                 const fieldLabels: Record<string, string> = { title: "Title", description: "Description", transcript: "Transcript" };
