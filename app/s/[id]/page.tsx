@@ -24,6 +24,13 @@ interface Asset {
   client_name: string | null;
   company: string | null;
   vertical: string | null;
+  asset_type: string | null;
+  challenge: string | null;
+  outcome: string | null;
+  geography: string | null;
+  company_size: string | null;
+  transcript: string | null;
+  status: string | null;
 }
 
 function hashIp(ip: string): string {
@@ -55,7 +62,7 @@ export default async function SharePage({
   const { data: asset } = await supabaseAdmin
     .from("assets")
     .select(
-      "id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical"
+      "id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical, asset_type, challenge, outcome, geography, company_size, transcript, status"
     )
     .eq("id", shareLink.asset_id)
     .maybeSingle<Asset>();

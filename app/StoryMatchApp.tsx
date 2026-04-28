@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
+import AssetDetail from "./components/AssetDetail";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -1161,52 +1162,8 @@ function timeAgoShort(iso: string | null | undefined): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
-
-// ─── DETAIL PAGE ─────────────────────────────────────────────────────────────
-interface DetailPageProps {
-  asset: Asset | null;
-  onBack: () => void;
-  allAssets: Asset[];
-  onSelect: (a: Asset) => void;
-}
-
-interface Chapter {
-  title: string;
-  paras: string[];
-}
-
-function DetailPage({asset,onBack,allAssets,onSelect}: DetailPageProps) {
-  if(!asset)return null;
-  const c=VERT_CLR[asset.vertical]||"#4f46e5";
-  const vid=extractVid(asset.videoUrl);
-  let thumb=asset.thumbnail;if(!thumb&&vid?.p==="yt")thumb=ytThumb(vid.id);if(!thumb)thumb="https://images.unsplash.com/photo-1557804506-669a67965ba0?w=640&h=360&fit=crop";
-  const statParts=(asset.outcome||"").split(/[,;]/).map(s=>s.trim()).filter(Boolean);
-  const parseStats=statParts.map(s=>{const m=s.match(/([\d.]+)(%|[A-Z])?/);if(m)return{num:m[1],unit:m[2]||"",label:s.replace(m[0],"").trim().replace(/^[:\-–—]\s*/,"")};return{num:"",unit:"",label:s};}).filter(s=>s.num);
-  const paras=(asset.transcript||"").split(/\n\n+/).filter(Boolean);
-  const chapters: Chapter[] = [];
-  let cur: Chapter = {title:"The Story", paras:[]};
-  paras.forEach(p=>{if(p.match(/^(Background|Challenge|Solution|Results|Company|Problem|Implementation):/i)){if(cur.paras.length>0)chapters.push(cur);cur={title:p.split(":")[0].trim(),paras:[p]};}else{cur.paras.push(p);}});
-  if(cur.paras.length>0)chapters.push(cur);if(chapters.length===0)chapters.push({title:"The Story",paras:[asset.transcript||""]});
-  const related=(allAssets||[]).filter(a=>a.id!==asset.id).sort((a,b)=>a.vertical===asset.vertical?-1:1).slice(0,3);
-  const[activeCh,setActiveCh]=useState(0);
-  return(
-    <div className="dp">
-      <button className="dp-back" onClick={onBack}>← Back to library</button>
-      <div className="dp-hero"><div className="dp-hero-img"><img src={thumb} alt={asset.company}/></div><div className="dp-hero-content"><div className="dp-hero-eyebrow"><span className="dp-hero-co">{asset.company}</span><span className="dp-hero-vbadge">{asset.assetType}</span></div><h1>{asset.headline}.</h1><div className="dp-hero-sub">{asset.pullQuote}</div></div></div>
-      <div className="dp-summary-bar"><div className="dp-summary"><h3>Summary</h3><p>{asset.pullQuote}</p></div><div className="dp-about"><h3>About</h3><p>{asset.clientName} at {asset.company}. {asset.companySize} employees, {asset.geography}.</p><div className="dp-about-tags"><span className="pill" style={{borderColor:c,color:c}}>{asset.vertical}</span><span className="pill">{asset.geography}</span><span className="pill" style={{borderColor:asset.status==="published"?"var(--green)":"var(--amber)",color:asset.status==="published"?"var(--green)":"var(--amber)"}}>{asset.status}</span></div></div></div>
-      {parseStats.length>0&&<div className="dp-stats">{parseStats.map((s,i)=>(<div className="dp-stat" key={i}><div><span className="dp-stat-num">{s.num}</span><span className="dp-stat-unit">{s.unit}</span></div><div className="dp-stat-label">{s.label||asset.challenge}</div></div>))}</div>}
-      {vid&&<div style={{maxWidth:900,margin:"0 auto 28px"}}><div className="dp-video-embed">{vid.p==="yt"?<iframe src={`https://www.youtube.com/embed/${vid.id}`} frameBorder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowFullScreen/>:<iframe src={`https://player.vimeo.com/video/${vid.id}`} frameBorder="0" allow="autoplay;fullscreen;picture-in-picture" allowFullScreen/>}</div></div>}
-      <div className="dp-body">
-        <nav className="dp-chapters-nav">{chapters.map((ch,i)=>(<button key={i} className={`dp-ch-link ${activeCh===i?"active":""}`} onClick={()=>{setActiveCh(i);document.getElementById(`ch-${i}`)?.scrollIntoView({behavior:"smooth",block:"start"});}}>Ch {i+1}: {ch.title}</button>))}</nav>
-        <div className="dp-content">
-          {chapters.map((ch,i)=>(<div className="dp-chapter" key={i} id={`ch-${i}`}><div className="dp-chapter-label">Chapter {i+1}</div><h2>{ch.title}</h2>{ch.paras.map((p,pi)=>{const isQ=p.startsWith('"')||p.startsWith('\u201c');if(isQ){const cl=p.replace(/^[^"\u201c]*["\u201c]|["\u201d]$/g,"").replace(/["\u201d]$/,"");return(<div className="dp-bq" key={pi}><blockquote>{cl}</blockquote><div className="dp-bq-name">{asset.clientName}</div><div className="dp-bq-role">{asset.company}</div></div>);}return(<p key={pi}>{p}</p>);})}</div>))}
-          <div className="dp-bq"><blockquote>{asset.pullQuote}</blockquote><div className="dp-bq-name">{asset.clientName}</div><div className="dp-bq-role">{asset.company}</div></div>
-        </div>
-      </div>
-      {related.length>0&&<div className="dp-related"><h3>More customer stories</h3><div className="dp-related-grid">{related.map(r=>{const rvid=extractVid(r.videoUrl);const rt=r.thumbnail||(rvid?.p==="yt"?ytThumb(rvid.id):"https://images.unsplash.com/photo-1557804506-669a67965ba0?w=400&h=225&fit=crop");return(<div className="dp-rel-card" key={r.id} onClick={()=>onSelect(r)}>{r.assetType!=="Quote"&&<div className="dp-rel-thumb"><img src={rt} alt={r.company} loading="lazy"/></div>}<div className="dp-rel-body"><div className="dp-rel-label">{r.assetType}</div><div className="dp-rel-title">{r.headline}</div></div></div>);})}</div></div>}
-    </div>
-  );
-}
+// DetailPage was extracted to ./components/AssetDetail so the public share
+// page (/s/[id]) renders the exact same view as the internal library.
 
 // ─── ADMIN: IMPORT PANEL ─────────────────────────────────────────────────────
 
@@ -2252,7 +2209,7 @@ export default function App(){
   if(route.page==="detail"){
     return(<React.Fragment><style>{css}</style><div style={{minHeight:"100vh",background:"var(--bg)"}}>
       <header className="hdr"><div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}></div><div className="hdr-r"><span className="badge">{assets.length} assets</span></div></header>
-      <DetailPage asset={detailAsset} onBack={goHome} allAssets={assets} onSelect={openAsset}/>
+      {detailAsset && <AssetDetail asset={detailAsset} onBack={goHome} allAssets={assets} onSelect={openAsset}/>}
     </div></React.Fragment>);
   }
 
