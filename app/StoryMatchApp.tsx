@@ -326,6 +326,20 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .src-sync-dot.syncing{background:var(--accent);animation:pulse 1s infinite;}
 .src-sync-dot.error{background:var(--red);}
 
+/* Per-source auto-sync row + popover */
+.src-auto-row{position:relative;margin-top:4px;}
+.src-auto-btn{display:inline-flex;align-items:center;gap:5px;background:none;border:none;padding:2px 4px;border-radius:5px;color:var(--t3);font-family:var(--font);font-size:10.5px;font-weight:500;cursor:pointer;}
+.src-auto-btn:hover{background:var(--bg2);color:var(--t1);}
+.src-auto-btn.on{color:var(--accent);}
+.src-auto-btn.on svg{color:var(--accent);}
+.src-auto-pop{position:absolute;top:calc(100% + 4px);left:0;width:240px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:6px;z-index:30;}
+.src-auto-pop-head{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);padding:5px 7px 7px;}
+.src-auto-opt{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;background:none;border:none;border-radius:5px;cursor:pointer;color:var(--t1);font-family:var(--font);font-size:12px;text-align:left;}
+.src-auto-opt:hover{background:var(--bg2);}
+.src-auto-opt.on{color:var(--accent);}
+.src-auto-opt-radio{display:inline-block;width:14px;color:var(--accent);font-size:14px;line-height:1;}
+.src-auto-pop-meta{font-size:10.5px;color:var(--t3);padding:7px 9px 4px;border-top:1px dashed var(--border);margin-top:4px;line-height:1.4;}
+
 /* ── INLINE SYNC REPORT under each source row ── */
 .src-sync-report{margin-top:8px;border-top:1px dashed var(--border);padding-top:6px;}
 .src-sync-report-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;background:none;border:none;padding:5px 2px;cursor:pointer;font-family:var(--font);font-size:11px;font-weight:500;color:var(--t3);text-align:left;}
@@ -1442,6 +1456,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
   // Sync reports now live on each source row server-side (source.pendingSyncReport).
   // Per-source UI state for which row is expanded, plus syncing-now indicators.
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
+  const [autoSyncPopFor, setAutoSyncPopFor] = useState<string | null>(null);
   const[view,setView]=useState<"list"|"add">("list");
   const[mode,setMode]=useState<"source"|"single">("source");
   const[url,setUrl]=useState("");
@@ -1782,6 +1797,43 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                     <div className="src-card-sub">
                       <span className={`src-sync-dot ${syncingId===s.id?"syncing":s.status==="error"?"error":s.lastSync?"synced":"never"}`}/>
                       {syncingId===s.id?"Syncing…":`${s.videoCount} video${s.videoCount===1?"":"s"} · ${timeAgo(s.lastSync)}`}
+                    </div>
+                    <div className="src-auto-row">
+                      <button
+                        className={`src-auto-btn${s.autoSyncEnabled?" on":""}`}
+                        onClick={(e)=>{e.stopPropagation();setAutoSyncPopFor(autoSyncPopFor===s.id?null:s.id);}}
+                        title={s.autoSyncEnabled?"Auto-sync is on":"Auto-sync is off"}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10"/>
+                          <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        Auto-sync: {s.autoSyncEnabled?"On":"Off"}
+                      </button>
+                      {autoSyncPopFor===s.id && (
+                        <div className="src-auto-pop" onClick={(e)=>e.stopPropagation()}>
+                          <div className="src-auto-pop-head">Auto-sync</div>
+                          <button
+                            className={`src-auto-opt${!s.autoSyncEnabled?" on":""}`}
+                            onClick={()=>{onUpdateSource({id:s.id,autoSyncEnabled:false});setAutoSyncPopFor(null);}}
+                          >
+                            <span className="src-auto-opt-radio">{!s.autoSyncEnabled?"●":"○"}</span> Off
+                          </button>
+                          <button
+                            className={`src-auto-opt${s.autoSyncEnabled?" on":""}`}
+                            onClick={()=>{onUpdateSource({id:s.id,autoSyncEnabled:true});setAutoSyncPopFor(null);}}
+                          >
+                            <span className="src-auto-opt-radio">{s.autoSyncEnabled?"●":"○"}</span> On — runs daily
+                          </button>
+                          {s.autoSyncEnabled && (
+                            <div className="src-auto-pop-meta">
+                              {s.lastAutoSyncAt
+                                ? `Last auto-sync: ${timeAgo(s.lastAutoSyncAt)}`
+                                : "Hasn't run yet — first auto-sync will be tomorrow at 2am UTC"}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="src-card-actions">
