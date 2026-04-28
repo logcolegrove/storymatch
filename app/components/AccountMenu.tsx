@@ -189,7 +189,7 @@ function timeAgo(iso: string | null): string {
 const ROLE_OVERVIEWS: Record<"admin" | "sales", { title: string; desc: string }> = {
   sales: {
     title: "Sales",
-    desc: "Can search the library, copy share links for prospects, and see engagement on every share link the team has sent.",
+    desc: "Can use StoryMatch's AI search to find the right proof point for any prospect or scenario, copy trackable share links to send, and see engagement on every share link the team has sent.",
   },
   admin: {
     title: "Admin",
