@@ -330,8 +330,9 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   }
 
   // ── 3. Drift + previously-deleted detection ──
-  const drifted: DriftedItem[] = [];
-  const previouslyDeleted: PreviouslyDeletedItem[] = [];
+  // detectedAt is added below via .map at lines 403/404, so omit it here
+  const drifted: Omit<DriftedItem, "detectedAt">[] = [];
+  const previouslyDeleted: Omit<PreviouslyDeletedItem, "detectedAt">[] = [];
   let inSyncCount = 0;
   for (const v of videos) {
     const a = existingByUrl.get(v.url);
