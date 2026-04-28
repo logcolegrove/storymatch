@@ -488,14 +488,9 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .card-thumb{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;background:var(--bg3);}
 .card-thumb img{width:100%;height:100%;object-fit:cover;transition:transform .5s cubic-bezier(.4,0,.2,1);filter:brightness(.97);}
 .card:hover .card-thumb img{transform:scale(1.05);filter:brightness(1);}
-.play-over{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transition:opacity .3s;}
-.card:hover .play-over{opacity:1;}
-.play-circle{width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.95);display:grid;place-items:center;box-shadow:0 4px 20px rgba(0,0,0,.2);}
-.play-circle svg{margin-left:2px;}
-.card-overlay{position:absolute;bottom:0;left:0;right:0;padding:14px 16px;background:linear-gradient(to top,rgba(0,0,0,.55) 0%,transparent 100%);display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none;opacity:0;transition:opacity .3s;}
-.card:hover .card-overlay{opacity:1;}
-.card-overlay-tag{font-size:11px;color:rgba(255,255,255,.8);font-weight:500;}
-.card-overlay-cta{font-size:11px;color:rgba(255,255,255,.7);font-weight:600;}
+/* .play-over / .play-circle / .card-overlay rules removed — overlays were
+   misleading (clicking opens the landing page, not the video) and the CTA
+   is now reached via the "watch →" affordance in the card body below. */
 .card-body{padding:12px 14px;}
 .card-headline{font-size:13.5px;font-weight:600;color:var(--t1);line-height:1.35;margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .card-co{font-size:11.5px;font-weight:500;color:var(--t3);display:flex;align-items:center;justify-content:space-between;}
@@ -642,8 +637,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Grid card 3-dot menu and share-link button (stacked top-right) */
 .card-dots,.qcard-dots{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.95);border-radius:5px;z-index:5;opacity:0;transition:opacity .15s;}
 .card:hover .card-dots,.qcard:hover .qcard-dots{opacity:1;}
-/* .card-share / .qcard-share removed — Copy share link now lives only in
-   the 3-dot dropdown. */
+/* Standalone Copy-share-link icon — appears on hover/selected, sits below
+   the 3-dot dots button. The dropdown menu is portal-rendered to body so
+   its higher root-level stacking context naturally covers this button when
+   open; no special z-index gymnastics needed here. */
+.card-share,.qcard-share{position:absolute;top:42px;right:8px;background:rgba(255,255,255,.95);border:none;width:30px;height:30px;border-radius:5px;cursor:pointer;color:var(--t2);display:grid;place-items:center;z-index:5;opacity:0;transition:opacity .15s,color .15s;}
+.card:hover .card-share,.qcard:hover .qcard-share,.card.selected .card-share,.qcard.selected .qcard-share{opacity:1;}
+.card-share:hover,.qcard-share:hover{color:var(--accent);background:#fff;}
 
 /* ── QUOTE CARD ── */
 .qcard{border-radius:var(--r);cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;min-height:340px;display:flex;flex-direction:column;justify-content:flex-end;}
@@ -794,8 +794,18 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       {menuItems && (
         <div className="card-dots"><DotsMenu items={menuItems}/></div>
       )}
-      {/* Standalone share button removed — Copy share link now lives only in
-          the 3-dot menu so we don't have two ways to do the same thing. */}
+      {onCopyShareLink && (
+        <button
+          className="card-share"
+          onClick={e=>{e.stopPropagation();onCopyShareLink(asset);}}
+          title="Copy share link"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+        </button>
+      )}
       {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
       {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
       {isArchived&&onRestore&&!menuItems&&(
@@ -804,12 +814,13 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       <div className="card-thumb">
         {aiData&&<div className="card-rank">{aiData.rank}</div>}
         <img src={thumb} alt={asset.company} loading="lazy"/>
-        {isV&&<div className="play-over"><div className="play-circle"><svg width="18" height="18" viewBox="0 0 24 24" fill="#111"><polygon points="6,3 20,12 6,21"/></svg></div></div>}
-        <div className="card-overlay"><span className="card-overlay-tag">{asset.vertical}</span><span className="card-overlay-cta">{cta} →</span></div>
+        {/* Play overlay + bottom hover overlay removed — clicking opens the
+            landing page (not the video), and the CTA is already visible
+            below the thumbnail in the card body. */}
       </div>
       <div className="card-body">
         <div className="card-headline" title={asset.headline||"Untitled"}>{asset.headline||"Untitled"}</div>
-        <div className="card-co"><span className="card-co-name"><span className="vdot" style={{background:c}}/>{asset.company||"—"}</span><span className="card-vert">{cta}</span></div>
+        <div className="card-co"><span className="card-co-name"><span className="vdot" style={{background:c}}/>{asset.company||"—"}</span><span className="card-vert">{cta} →</span></div>
       </div>
       {aiData&&(
         <div className="card-ai" onClick={e=>e.stopPropagation()}>
@@ -844,7 +855,18 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       {menuItems && (
         <div className="qcard-dots"><DotsMenu items={menuItems}/></div>
       )}
-      {/* Standalone share button removed — see Card component note. */}
+      {onCopyShareLink && (
+        <button
+          className="qcard-share"
+          onClick={e=>{e.stopPropagation();onCopyShareLink(asset);}}
+          title="Copy share link"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+        </button>
+      )}
       {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
       {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
       {isArchived&&onRestore&&!menuItems&&(
