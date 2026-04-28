@@ -113,6 +113,47 @@ export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSe
 
   const [activeCh, setActiveCh] = useState(0);
 
+  // ── Time-on-page heartbeat (public share page only) ──
+  // Fires regardless of whether the video is played — captures engagement
+  // from prospects who scroll/read but never click play.
+  useEffect(() => {
+    if (!shareTracking) return;
+    const shareId = shareTracking.shareId;
+    const startAt = Date.now();
+
+    const sendHeartbeat = (useBeacon = false) => {
+      const seconds = Math.round((Date.now() - startAt) / 1000);
+      if (seconds < 1) return;
+      const url = `/api/share/${shareId}/event`;
+      const body = JSON.stringify({ event_type: "heartbeat", page_seconds: seconds });
+      if (useBeacon && typeof navigator.sendBeacon === "function") {
+        navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+      } else {
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+
+    // Heartbeat every 15 seconds while the page is open
+    const interval = window.setInterval(() => sendHeartbeat(false), 15000);
+    // Final heartbeat on tab close — sendBeacon is the reliable path for unload
+    const onUnload = () => sendHeartbeat(true);
+    window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("pagehide", onUnload);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("pagehide", onUnload);
+      // Also fire one last heartbeat on unmount (e.g. SPA nav, dev hot reload)
+      sendHeartbeat(false);
+    };
+  }, [shareTracking]);
+
   // ── Vimeo Player JS engagement tracking (public share page only) ──
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => {

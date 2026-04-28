@@ -19,7 +19,10 @@ function hashIp(ip: string): string {
     .slice(0, 16);
 }
 
-const ALLOWED_EVENT_TYPES = new Set(["play", "progress", "complete"]);
+// 'heartbeat' is the time-on-page event sent every ~15s and on tab close;
+// it lets us track engagement from visitors who scroll/read but never
+// actually press play on the video.
+const ALLOWED_EVENT_TYPES = new Set(["play", "progress", "complete", "heartbeat"]);
 
 export async function POST(
   req: NextRequest,
@@ -27,10 +30,11 @@ export async function POST(
 ) {
   const { id } = await params;
 
-  // Verify the share exists (cheap guard against random IDs)
+  // Look up the share so we can a) verify it exists and b) compare the
+  // visitor's IP hash against the sender's for is_self detection.
   const { data: shareLink } = await supabaseAdmin
     .from("share_links")
-    .select("id")
+    .select("id, sender_ip_hash")
     .eq("id", id)
     .maybeSingle();
   if (!shareLink) {
@@ -41,6 +45,7 @@ export async function POST(
     event_type?: string;
     watched_seconds?: number;
     watched_percent?: number;
+    page_seconds?: number;
   };
   try {
     body = await req.json();
@@ -61,6 +66,8 @@ export async function POST(
     req.headers.get("x-real-ip") ||
     "unknown";
   const ua = (req.headers.get("user-agent") || "").slice(0, 500);
+  const ipHash = hashIp(ip);
+  const isSelf = !!shareLink.sender_ip_hash && shareLink.sender_ip_hash === ipHash;
 
   const watchedSeconds =
     typeof body.watched_seconds === "number" && Number.isFinite(body.watched_seconds)
@@ -70,14 +77,20 @@ export async function POST(
     typeof body.watched_percent === "number" && Number.isFinite(body.watched_percent)
       ? Math.max(0, Math.min(100, Math.round(body.watched_percent)))
       : null;
+  const pageSeconds =
+    typeof body.page_seconds === "number" && Number.isFinite(body.page_seconds)
+      ? Math.max(0, Math.round(body.page_seconds))
+      : null;
 
   const { error } = await supabaseAdmin.from("share_events").insert({
     share_id: id,
     event_type: eventType,
-    ip_hash: hashIp(ip),
+    ip_hash: ipHash,
     user_agent: ua,
     watched_seconds: watchedSeconds,
     watched_percent: watchedPercent,
+    page_seconds: pageSeconds,
+    is_self: isSelf,
   });
 
   if (error) {

@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
+
+// Hash an IP the same way the public share page does, so we can compare a
+// link's sender_ip_hash against a visitor's hash and flag self-views.
+function hashIp(ip: string): string {
+  return createHash("sha256")
+    .update(ip + "|storymatch-share")
+    .digest("hex")
+    .slice(0, 16);
+}
 
 // Resolve the current authenticated user + their org (admin or sales role).
 // Same pattern as other authenticated routes in this codebase.
@@ -39,9 +48,10 @@ function generateShareId(length = 6): string {
 
 // POST /api/share
 // Body: { asset_id: string }
-// Creates (or returns existing) share_link for this sender + asset combo.
-// Each rep gets a stable URL per asset — copying twice returns the same link
-// so we can confidently aggregate engagement metrics per (rep, asset) pair.
+// Always creates a NEW share_link — each "I just sent this to someone" gets
+// its own tracked entity, even when it's the same asset twice. We also
+// capture the sender's IP hash here so the public page can flag self-views
+// and exclude them from engagement metrics.
 export async function POST(req: NextRequest) {
   const ctx = await getCurrentUserOrg(req);
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -68,46 +78,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Asset not found" }, { status: 404 });
   }
 
-  // Reuse existing share_link if one exists for this sender + asset.
-  // This way reps get a stable URL — copying twice returns the same link.
-  const { data: existing } = await supabaseAdmin
-    .from("share_links")
-    .select("id")
-    .eq("org_id", ctx.orgId)
-    .eq("asset_id", assetId)
-    .eq("sender_user_id", ctx.userId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // Capture the sender's IP hash so we can flag self-views on the public page
+  const senderIp =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    "unknown";
+  const senderIpHash = hashIp(senderIp);
 
+  // Generate a new ID and retry on the (extremely rare) collision case.
   let shareId = "";
-  if (existing) {
-    shareId = existing.id;
-  } else {
-    // Generate a new ID and retry on the (extremely rare) collision case.
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const candidate = generateShareId();
-      const { error } = await supabaseAdmin.from("share_links").insert({
-        id: candidate,
-        org_id: ctx.orgId,
-        asset_id: assetId,
-        sender_user_id: ctx.userId,
-      });
-      if (!error) {
-        shareId = candidate;
-        break;
-      }
-      // 23505 is Postgres's unique_violation — collision, regenerate
-      if (error.code !== "23505") {
-        return NextResponse.json({ error: error.message }, { status: 500 });
-      }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateShareId();
+    const { error } = await supabaseAdmin.from("share_links").insert({
+      id: candidate,
+      org_id: ctx.orgId,
+      asset_id: assetId,
+      sender_user_id: ctx.userId,
+      sender_ip_hash: senderIpHash,
+    });
+    if (!error) {
+      shareId = candidate;
+      break;
     }
-    if (!shareId) {
-      return NextResponse.json(
-        { error: "Could not generate unique share id; try again" },
-        { status: 500 }
-      );
+    // 23505 is Postgres's unique_violation — collision, regenerate
+    if (error.code !== "23505") {
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
+  }
+  if (!shareId) {
+    return NextResponse.json(
+      { error: "Could not generate unique share id; try again" },
+      { status: 500 }
+    );
   }
 
   const url = `${req.nextUrl.origin}/s/${shareId}`;

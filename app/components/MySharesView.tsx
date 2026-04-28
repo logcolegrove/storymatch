@@ -15,16 +15,24 @@ interface ShareSummary {
   sender_email: string | null;
   recipient_label: string | null;
   created_at: string;
-  click_count: number;
+  open_count: number;            // non-self opens only
   last_clicked_at: string | null;
   asset_headline: string;
   asset_company: string;
   asset_thumbnail: string;
   max_watched_percent: number;
   max_watched_seconds: number;
+  max_page_seconds: number;      // heartbeat-based: total time on page
   completed: boolean;
   play_count: number;
   last_event_at: string | null;
+}
+
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}m ${s}s`;
 }
 
 interface Props {
@@ -111,13 +119,14 @@ export default function MySharesView({ isAdmin, authHeaders, onBack }: Props) {
 
         {!loading && shares && shares.length > 0 && (
           <div className="ms-table">
-            <div className="ms-row ms-row-head">
+            <div className={`ms-row ms-row-head${scope === "org" ? " org-wide" : ""}`}>
               <div></div>
               <div>Testimonial</div>
               {scope === "org" && <div>Sent by</div>}
-              <div>Sent</div>
-              <div title="Number of times the link was opened">Clicks</div>
-              <div title="Furthest point reached in the video by any viewer">Max watched</div>
+              <div>Link generated</div>
+              <div title="Number of times the link was opened (excludes your own self-views)">Opens</div>
+              <div title="Total time the visitor spent on the page (independent of video play)">Time on page</div>
+              <div title="Furthest point reached in the video by any viewer">% of video watched</div>
               <div></div>
             </div>
             {shares.map((s) => {
@@ -128,7 +137,7 @@ export default function MySharesView({ isAdmin, authHeaders, onBack }: Props) {
                 s.max_watched_percent >= 25 ? "var(--amber)" :
                 s.max_watched_percent > 0 ? "var(--t3)" : "var(--t4)";
               return (
-                <div className="ms-row" key={s.id}>
+                <div className={`ms-row${scope === "org" ? " org-wide" : ""}`} key={s.id}>
                   <div className="ms-thumb">
                     {s.asset_thumbnail
                       ? <img src={s.asset_thumbnail} alt={s.asset_headline}/>
@@ -143,8 +152,13 @@ export default function MySharesView({ isAdmin, authHeaders, onBack }: Props) {
                   )}
                   <div className="ms-when">{timeAgo(s.created_at)}</div>
                   <div className="ms-clicks">
-                    <span className="ms-click-num">{s.click_count}</span>
-                    {s.last_clicked_at && <span className="ms-click-when">last {timeAgo(s.last_clicked_at)}</span>}
+                    <span className="ms-click-num">{s.open_count}</span>
+                    {s.last_event_at && s.open_count > 0 && (
+                      <span className="ms-click-when">last {timeAgo(s.last_event_at)}</span>
+                    )}
+                  </div>
+                  <div className="ms-page">
+                    {s.max_page_seconds > 0 ? formatDuration(s.max_page_seconds) : <span style={{color:"var(--t4)"}}>—</span>}
                   </div>
                   <div className="ms-watched">
                     <div className="ms-watched-bar">
@@ -186,7 +200,9 @@ const css = `
 .ms-empty{padding:48px;text-align:center;color:var(--t3);background:#fff;border:1px solid var(--border);border-radius:var(--r2);}
 
 .ms-table{background:#fff;border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;}
-.ms-row{display:grid;grid-template-columns:80px minmax(220px,2.4fr) 90px 100px 200px 100px;gap:16px;padding:12px 16px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;}
+.ms-row{display:grid;grid-template-columns:80px minmax(220px,2.4fr) 90px 90px 90px 180px 100px;gap:14px;padding:12px 16px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;}
+.ms-row.org-wide{grid-template-columns:80px minmax(180px,2fr) 130px 90px 90px 90px 170px 100px;}
+.ms-page{font-size:12px;color:var(--t2);font-weight:500;}
 .ms-row.ms-row-head{padding:11px 16px;background:var(--bg2);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);}
 .ms-row:last-child{border-bottom:none;}
 .ms-row:hover:not(.ms-row-head){background:var(--bg2);}

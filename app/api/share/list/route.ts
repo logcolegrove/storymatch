@@ -40,6 +40,8 @@ interface EventRow {
   event_type: string;
   watched_seconds: number | null;
   watched_percent: number | null;
+  page_seconds: number | null;
+  is_self: boolean | null;
   created_at: string;
 }
 
@@ -70,30 +72,38 @@ export async function GET(req: NextRequest) {
   const shareIds = shareRows.map((s) => s.id);
   const { data: events } = await supabaseAdmin
     .from("share_events")
-    .select("share_id, event_type, watched_seconds, watched_percent, created_at")
+    .select("share_id, event_type, watched_seconds, watched_percent, page_seconds, is_self, created_at")
     .in("share_id", shareIds);
   const eventRows = (events || []) as EventRow[];
 
-  // Aggregate
+  // Aggregate. Self-views (sender opening their own link) are excluded from
+  // every metric so the dashboard reflects real prospect engagement only.
   const byShare = new Map<string, {
     maxPercent: number;
     maxSeconds: number;
+    maxPageSeconds: number;
     completed: boolean;
     plays: number;
+    opens: number;
     lastEventAt: string | null;
   }>();
   for (const e of eventRows) {
+    if (e.is_self) continue;
     const cur = byShare.get(e.share_id) || {
       maxPercent: 0,
       maxSeconds: 0,
+      maxPageSeconds: 0,
       completed: false,
       plays: 0,
+      opens: 0,
       lastEventAt: null,
     };
     if (e.watched_percent != null) cur.maxPercent = Math.max(cur.maxPercent, e.watched_percent);
     if (e.watched_seconds != null) cur.maxSeconds = Math.max(cur.maxSeconds, e.watched_seconds);
+    if (e.page_seconds != null) cur.maxPageSeconds = Math.max(cur.maxPageSeconds, e.page_seconds);
     if (e.event_type === "complete") cur.completed = true;
     if (e.event_type === "play") cur.plays += 1;
+    if (e.event_type === "click") cur.opens += 1;
     if (!cur.lastEventAt || e.created_at > cur.lastEventAt) cur.lastEventAt = e.created_at;
     byShare.set(e.share_id, cur);
   }
@@ -138,13 +148,16 @@ export async function GET(req: NextRequest) {
       sender_email: orgWide ? senderEmailMap.get(s.sender_user_id) || null : null,
       recipient_label: s.recipient_label,
       created_at: s.created_at,
-      click_count: s.click_count,
+      // Computed from non-self events for accuracy. (share_links.click_count
+      // is also kept in sync but is the denormalized version.)
+      open_count: agg?.opens ?? 0,
       last_clicked_at: s.last_clicked_at,
       asset_headline: asset?.headline || "",
       asset_company: asset?.company || "",
       asset_thumbnail: asset?.thumbnail || "",
       max_watched_percent: agg?.maxPercent ?? 0,
       max_watched_seconds: agg?.maxSeconds ?? 0,
+      max_page_seconds: agg?.maxPageSeconds ?? 0,
       completed: agg?.completed ?? false,
       play_count: agg?.plays ?? 0,
       last_event_at: agg?.lastEventAt ?? null,

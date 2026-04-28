@@ -52,7 +52,7 @@ export default async function SharePage({
   // 1. Look up the share link
   const { data: shareLink } = await supabaseAdmin
     .from("share_links")
-    .select("id, asset_id, sender_user_id, click_count")
+    .select("id, asset_id, sender_user_id, click_count, sender_ip_hash")
     .eq("id", id)
     .maybeSingle();
 
@@ -69,7 +69,10 @@ export default async function SharePage({
 
   if (!asset) notFound();
 
-  // 3. Record a click event (fire-and-forget — don't block render on it)
+  // 3. Record a click event (fire-and-forget — don't block render on it).
+  // If the visitor's IP hash matches the share's sender_ip_hash, mark the
+  // event as is_self so it gets excluded from engagement metrics. Reps
+  // testing their own links shouldn't pollute the dashboard.
   try {
     const h = await headers();
     const ip =
@@ -78,23 +81,32 @@ export default async function SharePage({
       "unknown";
     const ua = (h.get("user-agent") || "").slice(0, 500);
     const ipHash = hashIp(ip);
+    const isSelf = !!shareLink.sender_ip_hash && shareLink.sender_ip_hash === ipHash;
 
-    // Insert event row + bump the link counter in parallel
-    await Promise.all([
+    // Always log the event, but only bump the public click_count counter for
+    // non-self views. (We aggregate from share_events anyway in /api/share/list,
+    // but keep the denorm counter useful too.)
+    const ops: Promise<unknown>[] = [
       supabaseAdmin.from("share_events").insert({
         share_id: shareLink.id,
         event_type: "click",
         ip_hash: ipHash,
         user_agent: ua,
+        is_self: isSelf,
       }),
-      supabaseAdmin
-        .from("share_links")
-        .update({
-          click_count: (shareLink.click_count || 0) + 1,
-          last_clicked_at: new Date().toISOString(),
-        })
-        .eq("id", shareLink.id),
-    ]);
+    ];
+    if (!isSelf) {
+      ops.push(
+        supabaseAdmin
+          .from("share_links")
+          .update({
+            click_count: (shareLink.click_count || 0) + 1,
+            last_clicked_at: new Date().toISOString(),
+          })
+          .eq("id", shareLink.id)
+      );
+    }
+    await Promise.all(ops);
   } catch (e) {
     // Tracking failure should never block the prospect from seeing the testimonial
     console.error("share click tracking failed:", e);
