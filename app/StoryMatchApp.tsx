@@ -367,7 +367,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    Avoids the heavy solid-purple "marketing CTA" look in this admin context. */
 .ssr-btn.primary{background:#fff;color:var(--accent);border-color:var(--accentL);}
 .ssr-btn.primary:hover{background:var(--accentLL);border-color:var(--accent);}
-/* Bottom row: Mark all reviewed (left) + Completely resync (right). */
+/* Bottom row: Mark all reviewed (left) + Resync all Vimeo properties (right). */
 .ssr-foot-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:4px;}
 .ssr-mark-reviewed-link,.ssr-pull-all-link{background:none;border:none;font-family:var(--font);font-size:10.5px;font-weight:500;cursor:pointer;text-decoration:underline;padding:4px 0;}
 .ssr-mark-reviewed-link{color:var(--t3);text-decoration-color:var(--border2);}
@@ -1882,6 +1882,11 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                     onUpdateSource({ id: s.id, pendingSyncReport: updated });
                   };
                   const markAllReviewed = () => {
+                    if (!confirm(
+                      "Are you sure? Import history will be permanently erased.\n\n" +
+                      "This clears every entry in the sync report — imported, drifted, archived, and previously-deleted. " +
+                      "You won't be able to see when items came in. Continue?"
+                    )) return;
                     onUpdateSource({ id: s.id, pendingSyncReport: null });
                     setExpandedReportId(null);
                   };
@@ -1890,7 +1895,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                   // this overwrites manual StoryMatch edits the admin made.
                   const pullAllFromVimeo = () => {
                     if (!confirm(
-                      "Completely resync all Vimeo properties for this source?\n\n" +
+                      "Resync all Vimeo properties for this source?\n\n" +
                       "This will overwrite the title and description on every drifted asset with Vimeo's current values, " +
                       "and bring back every previously-deleted asset that's still in Vimeo.\n\n" +
                       "Any intentional StoryMatch edits to those fields will be lost. Continue?"
@@ -2070,7 +2075,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                                 onClick={pullAllFromVimeo}
                                 title="Overwrite all drifted and previously-deleted items with Vimeo's current values. Asks for confirmation."
                               >
-                                Completely resync all Vimeo properties
+                                Resync all Vimeo properties
                               </button>
                             )}
                           </div>
