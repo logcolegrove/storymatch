@@ -2438,6 +2438,25 @@ export default function App(){
   // The displayAssets filter hides status="deleted" from every view, so
   // visually it's the same as a hard delete from the user's perspective.
   const deleteAssetInline=async(id: string)=>{
+    // If the asset's source is a single-video (vm-video) source, deleting
+    // the asset means the source has nothing to track — remove the whole
+    // source row, which cascades a hard-delete of this asset. (Showcase
+    // sources keep the soft-delete behavior so a future sync can offer to
+    // restore the asset via the "previously deleted, still in Vimeo" flow.)
+    const asset=assets.find(a=>a.id===id);
+    const source=asset?.sourceId?sources.find(s=>s.id===asset.sourceId):null;
+    if(source && source.type==="vm-video"){
+      setAssets(prev=>prev.filter(a=>a.id!==id));
+      setSources(prev=>prev.filter(s=>s.id!==source.id));
+      try{
+        await fetch(`/api/sources?id=${encodeURIComponent(source.id)}`,{
+          method:"DELETE",
+          headers:await authHeaders(),
+        });
+      }catch(e){console.error("Single-video source delete failed",e);}
+      return;
+    }
+    // Soft-delete for everything else (showcase-attached or standalone assets)
     setAssets(prev=>prev.map(a=>a.id===id?{...a,status:"deleted"}:a));
     try{
       await fetch("/api/assets",{
@@ -2531,11 +2550,30 @@ export default function App(){
   };
   const bulkDelete=async()=>{
     const ids=Array.from(selectedIds);
-    if(!confirm(`Delete ${ids.length} ${ids.length===1?"asset":"assets"}? They'll be hidden from every view, but kept in the database so a future sync can offer to restore them if their Vimeo source still exists.`))return;
-    // Soft-delete: mark status="deleted" rather than removing the row
-    setAssets(prev=>prev.map(a=>selectedIds.has(a.id)?{...a,status:"deleted"}:a));
-    setToast(`${ids.length} deleted`);setTimeout(()=>setToast(null),1800);
+    if(!confirm(`Delete ${ids.length} ${ids.length===1?"asset":"assets"}? Showcase-imported assets are hidden from view but kept so a future sync can offer to restore them. Single-video imports are removed entirely along with their source.`))return;
+    // Partition selected assets: single-video-source ones get hard-deleted
+    // along with their source row; everything else gets soft-deleted.
+    const singleVideoSourceIds=new Set<string>();
+    const softDeleteIds: string[] = [];
     for(const id of ids){
+      const asset=assets.find(a=>a.id===id);
+      const source=asset?.sourceId?sources.find(s=>s.id===asset.sourceId):null;
+      if(source && source.type==="vm-video") singleVideoSourceIds.add(source.id);
+      else softDeleteIds.push(id);
+    }
+    // Optimistic UI: drop hard-deleted assets entirely; mark soft-deleted as such
+    setAssets(prev=>prev
+      .filter(a=>!(a.sourceId && singleVideoSourceIds.has(a.sourceId)))
+      .map(a=>softDeleteIds.includes(a.id)?{...a,status:"deleted"}:a));
+    setSources(prev=>prev.filter(s=>!singleVideoSourceIds.has(s.id)));
+    setToast(`${ids.length} deleted`);setTimeout(()=>setToast(null),1800);
+    // Issue server requests
+    for(const sourceId of singleVideoSourceIds){
+      try{
+        await fetch(`/api/sources?id=${encodeURIComponent(sourceId)}`,{method:"DELETE",headers:await authHeaders()});
+      }catch(e){console.error("Single-video source delete failed",e);}
+    }
+    for(const id of softDeleteIds){
       try{
         await fetch("/api/assets",{method:"PUT",headers:{"Content-Type":"application/json",...(await authHeaders())},body:JSON.stringify({id,status:"deleted"})});
       }catch(e){console.error(e);}
