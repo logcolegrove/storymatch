@@ -1,23 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { hashIp, isBotUserAgent } from "@/lib/share-tracking";
 
 // POST /api/share/[id]/event
 // Public endpoint (no auth) — the share page itself posts engagement events
 // here as the prospect interacts with the embedded video.
 //
 // Body: {
-//   event_type: 'play' | 'progress' | 'complete',
+//   event_type: 'play' | 'progress' | 'complete' | 'heartbeat',
 //   watched_seconds?: number,
-//   watched_percent?: number  // 0..100
+//   watched_percent?: number,  // 0..100
+//   page_seconds?: number,
+//   visitor_id?: string  // from sm_visitor_id cookie
 // }
-
-function hashIp(ip: string): string {
-  return createHash("sha256")
-    .update(ip + "|storymatch-share")
-    .digest("hex")
-    .slice(0, 16);
-}
 
 // 'heartbeat' is the time-on-page event sent every ~15s and on tab close;
 // it lets us track engagement from visitors who scroll/read but never
@@ -46,6 +41,7 @@ export async function POST(
     watched_seconds?: number;
     watched_percent?: number;
     page_seconds?: number;
+    visitor_id?: string;
   };
   try {
     body = await req.json();
@@ -66,8 +62,16 @@ export async function POST(
     req.headers.get("x-real-ip") ||
     "unknown";
   const ua = (req.headers.get("user-agent") || "").slice(0, 500);
+
+  // Filter bot-like user agents (link-preview scanners, email security
+  // gateways, etc.). Return 200 so the bot doesn't retry.
+  if (isBotUserAgent(ua)) {
+    return NextResponse.json({ ok: true, skipped: "bot" });
+  }
+
   const ipHash = hashIp(ip);
   const isSelf = !!shareLink.sender_ip_hash && shareLink.sender_ip_hash === ipHash;
+  const visitorId = typeof body.visitor_id === "string" ? body.visitor_id.slice(0, 64) : null;
 
   const watchedSeconds =
     typeof body.watched_seconds === "number" && Number.isFinite(body.watched_seconds)
@@ -91,6 +95,7 @@ export async function POST(
     watched_percent: watchedPercent,
     page_seconds: pageSeconds,
     is_self: isSelf,
+    visitor_id: visitorId,
   });
 
   if (error) {

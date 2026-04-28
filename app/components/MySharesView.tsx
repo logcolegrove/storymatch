@@ -8,6 +8,16 @@
 
 import { useEffect, useState } from "react";
 
+interface VisitorSummary {
+  visitor_id: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  max_watched_percent: number;
+  max_page_seconds: number;
+  completed: boolean;
+  played: boolean;
+}
+
 interface ShareSummary {
   id: string;
   asset_id: string;
@@ -26,6 +36,8 @@ interface ShareSummary {
   completed: boolean;
   play_count: number;
   last_event_at: string | null;
+  visitor_count: number;
+  visitors: VisitorSummary[];
 }
 
 function formatDuration(sec: number): string {
@@ -65,6 +77,7 @@ export default function MySharesView({ isAdmin, authHeaders, onBack }: Props) {
   const [scope, setScope] = useState<"self" | "org">("self");
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,45 +149,105 @@ export default function MySharesView({ isAdmin, authHeaders, onBack }: Props) {
                 s.max_watched_percent >= 75 ? "var(--green)" :
                 s.max_watched_percent >= 25 ? "var(--amber)" :
                 s.max_watched_percent > 0 ? "var(--t3)" : "var(--t4)";
+              // Visitor count > 1 means the link was likely forwarded.
+              // Filter out the "(unknown)" bucket from old pre-cookie events
+              // when counting "real" distinct visitors.
+              const realVisitors = s.visitors.filter(v => v.visitor_id !== "(unknown)");
+              const visitorCount = realVisitors.length;
+              const isExpanded = expandedId === s.id;
+              const canExpand = visitorCount > 0;
               return (
-                <div className={`ms-row${scope === "org" ? " org-wide" : ""}`} key={s.id}>
-                  <div className="ms-thumb">
-                    {s.asset_thumbnail
-                      ? <img src={s.asset_thumbnail} alt={s.asset_headline}/>
-                      : <div className="ms-thumb-placeholder"/>}
-                  </div>
-                  <div className="ms-title-cell">
-                    <div className="ms-title-h">{s.asset_headline || "Untitled"}</div>
-                    <div className="ms-title-c">{s.asset_company || "—"}</div>
-                  </div>
-                  {scope === "org" && (
-                    <div className="ms-sender">{s.sender_email || "—"}</div>
-                  )}
-                  <div className="ms-when">{timeAgo(s.created_at)}</div>
-                  <div className="ms-clicks">
-                    <span className="ms-click-num">{s.open_count}</span>
-                    {s.last_event_at && s.open_count > 0 && (
-                      <span className="ms-click-when">last {timeAgo(s.last_event_at)}</span>
+                <div key={s.id} className="ms-share-block">
+                  <div className={`ms-row${scope === "org" ? " org-wide" : ""}${isExpanded ? " expanded" : ""}`}>
+                    <div className="ms-thumb">
+                      {s.asset_thumbnail
+                        ? <img src={s.asset_thumbnail} alt={s.asset_headline}/>
+                        : <div className="ms-thumb-placeholder"/>}
+                    </div>
+                    <div className="ms-title-cell">
+                      <div className="ms-title-h">
+                        {s.asset_headline || "Untitled"}
+                        {visitorCount > 1 && (
+                          <span className="ms-forward-badge" title="This link was opened by multiple distinct viewers — likely forwarded">
+                            ↗ Forwarded to {visitorCount - 1} other{visitorCount - 1 === 1 ? "" : "s"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="ms-title-c">{s.asset_company || "—"}</div>
+                    </div>
+                    {scope === "org" && (
+                      <div className="ms-sender">{s.sender_email || "—"}</div>
                     )}
-                  </div>
-                  <div className="ms-page">
-                    {s.max_page_seconds > 0 ? formatDuration(s.max_page_seconds) : <span style={{color:"var(--t4)"}}>—</span>}
-                  </div>
-                  <div className="ms-watched">
-                    <div className="ms-watched-bar">
-                      <div className="ms-watched-fill" style={{ width: `${Math.min(100, s.max_watched_percent)}%`, background: watchedColor }}/>
+                    <div className="ms-when">{timeAgo(s.created_at)}</div>
+                    <div className="ms-clicks">
+                      <span className="ms-click-num">{s.open_count}</span>
+                      {s.last_event_at && s.open_count > 0 && (
+                        <span className="ms-click-when">last {timeAgo(s.last_event_at)}</span>
+                      )}
                     </div>
-                    <div className="ms-watched-meta" style={{ color: watchedColor }}>
-                      {s.completed ? "✓ Watched all" : s.max_watched_percent > 0 ? `${s.max_watched_percent}%` : "Not played"}
+                    <div className="ms-page">
+                      {s.max_page_seconds > 0 ? formatDuration(s.max_page_seconds) : <span style={{color:"var(--t4)"}}>—</span>}
+                    </div>
+                    <div className="ms-watched">
+                      <div className="ms-watched-bar">
+                        <div className="ms-watched-fill" style={{ width: `${Math.min(100, s.max_watched_percent)}%`, background: watchedColor }}/>
+                      </div>
+                      <div className="ms-watched-meta" style={{ color: watchedColor }}>
+                        {s.completed ? "✓ Watched all" : s.max_watched_percent > 0 ? `${s.max_watched_percent}%` : "Not played"}
+                      </div>
+                    </div>
+                    <div className="ms-actions">
+                      {canExpand && (
+                        <button
+                          className="ms-mini-btn ms-expand-btn"
+                          onClick={() => setExpandedId(isExpanded ? null : s.id)}
+                          title="Show per-visitor breakdown"
+                        >{isExpanded ? "▴" : "▾"}</button>
+                      )}
+                      <button
+                        className="ms-mini-btn"
+                        onClick={() => { copyToClipboard(url); showToast("Link copied!"); }}
+                        title="Copy share link to clipboard"
+                      >Copy link</button>
                     </div>
                   </div>
-                  <div className="ms-actions">
-                    <button
-                      className="ms-mini-btn"
-                      onClick={() => { copyToClipboard(url); showToast("Link copied!"); }}
-                      title="Copy share link to clipboard"
-                    >Copy link</button>
-                  </div>
+                  {isExpanded && (
+                    <div className="ms-visitors">
+                      <div className="ms-visitors-head">
+                        Per-visitor breakdown
+                        {visitorCount > 1 && <span className="ms-visitors-note">  ·  This link reached {visitorCount} distinct {visitorCount === 1 ? "viewer" : "viewers"}.</span>}
+                      </div>
+                      {realVisitors.length === 0 ? (
+                        <div className="ms-visitors-empty">No viewer data captured yet for this link.</div>
+                      ) : (
+                        <div className="ms-visitor-list">
+                          {realVisitors.map((v, i) => {
+                            const watchedColor =
+                              v.completed ? "var(--green)" :
+                              v.max_watched_percent >= 75 ? "var(--green)" :
+                              v.max_watched_percent >= 25 ? "var(--amber)" :
+                              v.max_watched_percent > 0 ? "var(--t3)" : "var(--t4)";
+                            return (
+                              <div className="ms-visitor" key={v.visitor_id}>
+                                <div className="ms-visitor-label">
+                                  <strong>Visitor {i + 1}</strong>
+                                  <span className="ms-visitor-when">  ·  first opened {timeAgo(v.first_seen_at)}</span>
+                                </div>
+                                <div className="ms-visitor-stats">
+                                  <span className="ms-visitor-stat">
+                                    Time on page: <strong>{v.max_page_seconds > 0 ? formatDuration(v.max_page_seconds) : "—"}</strong>
+                                  </span>
+                                  <span className="ms-visitor-stat" style={{ color: watchedColor }}>
+                                    {v.completed ? "✓ Watched all" : v.played ? `Watched ${v.max_watched_percent}%` : "Did not play"}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -231,4 +304,24 @@ const css = `
 .ms-mini-btn:hover{background:var(--accentLL);}
 
 .ms-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1f;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.2);z-index:100;}
+
+.ms-share-block{border-bottom:1px solid var(--border);}
+.ms-share-block:last-child{border-bottom:none;}
+.ms-share-block .ms-row{border-bottom:none;}
+.ms-row.expanded{background:var(--bg2);}
+
+.ms-forward-badge{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:700;background:var(--accentLL);color:var(--accent);border:1px solid var(--accentL);text-transform:none;letter-spacing:0;vertical-align:middle;}
+
+.ms-expand-btn{padding:4px 8px;font-size:10px;color:var(--t3);min-width:28px;}
+
+.ms-visitors{padding:12px 16px 18px 110px;background:var(--bg2);border-top:1px dashed var(--border);}
+.ms-visitors-head{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);margin-bottom:10px;}
+.ms-visitors-note{text-transform:none;letter-spacing:0;font-weight:500;color:var(--t2);}
+.ms-visitors-empty{font-size:12px;color:var(--t3);font-style:italic;}
+.ms-visitor-list{display:flex;flex-direction:column;gap:8px;}
+.ms-visitor{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;background:#fff;border:1px solid var(--border);border-radius:7px;padding:9px 14px;font-size:12.5px;}
+.ms-visitor-label strong{color:var(--t1);font-weight:600;}
+.ms-visitor-when{font-size:11.5px;color:var(--t3);}
+.ms-visitor-stats{display:flex;gap:18px;font-size:12px;color:var(--t2);}
+.ms-visitor-stat strong{color:var(--t1);font-weight:600;}
 `;

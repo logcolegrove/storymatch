@@ -42,7 +42,20 @@ interface EventRow {
   watched_percent: number | null;
   page_seconds: number | null;
   is_self: boolean | null;
+  visitor_id: string | null;
   created_at: string;
+}
+
+// Per-visitor engagement breakdown — used to detect link forwarding by
+// counting distinct visitors per share.
+interface VisitorSummary {
+  visitor_id: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  max_watched_percent: number;
+  max_page_seconds: number;
+  completed: boolean;
+  played: boolean;
 }
 
 export async function GET(req: NextRequest) {
@@ -72,12 +85,15 @@ export async function GET(req: NextRequest) {
   const shareIds = shareRows.map((s) => s.id);
   const { data: events } = await supabaseAdmin
     .from("share_events")
-    .select("share_id, event_type, watched_seconds, watched_percent, page_seconds, is_self, created_at")
+    .select("share_id, event_type, watched_seconds, watched_percent, page_seconds, is_self, visitor_id, created_at")
     .in("share_id", shareIds);
   const eventRows = (events || []) as EventRow[];
 
   // Aggregate. Self-views (sender opening their own link) are excluded from
   // every metric so the dashboard reflects real prospect engagement only.
+  // We aggregate at TWO grains: per-share (overall) and per-(share,visitor)
+  // (so the dashboard can show whether a link was forwarded to multiple
+  // people and what each person did).
   const byShare = new Map<string, {
     maxPercent: number;
     maxSeconds: number;
@@ -87,8 +103,12 @@ export async function GET(req: NextRequest) {
     opens: number;
     lastEventAt: string | null;
   }>();
+  const byShareVisitor = new Map<string, Map<string, VisitorSummary>>();
+
   for (const e of eventRows) {
     if (e.is_self) continue;
+
+    // Share-level aggregation
     const cur = byShare.get(e.share_id) || {
       maxPercent: 0,
       maxSeconds: 0,
@@ -106,6 +126,32 @@ export async function GET(req: NextRequest) {
     if (e.event_type === "click") cur.opens += 1;
     if (!cur.lastEventAt || e.created_at > cur.lastEventAt) cur.lastEventAt = e.created_at;
     byShare.set(e.share_id, cur);
+
+    // Per-visitor aggregation. Only events with a visitor_id contribute to
+    // the per-visitor breakdown; old rows from before the cookie was added
+    // get bucketed under "(unknown)".
+    const visitorKey = e.visitor_id || "(unknown)";
+    let visitorMap = byShareVisitor.get(e.share_id);
+    if (!visitorMap) {
+      visitorMap = new Map();
+      byShareVisitor.set(e.share_id, visitorMap);
+    }
+    const v = visitorMap.get(visitorKey) || {
+      visitor_id: visitorKey,
+      first_seen_at: e.created_at,
+      last_seen_at: e.created_at,
+      max_watched_percent: 0,
+      max_page_seconds: 0,
+      completed: false,
+      played: false,
+    };
+    if (e.created_at < v.first_seen_at) v.first_seen_at = e.created_at;
+    if (e.created_at > v.last_seen_at) v.last_seen_at = e.created_at;
+    if (e.watched_percent != null) v.max_watched_percent = Math.max(v.max_watched_percent, e.watched_percent);
+    if (e.page_seconds != null) v.max_page_seconds = Math.max(v.max_page_seconds, e.page_seconds);
+    if (e.event_type === "complete") v.completed = true;
+    if (e.event_type === "play") v.played = true;
+    visitorMap.set(visitorKey, v);
   }
 
   // Pull asset titles + thumbnails in one round-trip
@@ -141,6 +187,10 @@ export async function GET(req: NextRequest) {
   const result = shareRows.map((s) => {
     const agg = byShare.get(s.id);
     const asset = assetMap.get(s.asset_id);
+    const visitorMap = byShareVisitor.get(s.id);
+    const visitors: VisitorSummary[] = visitorMap
+      ? Array.from(visitorMap.values()).sort((a, b) => a.first_seen_at.localeCompare(b.first_seen_at))
+      : [];
     return {
       id: s.id,
       asset_id: s.asset_id,
@@ -161,6 +211,9 @@ export async function GET(req: NextRequest) {
       completed: agg?.completed ?? false,
       play_count: agg?.plays ?? 0,
       last_event_at: agg?.lastEventAt ?? null,
+      // Per-visitor breakdown — count > 1 means link was forwarded
+      visitor_count: visitors.length,
+      visitors,
     };
   });
 

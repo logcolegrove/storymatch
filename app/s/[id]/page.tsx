@@ -9,9 +9,9 @@
 // (play / progress / completion) via Vimeo's Player JS API.
 
 import { notFound } from "next/navigation";
-import { headers } from "next/headers";
-import { createHash } from "crypto";
+import { headers, cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { hashIp, isBotUserAgent } from "@/lib/share-tracking";
 import SharePageClient from "./SharePageClient";
 
 interface Asset {
@@ -31,15 +31,6 @@ interface Asset {
   company_size: string | null;
   transcript: string | null;
   status: string | null;
-}
-
-function hashIp(ip: string): string {
-  // Hash with a server-side suffix so the hash isn't a trivial rainbow-table
-  // lookup. Keep it short — we only use it for rough de-dupe of repeat visits.
-  return createHash("sha256")
-    .update(ip + "|storymatch-share")
-    .digest("hex")
-    .slice(0, 16);
 }
 
 export default async function SharePage({
@@ -69,10 +60,14 @@ export default async function SharePage({
 
   if (!asset) notFound();
 
-  // 3. Record a click event (fire-and-forget — don't block render on it).
-  // If the visitor's IP hash matches the share's sender_ip_hash, mark the
-  // event as is_self so it gets excluded from engagement metrics. Reps
-  // testing their own links shouldn't pollute the dashboard.
+  // 3. Resolve the visitor identity. The middleware sets `sm_visitor_id` on
+  // first visit; we read it here so this very first click event carries it
+  // and so the client can include it in subsequent event POSTs.
+  const cookieStore = await cookies();
+  const visitorId = cookieStore.get("sm_visitor_id")?.value || null;
+
+  // 4. Record a click event — but skip bot-like user agents (link-preview
+  // scanners, email security gateways, etc.) so the dashboard isn't polluted.
   try {
     const h = await headers();
     const ip =
@@ -82,30 +77,30 @@ export default async function SharePage({
     const ua = (h.get("user-agent") || "").slice(0, 500);
     const ipHash = hashIp(ip);
     const isSelf = !!shareLink.sender_ip_hash && shareLink.sender_ip_hash === ipHash;
+    const isBot = isBotUserAgent(ua);
 
-    // Always log the event, but only bump the public click_count counter for
-    // non-self views. (We aggregate from share_events anyway in /api/share/list,
-    // but keep the denorm counter useful too.)
-    await supabaseAdmin.from("share_events").insert({
-      share_id: shareLink.id,
-      event_type: "click",
-      ip_hash: ipHash,
-      user_agent: ua,
-      is_self: isSelf,
-    });
-    if (!isSelf) {
-      await supabaseAdmin
-        .from("share_links")
-        .update({
-          click_count: (shareLink.click_count || 0) + 1,
-          last_clicked_at: new Date().toISOString(),
-        })
-        .eq("id", shareLink.id);
+    if (!isBot) {
+      await supabaseAdmin.from("share_events").insert({
+        share_id: shareLink.id,
+        event_type: "click",
+        ip_hash: ipHash,
+        user_agent: ua,
+        is_self: isSelf,
+        visitor_id: visitorId,
+      });
+      if (!isSelf) {
+        await supabaseAdmin
+          .from("share_links")
+          .update({
+            click_count: (shareLink.click_count || 0) + 1,
+            last_clicked_at: new Date().toISOString(),
+          })
+          .eq("id", shareLink.id);
+      }
     }
   } catch (e) {
-    // Tracking failure should never block the prospect from seeing the testimonial
     console.error("share click tracking failed:", e);
   }
 
-  return <SharePageClient asset={asset} shareId={shareLink.id} />;
+  return <SharePageClient asset={asset} shareId={shareLink.id} visitorId={visitorId} />;
 }

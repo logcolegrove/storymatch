@@ -75,8 +75,10 @@ interface Props {
   // Public share page only — when set, attaches Vimeo Player JS event
   // listeners and posts engagement events (play / progress / complete) to
   // /api/share/[shareId]/event so the sender can see if the prospect
-  // actually watched the video.
-  shareTracking?: { shareId: string };
+  // actually watched the video. visitorId comes from the sm_visitor_id
+  // cookie set by middleware; it lets us distinguish multiple distinct
+  // viewers of the same share link (i.e. detect forwards).
+  shareTracking?: { shareId: string; visitorId: string | null };
 }
 
 export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSelect, shareTracking }: Props) {
@@ -119,13 +121,18 @@ export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSe
   useEffect(() => {
     if (!shareTracking) return;
     const shareId = shareTracking.shareId;
+    const visitorId = shareTracking.visitorId;
     const startAt = Date.now();
 
     const sendHeartbeat = (useBeacon = false) => {
       const seconds = Math.round((Date.now() - startAt) / 1000);
       if (seconds < 1) return;
       const url = `/api/share/${shareId}/event`;
-      const body = JSON.stringify({ event_type: "heartbeat", page_seconds: seconds });
+      const body = JSON.stringify({
+        event_type: "heartbeat",
+        page_seconds: seconds,
+        visitor_id: visitorId,
+      });
       if (useBeacon && typeof navigator.sendBeacon === "function") {
         navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
       } else {
@@ -159,12 +166,16 @@ export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSe
   useEffect(() => {
     if (!shareTracking || !vid || vid.p !== "vm") return;
     const shareId = shareTracking.shareId;
+    const visitorId = shareTracking.visitorId;
 
     let player: { on: (e: string, fn: (d?: { seconds?: number; percent?: number }) => void) => void; destroy?: () => void } | null = null;
     let cancelled = false;
 
     const post = (eventType: "play" | "progress" | "complete", seconds?: number, percentZeroToOne?: number) => {
-      const body: { event_type: string; watched_seconds?: number; watched_percent?: number } = { event_type: eventType };
+      const body: { event_type: string; watched_seconds?: number; watched_percent?: number; visitor_id?: string | null } = {
+        event_type: eventType,
+        visitor_id: visitorId,
+      };
       if (typeof seconds === "number") body.watched_seconds = Math.round(seconds);
       if (typeof percentZeroToOne === "number") body.watched_percent = Math.round(percentZeroToOne * 100);
       fetch(`/api/share/${shareId}/event`, {

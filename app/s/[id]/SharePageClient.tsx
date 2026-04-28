@@ -48,13 +48,21 @@ function toAssetDetail(s: ServerAsset): AssetDetailAsset {
   };
 }
 
-export default function SharePageClient({ asset, shareId }: { asset: ServerAsset; shareId: string }) {
+export default function SharePageClient({
+  asset,
+  shareId,
+  visitorId,
+}: {
+  asset: ServerAsset;
+  shareId: string;
+  visitorId: string | null;
+}) {
   return (
     <div style={{ minHeight: "100vh", background: "#fafafa" }}>
       <AssetDetail
         asset={toAssetDetail(asset)}
         publicMode
-        shareTracking={{ shareId }}
+        shareTracking={{ shareId, visitorId }}
       />
     </div>
   );
