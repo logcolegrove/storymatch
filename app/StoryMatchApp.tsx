@@ -328,7 +328,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .src-sync-report-chev{font-size:10px;color:var(--t4);margin-left:8px;}
 .src-sync-report-body{margin-top:8px;display:flex;flex-direction:column;gap:10px;}
 .ssr-section{background:var(--bg2);border-radius:7px;padding:8px 9px;}
-.ssr-section-head{font-size:10.5px;font-weight:700;color:var(--t2);margin-bottom:6px;letter-spacing:.2px;}
+.ssr-section-head{font-size:11px;font-weight:600;color:var(--t1);margin-bottom:6px;letter-spacing:.2px;display:flex;align-items:center;gap:6px;}
+.ssr-count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;}
 .ssr-section-help{font-size:10.5px;color:var(--t3);margin-bottom:7px;line-height:1.4;}
 .ssr-row{padding:6px 0;border-top:1px solid var(--border);}
 .ssr-row:first-of-type{border-top:none;padding-top:2px;}
@@ -340,7 +341,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .ssr-btn:hover{background:var(--bg2);color:var(--t1);}
 .ssr-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
 .ssr-btn.primary:hover{background:var(--accent2);}
-.ssr-pull-all{align-self:stretch;padding:7px 10px;font-size:11.5px;display:inline-flex;align-items:center;justify-content:center;gap:5px;}
+/* Bottom-anchored, deliberately subtle. Style as a text link, not a CTA, so
+   admins don't reach for it casually — it overwrites manual edits. */
+.ssr-pull-all-link{align-self:flex-end;background:none;border:none;color:var(--t3);font-family:var(--font);font-size:10.5px;font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-color:var(--border2);padding:6px 0 2px;}
+.ssr-pull-all-link:hover{color:var(--red);text-decoration-color:var(--red);}
 .src-progress{margin-top:10px;padding:10px 12px;background:var(--accentLL);border-radius:7px;border-left:2px solid var(--accent);font-size:11.5px;color:var(--accent);line-height:1.55;}
 .src-progress-step{display:flex;align-items:center;gap:6px;}
 .src-add-form{padding:14px;background:var(--bg);border-radius:10px;border:1px solid var(--border);margin-bottom:14px;}
@@ -1665,9 +1669,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
       previouslyDeleted,
     };
     setSyncReports(prev => ({ ...prev, [source.id]: report }));
-    // Auto-expand the report only if there's something the admin should act on
-    const hasActionable = report.drifted.length || report.archived.length || report.previouslyDeleted.length;
-    if (hasActionable) setExpandedReportId(source.id);
+    // Don't auto-expand — keeps the post-sync UI quiet. Admin clicks "Sync
+    // report ▾" if they want to dig in.
     setSyncingId(null);
   };
 
@@ -1891,11 +1894,16 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                       [s.id]: { ...prev[s.id], [key]: (prev[s.id][key] as Array<{ assetId: string }>).filter(x => x.assetId !== assetId) } as SyncReport,
                     }));
                   };
-                  // Bulk apply Vimeo's values across drift + previously-deleted in one click.
-                  // Removed-from-Vimeo items aren't touched (Vimeo's "answer" for those
-                  // is that they're gone, so leaving them archived IS the Vimeo-as-master
-                  // outcome). Imports already happened during the sync itself.
+                  // Nuclear option — apply Vimeo's current values to everything
+                  // that's drifted or previously-deleted. Confirms first because
+                  // this overwrites manual StoryMatch edits the admin made.
                   const pullAllFromVimeo = () => {
+                    if (!confirm(
+                      "Completely resync all Vimeo properties for this source?\n\n" +
+                      "This will overwrite the title and description on every drifted asset with Vimeo's current values, " +
+                      "and bring back every previously-deleted asset that's still in Vimeo.\n\n" +
+                      "Any intentional StoryMatch edits to those fields will be lost. Continue?"
+                    )) return;
                     const updates: Array<Partial<Asset> & { id: string }> = [];
                     for (const d of r.drifted) {
                       updates.push({
@@ -1932,18 +1940,9 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                       </button>
                       {isOpen && (
                         <div className="src-sync-report-body">
-                          {hasPullable && (
-                            <button
-                              className="ssr-btn primary ssr-pull-all"
-                              onClick={pullAllFromVimeo}
-                              title="Apply Vimeo's current values to every drifted and previously-deleted item"
-                            >
-                              ↻ Pull all from Vimeo
-                            </button>
-                          )}
                           {r.imported.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head">+ Imported ({r.imported.length})</div>
+                              <div className="ssr-section-head"><span className="ssr-count">{r.imported.length}</span> Imported</div>
                               {r.imported.map(i => (
                                 <div key={i.assetId} className="ssr-row compact">
                                   <div className="ssr-row-title">{i.headline}</div>
@@ -1951,9 +1950,31 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                               ))}
                             </div>
                           )}
+                          {r.archived.length > 0 && (
+                            <div className="ssr-section">
+                              <div className="ssr-section-head"><span className="ssr-count">{r.archived.length}</span> Removed from Vimeo</div>
+                              <div className="ssr-section-help">
+                                Auto-archived because they&apos;re no longer in your Vimeo showcase.
+                              </div>
+                              {r.archived.map(a => (
+                                <div key={a.assetId} className="ssr-row">
+                                  <div className="ssr-row-title">{a.headline}</div>
+                                  <div className="ssr-row-actions">
+                                    <button
+                                      className="ssr-btn primary"
+                                      onClick={() => {
+                                        onUpdateAssets([{ id: a.assetId, status: "published", archivedAt: null, archivedReason: null }]);
+                                        removeFromReport("archived", a.assetId);
+                                      }}
+                                    >Restore</button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                           {r.drifted.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head">⚠ Differs from Vimeo ({r.drifted.length})</div>
+                              <div className="ssr-section-head"><span className="ssr-count">{r.drifted.length}</span> One or more fields differ from Vimeo</div>
                               {r.drifted.map(d => (
                                 <div key={d.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{d.headline}</div>
@@ -1978,7 +1999,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                           )}
                           {r.previouslyDeleted.length > 0 && (
                             <div className="ssr-section">
-                              <div className="ssr-section-head">↩ Previously deleted, still in Vimeo ({r.previouslyDeleted.length})</div>
+                              <div className="ssr-section-head"><span className="ssr-count">{r.previouslyDeleted.length}</span> Previously deleted, still in Vimeo</div>
                               <div className="ssr-section-help">
                                 Not auto-imported because you previously deleted them. Resync to bring them back.
                               </div>
@@ -2004,27 +2025,14 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
                               ))}
                             </div>
                           )}
-                          {r.archived.length > 0 && (
-                            <div className="ssr-section">
-                              <div className="ssr-section-head">✗ Removed from Vimeo ({r.archived.length})</div>
-                              <div className="ssr-section-help">
-                                Auto-archived because they&apos;re no longer in your Vimeo showcase.
-                              </div>
-                              {r.archived.map(a => (
-                                <div key={a.assetId} className="ssr-row">
-                                  <div className="ssr-row-title">{a.headline}</div>
-                                  <div className="ssr-row-actions">
-                                    <button
-                                      className="ssr-btn primary"
-                                      onClick={() => {
-                                        onUpdateAssets([{ id: a.assetId, status: "published", archivedAt: null, archivedReason: null }]);
-                                        removeFromReport("archived", a.assetId);
-                                      }}
-                                    >Restore</button>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
+                          {hasPullable && (
+                            <button
+                              className="ssr-pull-all-link"
+                              onClick={pullAllFromVimeo}
+                              title="Overwrite all drifted and previously-deleted items with Vimeo's current values. Asks for confirmation."
+                            >
+                              Completely resync all Vimeo properties
+                            </button>
                           )}
                         </div>
                       )}
