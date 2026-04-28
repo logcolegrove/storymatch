@@ -480,7 +480,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .card-overlay-tag{font-size:11px;color:rgba(255,255,255,.8);font-weight:500;}
 .card-overlay-cta{font-size:11px;color:rgba(255,255,255,.7);font-weight:600;}
 .card-body{padding:12px 14px;}
-.card-co{font-size:13px;font-weight:600;color:var(--t1);display:flex;align-items:center;justify-content:space-between;}
+.card-headline{font-size:13.5px;font-weight:600;color:var(--t1);line-height:1.35;margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.card-co{font-size:11.5px;font-weight:500;color:var(--t3);display:flex;align-items:center;justify-content:space-between;}
 .card-co-name{display:flex;align-items:center;gap:7px;}
 .vdot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
 .card-vert{font-size:11px;color:var(--t4);font-weight:500;}
@@ -801,7 +802,8 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
         <div className="card-overlay"><span className="card-overlay-tag">{asset.vertical}</span><span className="card-overlay-cta">{cta} →</span></div>
       </div>
       <div className="card-body">
-        <div className="card-co"><span className="card-co-name"><span className="vdot" style={{background:c}}/>{asset.company}</span><span className="card-vert">{cta}</span></div>
+        <div className="card-headline" title={asset.headline||"Untitled"}>{asset.headline||"Untitled"}</div>
+        <div className="card-co"><span className="card-co-name"><span className="vdot" style={{background:c}}/>{asset.company||"—"}</span><span className="card-vert">{cta}</span></div>
       </div>
       {aiData&&(
         <div className="card-ai" onClick={e=>e.stopPropagation()}>
@@ -1395,7 +1397,9 @@ async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Pro
     videoUrl:urlInfo.url,
     status:"published",
     dateCreated:new Date().toISOString().split("T")[0],
-    headline:enriched?.headline||title,
+    // Vimeo's video title is the source of truth — never let the LLM-generated
+    // headline win over it. Headlines are user-editable in the Edit panel.
+    headline:title,
     pullQuote:enriched?.pullQuote||"",
     // transcript stays empty unless real auto-captions come from Vimeo
     transcript:"",

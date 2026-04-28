@@ -93,7 +93,7 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
             <button className="aep-back" onClick={onClose} title="Close (Esc)">← Back</button>
             <div>
               <div className="aep-title">Edit Asset</div>
-              <div className="aep-sub">{form.company || "—"}{form.vertical ? ` · ${form.vertical}` : ""}</div>
+              <div className="aep-sub">{form.headline || form.company || "—"}</div>
             </div>
           </div>
           {onPreview && (
@@ -101,6 +101,9 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           )}
         </div>
         <div className="aep-body">
+          {/* Title (Vimeo's video title) is the primary identifier — show it first. */}
+          <div className="aep-fld"><label>Title <span className="aep-hint">(synced from Vimeo)</span></label><input className="aep-in aep-title-in" value={form.headline} onChange={e => set("headline", e.target.value)}/></div>
+          <div className="aep-fld"><label>Description <span className="aep-hint">(synced from Vimeo)</span></label><textarea className="aep-tx" style={{ minHeight: 80 }} value={form.description} onChange={e => set("description", e.target.value)}/></div>
           <div className="aep-row">
             <div className="aep-fld"><label>Client Name *</label><input className="aep-in" value={form.clientName} onChange={e => set("clientName", e.target.value)}/></div>
             <div className="aep-fld"><label>Company *</label><input className="aep-in" value={form.company} onChange={e => set("company", e.target.value)}/></div>
@@ -117,7 +120,6 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
             <div className="aep-fld"><label>Status</label><select className="aep-sel" value={form.status} onChange={e => set("status", e.target.value)}><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></select></div>
             <div className="aep-fld"><label>Challenge</label><input className="aep-in" value={form.challenge} onChange={e => set("challenge", e.target.value)}/></div>
           </div>
-          <div className="aep-fld"><label>Headline</label><input className="aep-in" value={form.headline} onChange={e => set("headline", e.target.value)}/></div>
           <div className="aep-fld"><label>Outcome</label><input className="aep-in" value={form.outcome} onChange={e => set("outcome", e.target.value)}/></div>
           <div className="aep-fld"><label>Pull Quote</label><textarea className="aep-tx" style={{ minHeight: 60 }} value={form.pullQuote} onChange={e => set("pullQuote", e.target.value)}/></div>
           <div className="aep-fld"><label>Video URL</label><input className="aep-in" value={form.videoUrl} onChange={e => set("videoUrl", e.target.value)}/></div>
@@ -151,8 +153,10 @@ const css = `
 .aep-body{flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:14px;}
 .aep-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .aep-fld{display:flex;flex-direction:column;gap:5px;min-width:0;}
-.aep-fld label{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+.aep-fld label{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;display:flex;align-items:center;gap:6px;}
+.aep-hint{font-size:9.5px;font-weight:500;text-transform:none;letter-spacing:0;color:var(--t4);}
 .aep-in,.aep-sel,.aep-tx{font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t1);width:100%;}
+.aep-title-in{font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:-.2px;}
 .aep-in:focus,.aep-sel:focus,.aep-tx:focus{outline:none;border-color:var(--accent);}
 .aep-tx{min-height:120px;resize:vertical;line-height:1.5;}
 
