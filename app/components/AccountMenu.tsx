@@ -44,6 +44,7 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
   const [open, setOpen] = useState(false);
   const [popPos, setPopPos] = useState<{ left: number; bottom: number } | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -103,13 +104,22 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
             </div>
             <div className="am-divider"/>
             {isAdmin && (
-              <button className="am-item" onClick={() => { setOpen(false); setInviteOpen(true); }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/>
-                  <line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>
-                </svg>
-                Invite teammates
-              </button>
+              <>
+                <button className="am-item" onClick={() => { setOpen(false); setTeamOpen(true); }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                  </svg>
+                  Manage team
+                </button>
+                <button className="am-item" onClick={() => { setOpen(false); setInviteOpen(true); }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/>
+                    <line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>
+                  </svg>
+                  Invite teammates
+                </button>
+              </>
             )}
             <button className="am-item" onClick={() => { setOpen(false); setHelpOpen(true); }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -135,6 +145,7 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
       </div>
 
       {inviteOpen && <InviteModal authHeaders={authHeaders} onClose={() => setInviteOpen(false)}/>}
+      {teamOpen && <TeamModal authHeaders={authHeaders} onClose={() => setTeamOpen(false)} onInvite={() => { setTeamOpen(false); setInviteOpen(true); }}/>}
       {helpOpen && <SimpleModal title="Help & docs" onClose={() => setHelpOpen(false)}>
         <p>Documentation isn&apos;t built out yet — for now, message Logan directly with questions or feature requests.</p>
         <p style={{ marginTop: 12 }}>Quick tips:</p>
@@ -219,6 +230,119 @@ function InviteModal({ authHeaders, onClose }: { authHeaders: () => Promise<Head
           </div>
         </>
       )}
+    </SimpleModal>
+  );
+}
+
+// ─── TEAM MODAL ────────────────────────────────────────────────────────────
+interface TeamMember {
+  user_id: string;
+  email: string;
+  role: string;
+  joined_at: string;
+  last_sign_in_at: string | null;
+  is_self: boolean;
+}
+interface PendingInvite {
+  id: string;
+  role: string;
+  created_at: string;
+  expires_at: string;
+}
+
+function timeAgo(iso: string | null): string {
+  if (!iso) return "—";
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.round(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.round(mo / 12)}y ago`;
+}
+
+function TeamModal({ authHeaders, onClose, onInvite }: { authHeaders: () => Promise<HeadersInit>; onClose: () => void; onInvite: () => void }) {
+  const [members, setMembers] = useState<TeamMember[] | null>(null);
+  const [pending, setPending] = useState<PendingInvite[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const r = await fetch("/api/team", { headers: await authHeaders() });
+        if (!r.ok) throw new Error("Failed to load team");
+        const body = await r.json() as { members: TeamMember[]; pending_invites: PendingInvite[] };
+        if (!cancelled) {
+          setMembers(body.members || []);
+          setPending(body.pending_invites || []);
+        }
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [authHeaders]);
+
+  return (
+    <SimpleModal title="Manage team" onClose={onClose}>
+      {loading && <p>Loading team…</p>}
+      {error && <div className="am-modal-error">{error}</div>}
+
+      {members && members.length > 0 && (
+        <>
+          <div className="am-team-head">Members ({members.length})</div>
+          <div className="am-team-list">
+            {members.map((m) => (
+              <div key={m.user_id} className="am-team-row">
+                <div className="am-team-cell">
+                  <div className="am-team-email">
+                    {m.email}
+                    {m.is_self && <span className="am-team-you">  ·  you</span>}
+                  </div>
+                  <div className="am-team-meta">
+                    Joined {timeAgo(m.joined_at)}
+                    {m.last_sign_in_at ? `  ·  last login ${timeAgo(m.last_sign_in_at)}` : `  ·  has not signed in yet`}
+                  </div>
+                </div>
+                <div className={`am-team-role ${m.role}`}>{m.role}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {pending.length > 0 && (
+        <>
+          <div className="am-team-head" style={{ marginTop: 18 }}>Pending invites ({pending.length})</div>
+          <div className="am-team-list">
+            {pending.map((p) => (
+              <div key={p.id} className="am-team-row pending">
+                <div className="am-team-cell">
+                  <div className="am-team-email">Pending invite</div>
+                  <div className="am-team-meta">
+                    Sent {timeAgo(p.created_at)}  ·  expires {timeAgo(p.expires_at).replace(" ago", "")} from now
+                  </div>
+                </div>
+                <div className={`am-team-role ${p.role}`}>{p.role}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="am-modal-actions">
+        <button className="am-modal-btn" onClick={onClose}>Close</button>
+        <button className="am-modal-btn primary" onClick={onInvite}>+ Invite teammate</button>
+      </div>
     </SimpleModal>
   );
 }
@@ -327,4 +451,18 @@ const css = `
 .am-modal-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
 .am-modal-btn.primary:hover{background:var(--accent2);}
 .am-modal-btn.primary:disabled{background:var(--accentL);cursor:not-allowed;}
+
+/* ── TEAM LIST inside Manage team modal ── */
+.am-team-head{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;margin-bottom:8px;}
+.am-team-list{display:flex;flex-direction:column;gap:1px;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.am-team-row{display:flex;align-items:center;gap:12px;padding:10px 12px;background:#fff;border-bottom:1px solid var(--border);}
+.am-team-row:last-child{border-bottom:none;}
+.am-team-row.pending{background:var(--bg2);}
+.am-team-cell{flex:1;min-width:0;}
+.am-team-email{font-size:13px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.am-team-you{font-size:10.5px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;}
+.am-team-meta{font-size:11.5px;color:var(--t3);margin-top:2px;}
+.am-team-role{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:3px 8px;border-radius:5px;}
+.am-team-role.admin{background:var(--accentLL);color:var(--accent);border:1px solid var(--accentL);}
+.am-team-role.sales{background:var(--bg2);color:var(--t2);border:1px solid var(--border);}
 `;

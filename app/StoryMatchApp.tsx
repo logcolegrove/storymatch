@@ -1778,7 +1778,8 @@ export default function App(){
   const isAdmin = org?.role === "admin";
   const[adminMode,setAdminMode]=useState(true); // whether admin is viewing admin UI vs preview as sales
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
-  const[showArchived,setShowArchived]=useState(false); // admin-only: include archived assets in views
+  // Admins (in admin mode) always see archived assets greyed out inline.
+  // No toggle needed — library is one source of truth.
   const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
@@ -2083,8 +2084,9 @@ export default function App(){
   // UI can opt in via the "Show archived" toggle. Sales reps and the public
   // preview always exclude them — archived means "this testimonial should
   // not be presented to prospects right now".
-  const includeArchived = isAdmin && adminMode && showArchived;
-  const archivedCount = assets.filter(a=>a.status==="archived").length;
+  // Admins in admin mode see archived assets always (greyed out inline).
+  // Sales reps and admins-previewing-public never see archived.
+  const includeArchived = isAdmin && adminMode;
 
   // Determine what to show in the grid
   let displayAssets: Asset[];
@@ -2131,16 +2133,9 @@ export default function App(){
           <div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}>
           </div>
           <div className="hdr-r">
-            <span className="badge">{assets.length - (includeArchived?0:archivedCount)} assets{includeArchived&&archivedCount>0?` (${archivedCount} archived)`:""}</span>
-            {isAdmin && adminMode && archivedCount > 0 && (
-              <button
-                onClick={()=>setShowArchived(v=>!v)}
-                title={showArchived?"Hide archived assets":"Show archived assets"}
-                style={{padding:"5px 10px",border:"1px solid var(--border)",borderRadius:6,background:showArchived?"var(--accent-bg)":"#fff",color:showArchived?"var(--accent)":"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
-              >{showArchived?`Hide archived (${archivedCount})`:`Show archived (${archivedCount})`}</button>
-            )}
-            {/* View toggle (grid/list) lives in the library control bar above
-                the content now — keeps the page header lean. */}
+            {/* Count badge moved to the library control bar above the content.
+                Show-archived toggle removed — admins always see archived assets
+                inline (greyed out) so the library is one source of truth. */}
             {isAdmin && (
               <div className="mode-toggle">
                 <button
