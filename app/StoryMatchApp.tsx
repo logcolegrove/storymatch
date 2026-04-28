@@ -358,6 +358,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .ssr-row.compact{padding:4px 0;}
 .ssr-row-title{font-size:12px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ssr-row-meta{font-size:10.5px;color:var(--t3);margin-top:1px;}
+.ssr-row-when{font-size:10.5px;color:var(--t3);margin-top:1px;}
+.ssr-row-meta .ssr-when-sep{margin:0 5px;color:var(--border);}
 .ssr-row-actions{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;}
 .ssr-btn{padding:3px 9px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);font-family:var(--font);font-size:10.5px;font-weight:600;cursor:pointer;}
 .ssr-btn:hover{background:var(--bg2);color:var(--t1);}
@@ -1408,15 +1410,18 @@ interface SyncReport {
   syncedAt: string;
   videoCount: number;
   inSyncCount: number;
-  imported: { assetId: string; headline: string }[];
+  // Each item carries detectedAt — when it first showed up in this report.
+  // The UI shows it as "imported 2d ago", "drifted 4h ago" etc.
+  imported: { assetId: string; headline: string; detectedAt: string }[];
   drifted: {
     assetId: string;
     headline: string;
     fields: ("title" | "description")[];
     storyMatch: { headline: string; description: string };
     vimeo: { title: string; description: string; thumbnail: string };
+    detectedAt: string;
   }[];
-  archived: { assetId: string; headline: string }[];
+  archived: { assetId: string; headline: string; detectedAt: string }[];
   // Detected in Vimeo but admin previously soft-deleted in StoryMatch.
   // Surface so admin can choose to resync (un-delete) rather than silently
   // re-importing a video they deliberately removed.
@@ -1425,6 +1430,7 @@ interface SyncReport {
     headline: string;
     videoUrl: string;
     vimeo: { title: string; description: string; thumbnail: string };
+    detectedAt: string;
   }[];
 }
 
@@ -1937,6 +1943,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                               {r.imported.map(i => (
                                 <div key={i.assetId} className="ssr-row compact">
                                   <div className="ssr-row-title">{i.headline}</div>
+                                  <div className="ssr-row-when">{timeAgoShort(i.detectedAt)}</div>
                                 </div>
                               ))}
                             </div>
@@ -1957,6 +1964,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                               {r.archived.map(a => (
                                 <div key={a.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{a.headline}</div>
+                                  <div className="ssr-row-when">{timeAgoShort(a.detectedAt)}</div>
                                   <div className="ssr-row-actions">
                                     <button
                                       className="ssr-btn primary"
@@ -1988,7 +1996,11 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                               {r.drifted.map(d => (
                                 <div key={d.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{d.headline}</div>
-                                  <div className="ssr-row-meta">{d.fields.join(", ")} differ</div>
+                                  <div className="ssr-row-meta">
+                                    {d.fields.join(", ")} differ
+                                    <span className="ssr-when-sep">·</span>
+                                    {timeAgoShort(d.detectedAt)}
+                                  </div>
                                   <div className="ssr-row-actions">
                                     <button
                                       className="ssr-btn primary"
@@ -2024,6 +2036,7 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
                               {r.previouslyDeleted.map(p => (
                                 <div key={p.assetId} className="ssr-row">
                                   <div className="ssr-row-title">{p.headline}</div>
+                                  <div className="ssr-row-when">{timeAgoShort(p.detectedAt)}</div>
                                   <div className="ssr-row-actions">
                                     <button
                                       className="ssr-btn primary"

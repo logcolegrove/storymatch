@@ -15,26 +15,33 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 // ── Types matching the FE SyncReport ────────────────────────────────────
+// Every item carries `detectedAt` — the ISO timestamp when this entry was
+// first added to the inbox. Lets the UI show "imported 2d ago", "drifted 4h
+// ago", etc. so admins can tell new findings from stale ones at a glance.
+export interface ImportedItem { assetId: string; headline: string; detectedAt: string; }
+export interface ArchivedItem { assetId: string; headline: string; detectedAt: string; }
 export interface DriftedItem {
   assetId: string;
   headline: string;
   fields: ("title" | "description")[];
   storyMatch: { headline: string; description: string };
   vimeo: { title: string; description: string; thumbnail: string };
+  detectedAt: string;
 }
 export interface PreviouslyDeletedItem {
   assetId: string;
   headline: string;
   videoUrl: string;
   vimeo: { title: string; description: string; thumbnail: string };
+  detectedAt: string;
 }
 export interface PendingSyncReport {
   syncedAt: string;
   videoCount: number;
   inSyncCount: number;
-  imported: { assetId: string; headline: string }[];
+  imported: ImportedItem[];
   drifted: DriftedItem[];
-  archived: { assetId: string; headline: string }[];
+  archived: ArchivedItem[];
   previouslyDeleted: PreviouslyDeletedItem[];
 }
 
@@ -356,25 +363,54 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   }
 
   // ── 4. Merge into source.pending_sync_report ──
-  // imported + archived accumulate by assetId (deduped). drifted +
-  // previouslyDeleted are recomputed each sync, so they replace.
+  // imported + archived accumulate by assetId (deduped, earlier detectedAt
+  // wins). drifted + previouslyDeleted are recomputed each sync, but if the
+  // same assetId was already in the previous report's same category, we
+  // preserve its detectedAt so re-detected drift doesn't reset to "just now".
   const prev = (source.pending_sync_report as PendingSyncReport | null) || null;
+  const nowIso = new Date().toISOString();
 
-  const dedupedById = <T extends { assetId: string }>(prevList: T[] | undefined, newList: T[]): T[] => {
+  // Preserve the earliest-known detectedAt for an asset within a category.
+  const dedupedAccum = <T extends { assetId: string; detectedAt: string }>(
+    prevList: T[] | undefined,
+    newList: T[]
+  ): T[] => {
     const map = new Map<string, T>();
     for (const item of (prevList || [])) map.set(item.assetId, item);
-    for (const item of newList) map.set(item.assetId, item);
+    for (const item of newList) {
+      const existing = map.get(item.assetId);
+      if (existing) {
+        // Keep existing (with original detectedAt) — accumulation, not replacement
+        continue;
+      }
+      map.set(item.assetId, item);
+    }
     return Array.from(map.values());
   };
 
+  // For replace-style categories, lift detectedAt from prev where it exists
+  // so a still-drifted item shows "noticed 3 days ago" instead of "just now".
+  const liftDetectedAt = <T extends { assetId: string; detectedAt: string }>(
+    prevList: T[] | undefined,
+    newList: T[]
+  ): T[] => {
+    const prevById = new Map((prevList || []).map(i => [i.assetId, i]));
+    return newList.map(item => ({ ...item, detectedAt: prevById.get(item.assetId)?.detectedAt || item.detectedAt }));
+  };
+
+  const importedNow: ImportedItem[] = insertedAssets.map(a => ({ assetId: a.id, headline: a.headline, detectedAt: nowIso }));
+  const archivedNow: ArchivedItem[] = orphaned.map(a => ({ assetId: a.id, headline: a.headline || "Untitled", detectedAt: nowIso }));
+  const driftedNow: DriftedItem[] = drifted.map(d => ({ ...d, detectedAt: nowIso }));
+  const previouslyDeletedNow: PreviouslyDeletedItem[] = previouslyDeleted.map(p => ({ ...p, detectedAt: nowIso }));
+
   const merged: PendingSyncReport = {
-    syncedAt: new Date().toISOString(),
+    syncedAt: nowIso,
     videoCount: videos.length,
     inSyncCount,
-    imported: dedupedById(prev?.imported, insertedAssets.map(a => ({ assetId: a.id, headline: a.headline }))),
-    archived: dedupedById(prev?.archived, orphaned.map(a => ({ assetId: a.id, headline: a.headline || "Untitled" }))),
-    drifted,
-    previouslyDeleted,
+    imported: dedupedAccum(prev?.imported, importedNow),
+    archived: dedupedAccum(prev?.archived, archivedNow),
+    drifted: liftDetectedAt(prev?.drifted, driftedNow),
+    previouslyDeleted: liftDetectedAt(prev?.previouslyDeleted, previouslyDeletedNow),
   };
 
   // ── 5. Update source row ──
