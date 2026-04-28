@@ -550,13 +550,17 @@ function FeedbackModal({ onClose }: { onClose: () => void }) {
 }
 
 // ─── REUSABLE MODAL CHROME ─────────────────────────────────────────────────
+// Rendered via a portal to document.body so the backdrop+modal escape any
+// ancestor stacking contexts (e.g. the admin-rail at z:20). Without this,
+// even a high z-index on the backdrop wouldn't cover the page header.
 function SimpleModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return (
+  if (typeof window === "undefined") return null;
+  return createPortal(
     <>
       <div className="am-modal-backdrop" onClick={onClose}/>
       <div className="am-modal" onClick={(e) => e.stopPropagation()}>
@@ -566,7 +570,8 @@ function SimpleModal({ title, onClose, children }: { title: string; onClose: () 
         </div>
         <div className="am-modal-body">{children}</div>
       </div>
-    </>
+    </>,
+    document.body
   );
 }
 
