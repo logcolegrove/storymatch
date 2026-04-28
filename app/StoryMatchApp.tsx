@@ -435,6 +435,47 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .card.archived:hover .archived-restore,.qcard.archived:hover .archived-restore{opacity:1;}
 .archived-restore:hover{background:var(--accent);color:#fff;}
 
+/* ── LIFECYCLE PILLS — used in both list view and detail/edit ── */
+.lc-pill{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:3px 8px;border-radius:4px;border:1px solid;white-space:nowrap;}
+.lc-pill.active{background:#ecfdf5;color:var(--green);border-color:#a7f3d0;}
+.lc-pill.archived{background:var(--amberL);color:var(--amber);border-color:#fcd34d;}
+.lc-pill.draft{background:var(--bg2);color:var(--t3);border-color:var(--border2);}
+.lc-pill.current{background:#ecfdf5;color:var(--green);border-color:#a7f3d0;}
+.lc-pill.former{background:#fef2f2;color:var(--red);border-color:#fecaca;}
+.lc-pill.unknown{background:var(--bg2);color:var(--t3);border-color:var(--border2);}
+
+/* ── VIEW MODE TOGGLE (admin only) ── */
+.view-toggle{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;background:#fff;}
+.view-toggle-btn{padding:6px 9px;background:none;border:none;cursor:pointer;color:var(--t3);display:grid;place-items:center;}
+.view-toggle-btn.on{background:var(--accentLL);color:var(--accent);}
+.view-toggle-btn:hover:not(.on){background:var(--bg2);}
+.view-toggle-btn+.view-toggle-btn{border-left:1px solid var(--border);}
+
+/* ── LIST VIEW ── */
+.lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;overflow:hidden;}
+.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 100px 110px 130px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);}
+.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 100px 110px 130px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;}
+.lv-row:last-child{border-bottom:none;}
+.lv-row:hover{background:var(--bg2);}
+.lv-row.archived{opacity:.65;}
+.lv-thumb{width:72px;height:48px;border-radius:6px;overflow:hidden;background:var(--bg3);position:relative;}
+.lv-thumb img{width:100%;height:100%;object-fit:cover;}
+.lv-row.archived .lv-thumb img{filter:grayscale(.9);}
+.lv-title{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv-cs-select{font-family:var(--font);font-size:11px;padding:4px 6px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;width:100%;}
+.lv-verify{font-size:11px;color:var(--t3);display:flex;align-items:center;gap:6px;}
+.lv-verify-btn{font-family:var(--font);font-size:10.5px;padding:3px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--accent);cursor:pointer;font-weight:600;}
+.lv-verify-btn:hover{background:var(--accentLL);}
+.lv-actions{display:flex;gap:5px;justify-content:flex-end;}
+.lv-act-btn{font-family:var(--font);font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
+.lv-act-btn:hover{background:var(--bg2);color:var(--t1);}
+.lv-act-btn.danger{color:var(--amber);}
+.lv-act-btn.accent{color:var(--accent);border-color:var(--accent);}
+.lv-empty{padding:40px;text-align:center;color:var(--t3);}
+
 /* ── QUOTE CARD ── */
 .qcard{border-radius:var(--r);cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;min-height:340px;display:flex;flex-direction:column;justify-content:flex-end;}
 .qcard:hover{transform:translateY(-4px);box-shadow:0 20px 50px rgba(0,0,0,.12);}
@@ -616,6 +657,119 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── LIST VIEW (admin governance) ───────────────────────────────────────────
+//
+// Compact row-based view for admin testimonial management. Surfaces lifecycle
+// state (status, client_status, last_verified) inline and lets admins act on
+// each row without leaving the page. Sales reps and the public preview never
+// see this view — it's strictly an admin governance tool.
+
+interface ListViewProps {
+  assets: Asset[];
+  onClick: (a: Asset) => void;
+  onArchive: (a: Asset) => void;
+  onRestore: (a: Asset) => void;
+  onMarkVerified: (a: Asset) => void;
+  onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
+}
+
+function timeAgoShort(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.round(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.round(mo / 12)}y ago`;
+}
+
+function ListView({ assets, onClick, onArchive, onRestore, onMarkVerified, onSetClientStatus }: ListViewProps) {
+  if (assets.length === 0) {
+    return (
+      <div className="lv">
+        <div className="lv-empty">No assets to show.</div>
+      </div>
+    );
+  }
+  return (
+    <div className="lv">
+      <div className="lv-head">
+        <div></div>
+        <div>Title</div>
+        <div>Vertical</div>
+        <div>Status</div>
+        <div>Client</div>
+        <div>Verified</div>
+        <div style={{ textAlign: "right" }}>Actions</div>
+      </div>
+      {assets.map((a) => {
+        const isArchived = a.status === "archived";
+        const cs = (a.clientStatus || "current") as "current" | "former" | "unknown";
+        const vid = extractVid(a.videoUrl);
+        let thumb = a.thumbnail;
+        if (!thumb && vid?.p === "yt") thumb = ytThumb(vid.id);
+        if (!thumb) thumb = "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=160&h=90&fit=crop";
+        return (
+          <div
+            key={a.id}
+            className={`lv-row${isArchived ? " archived" : ""}`}
+            onClick={() => onClick(a)}
+            title={a.archivedReason || ""}
+          >
+            <div className="lv-thumb">
+              <img src={thumb} alt={a.company} loading="lazy" />
+            </div>
+            <div className="lv-title">
+              <div className="lv-title-h">{a.headline || "Untitled"}</div>
+              <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
+            </div>
+            <div className="lv-vert">{a.vertical || "—"}</div>
+            <div>
+              <span className={`lc-pill ${isArchived ? "archived" : a.status === "draft" ? "draft" : "active"}`}>
+                {isArchived ? "Archived" : a.status === "draft" ? "Draft" : "Active"}
+              </span>
+            </div>
+            <div onClick={(e) => e.stopPropagation()}>
+              <select
+                className="lv-cs-select"
+                value={cs}
+                onChange={(e) => onSetClientStatus(a, e.target.value as "current" | "former" | "unknown")}
+                title={`Source: ${a.clientStatusSource || "unset"}`}
+              >
+                <option value="current">Current client</option>
+                <option value="former">Former client</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </div>
+            <div className="lv-verify" onClick={(e) => e.stopPropagation()}>
+              <span>{timeAgoShort(a.lastVerifiedAt)}</span>
+              <button
+                className="lv-verify-btn"
+                onClick={() => onMarkVerified(a)}
+                title="Confirm this testimonial is still valid"
+              >
+                ✓
+              </button>
+            </div>
+            <div className="lv-actions" onClick={(e) => e.stopPropagation()}>
+              {isArchived ? (
+                <button className="lv-act-btn accent" onClick={() => onRestore(a)}>Restore</button>
+              ) : (
+                <button className="lv-act-btn danger" onClick={() => onArchive(a)}>Archive</button>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1404,6 +1558,7 @@ export default function App(){
   const[adminMode,setAdminMode]=useState(true); // whether admin is viewing admin UI vs preview as sales
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
   const[showArchived,setShowArchived]=useState(false); // admin-only: include archived assets in views
+  const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
   // StoryMatch state
@@ -1448,20 +1603,52 @@ export default function App(){
   const goHome=()=>{window.location.hash="/";};
   const copyQuote=(t: string)=>{navigator.clipboard?.writeText(t);setToast("Copied!");setTimeout(()=>setToast(null),1800);};
 
-  // Restore an archived asset back to active. Clears archived metadata so the
-  // asset reappears in normal views and StoryMatch search.
-  const restoreAsset=async(asset: Asset)=>{
-    const update={id:asset.id,status:"active",archivedAt:null,archivedReason:null};
-    setAssets(prev=>prev.map(a=>a.id===asset.id?{...a,...update}:a));
-    setToast("Restored");
-    setTimeout(()=>setToast(null),1500);
+  // Generic partial-update helper for inline edits in the list view.
+  // Optimistically merges into local state, then PUTs to /api/assets.
+  // Used by status flips, client_status changes, and mark-verified.
+  const updateAssetInline=async(id: string, patch: Partial<Asset>, toastMsg?: string)=>{
+    setAssets(prev=>prev.map(a=>a.id===id?{...a,...patch}:a));
+    if(toastMsg){setToast(toastMsg);setTimeout(()=>setToast(null),1500);}
     try{
       await fetch("/api/assets",{
         method:"PUT",
         headers:{"Content-Type":"application/json",...(await authHeaders())},
-        body:JSON.stringify(update),
+        body:JSON.stringify({id,...patch}),
       });
-    }catch(e){console.error("Restore failed",e);}
+    }catch(e){console.error("Inline update failed",e);}
+  };
+
+  // Restore an archived asset back to active. Clears archived metadata so the
+  // asset reappears in normal views and StoryMatch search.
+  const restoreAsset=async(asset: Asset)=>{
+    await updateAssetInline(asset.id,{status:"active",archivedAt:null,archivedReason:null},"Restored");
+  };
+
+  // Manually archive an active asset (admin action from the list view).
+  const archiveAsset=async(asset: Asset)=>{
+    if(!confirm(`Archive "${asset.headline||asset.company||"this asset"}"? It will be hidden from sales reps and excluded from StoryMatch search.`))return;
+    const today=new Date().toISOString().split("T")[0];
+    await updateAssetInline(asset.id,{
+      status:"archived",
+      archivedAt:new Date().toISOString(),
+      archivedReason:`Manually archived on ${today}`,
+    },"Archived");
+  };
+
+  // Mark an asset as verified — bumps last_verified_at to now.
+  const markVerified=async(asset: Asset)=>{
+    await updateAssetInline(asset.id,{lastVerifiedAt:new Date().toISOString()},"Marked verified");
+  };
+
+  // Change client_status (current/former/unknown). Stamps source as 'manual'
+  // so a future CRM sync knows this was admin-set and can choose its conflict
+  // policy accordingly.
+  const setClientStatus=async(asset: Asset, next: "current"|"former"|"unknown")=>{
+    await updateAssetInline(asset.id,{
+      clientStatus:next,
+      clientStatusSource:"manual",
+      clientStatusUpdatedAt:new Date().toISOString(),
+    },next==="current"?"Marked current":next==="former"?"Marked former":"Marked unknown");
   };
 
   const runStoryMatch=useCallback(async(query: string)=>{
@@ -1551,6 +1738,36 @@ export default function App(){
                 title={showArchived?"Hide archived assets":"Show archived assets"}
                 style={{padding:"5px 10px",border:"1px solid var(--border)",borderRadius:6,background:showArchived?"var(--accent-bg)":"#fff",color:showArchived?"var(--accent)":"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
               >{showArchived?`Hide archived (${archivedCount})`:`Show archived (${archivedCount})`}</button>
+            )}
+            {isAdmin && adminMode && (
+              <div className="view-toggle" title="Toggle grid/list view">
+                <button
+                  className={`view-toggle-btn ${viewMode==="grid"?"on":""}`}
+                  onClick={()=>setViewMode("grid")}
+                  title="Grid view"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="3" width="7" height="7" rx="1"/>
+                    <rect x="14" y="3" width="7" height="7" rx="1"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1"/>
+                    <rect x="14" y="14" width="7" height="7" rx="1"/>
+                  </svg>
+                </button>
+                <button
+                  className={`view-toggle-btn ${viewMode==="list"?"on":""}`}
+                  onClick={()=>setViewMode("list")}
+                  title="List view"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="8" y1="6" x2="21" y2="6"/>
+                    <line x1="8" y1="12" x2="21" y2="12"/>
+                    <line x1="8" y1="18" x2="21" y2="18"/>
+                    <circle cx="4" cy="6" r="1.5"/>
+                    <circle cx="4" cy="12" r="1.5"/>
+                    <circle cx="4" cy="18" r="1.5"/>
+                  </svg>
+                </button>
+              </div>
             )}
             {isAdmin && (
               <div className="mode-toggle">
@@ -1984,6 +2201,15 @@ export default function App(){
                     {smResults?"Try broadening your search":"Adjust filters"}
                   </p>
                 </div>
+              ) : (isAdmin && adminMode && viewMode === "list") ? (
+                <ListView
+                  assets={displayAssets}
+                  onClick={openAsset}
+                  onArchive={archiveAsset}
+                  onRestore={restoreAsset}
+                  onMarkVerified={markVerified}
+                  onSetClientStatus={setClientStatus}
+                />
               ) : (
                 <div className="grid">
                   {displayAssets.map(a=>{
