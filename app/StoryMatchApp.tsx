@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useAuth } from "@/lib/auth-context";
 import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
@@ -641,9 +642,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Grid card 3-dot menu and share-link button (stacked top-right) */
 .card-dots,.qcard-dots{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.95);border-radius:5px;z-index:5;opacity:0;transition:opacity .15s;}
 .card:hover .card-dots,.qcard:hover .qcard-dots{opacity:1;}
-.card-share,.qcard-share{position:absolute;top:42px;right:8px;background:rgba(255,255,255,.95);border:none;width:30px;height:30px;border-radius:5px;cursor:pointer;color:var(--t2);display:grid;place-items:center;z-index:5;opacity:0;transition:opacity .15s,color .15s;}
-.card:hover .card-share,.qcard:hover .qcard-share,.card.selected .card-share,.qcard.selected .qcard-share{opacity:1;}
-.card-share:hover,.qcard-share:hover{color:var(--accent);background:#fff;}
+/* .card-share / .qcard-share removed — Copy share link now lives only in
+   the 3-dot dropdown. */
 
 /* ── QUOTE CARD ── */
 .qcard{border-radius:var(--r);cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;min-height:340px;display:flex;flex-direction:column;justify-content:flex-end;}
@@ -794,18 +794,8 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       {menuItems && (
         <div className="card-dots"><DotsMenu items={menuItems}/></div>
       )}
-      {onCopyShareLink && (
-        <button
-          className="card-share"
-          onClick={e=>{e.stopPropagation();onCopyShareLink(asset);}}
-          title="Copy share link"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-          </svg>
-        </button>
-      )}
+      {/* Standalone share button removed — Copy share link now lives only in
+          the 3-dot menu so we don't have two ways to do the same thing. */}
       {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
       {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
       {isArchived&&onRestore&&!menuItems&&(
@@ -854,18 +844,7 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       {menuItems && (
         <div className="qcard-dots"><DotsMenu items={menuItems}/></div>
       )}
-      {onCopyShareLink && (
-        <button
-          className="qcard-share"
-          onClick={e=>{e.stopPropagation();onCopyShareLink(asset);}}
-          title="Copy share link"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-          </svg>
-        </button>
-      )}
+      {/* Standalone share button removed — see Card component note. */}
       {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
       {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
       {isArchived&&onRestore&&!menuItems&&(
@@ -904,29 +883,67 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
 type MenuItem = { label: string; onClick: () => void; danger?: boolean } | { divider: true };
 function DotsMenu({ items }: { items: MenuItem[] }) {
   const [open, setOpen] = useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
+  // Popup is portal-rendered to document.body with computed fixed coords so
+  // it can escape the card's overflow:hidden (and any transformed ancestor's
+  // containing block). Without this, the dropdown gets clipped at the card edge.
+  const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
+  const btnRef = React.useRef<HTMLButtonElement>(null);
+  const popRef = React.useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t)) return;
+      if (popRef.current?.contains(t)) return;
+      setOpen(false);
     };
-    const t = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
-    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
+    // Reposition on scroll/resize so the popup follows its trigger.
+    const reposition = () => {
+      if (!btnRef.current) return;
+      const r = btnRef.current.getBoundingClientRect();
+      setCoords({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    };
+    const dt = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      clearTimeout(dt);
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
   }, [open]);
+
+  const handleToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setCoords({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    }
+    setOpen(o => !o);
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
-      <button className="dots-btn" onClick={() => setOpen(o => !o)} title="Actions">
+    <>
+      <button ref={btnRef} className="dots-btn" onClick={handleToggle} title="Actions">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
       </button>
-      {open && (
-        <div className="dots-pop">
+      {open && coords && typeof document !== "undefined" && createPortal(
+        <div
+          ref={popRef}
+          className="dots-pop dots-pop-portal"
+          style={{ position: "fixed", top: coords.top, right: coords.right }}
+          onClick={(e) => e.stopPropagation()}
+        >
           {items.map((it, i) => "divider" in it
             ? <div key={`d${i}`} className="dots-divider"/>
             : <button key={i} className={`dots-item${it.danger ? " danger" : ""}`} onClick={() => { setOpen(false); it.onClick(); }}>{it.label}</button>
           )}
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 
