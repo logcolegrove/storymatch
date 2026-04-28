@@ -487,9 +487,13 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
 
   // Apply auto-updates. Sequential to avoid overwhelming the DB; small per
   // showcase. Failures here just leave the asset in its previous state and
-  // get re-attempted next sync — no need to abort the whole run.
+  // get re-attempted next sync — no need to abort the whole run, but we log
+  // so missing columns or other schema drift are visible in Vercel logs.
   for (const u of autoUpdates) {
-    await supabaseAdmin.from("assets").update(u.updates).eq("id", u.assetId).eq("org_id", orgId);
+    const { error } = await supabaseAdmin.from("assets").update(u.updates).eq("id", u.assetId).eq("org_id", orgId);
+    if (error) {
+      console.error("[runSourceSync] auto-update failed", { assetId: u.assetId, error: error.message, hint: error.hint, updates: Object.keys(u.updates) });
+    }
   }
   void autoAppliedCount;
 
