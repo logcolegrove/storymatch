@@ -403,7 +403,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;}
 
 /* ── THUMBNAIL CARD ── */
-.card{border-radius:var(--r);overflow:hidden;background:#fff;cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);}
+.card{position:relative;border-radius:var(--r);overflow:hidden;background:#fff;cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);}
 .card:hover{transform:translateY(-4px);box-shadow:0 20px 50px rgba(0,0,0,.1);}
 .card-thumb{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;background:var(--bg3);}
 .card-thumb img{width:100%;height:100%;object-fit:cover;transition:transform .5s cubic-bezier(.4,0,.2,1);filter:brightness(.97);}
@@ -517,8 +517,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 
 /* Grid card checkbox — appears on hover or when card is selected */
 .card-check,.qcard-check{position:absolute;top:10px;left:10px;width:20px;height:20px;cursor:pointer;accent-color:var(--accent);z-index:5;background:#fff;border-radius:4px;opacity:0;transition:opacity .15s;}
-.card:hover .card-check,.qcard:hover .qcard-check,.card-check.checked,.qcard-check.checked{opacity:1;}
+.card:hover .card-check,.qcard:hover .qcard-check,.card.selected .card-check,.qcard.selected .qcard-check{opacity:1;}
 .card.selected,.qcard.selected{outline:2px solid var(--accent);outline-offset:-2px;}
+/* Keep the 3-dot menu visible on selected cards too, so admin can act on them */
+.card.selected .card-dots,.qcard.selected .qcard-dots{opacity:1;}
 
 /* Bulk action bar — fixed at bottom, slides up when ≥1 selected */
 .bulk-bar{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1f;color:#fff;border-radius:11px;padding:10px 14px;display:flex;align-items:center;gap:8px;box-shadow:0 12px 36px rgba(0,0,0,.25);z-index:100;font-family:var(--font);font-size:13px;animation:bulkbarUp .2s ease-out;}
@@ -665,7 +667,7 @@ interface CardProps {
   onRestore?: (asset: Asset) => void; // admin-only — present means show restore button on archived
   // Multi-select + dots menu (admin only — pass undefined for sales/public preview)
   isSelected?: boolean;
-  onToggleSelect?: (id: string) => void;
+  onToggleSelect?: (id: string, shiftKey?: boolean) => void;
   menuItems?: MenuItem[];
 }
 
@@ -683,9 +685,9 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           type="checkbox"
           className={`card-check${isSelected?" checked":""}`}
           checked={!!isSelected}
-          onChange={()=>onToggleSelect(asset.id)}
-          onClick={e=>e.stopPropagation()}
-          title="Select for bulk actions"
+          onChange={()=>{ /* handled by onClick to capture shift key */ }}
+          onClick={e=>{e.stopPropagation();onToggleSelect(asset.id,e.shiftKey);}}
+          title="Shift-click to select a range"
         />
       )}
       {menuItems && (
@@ -727,9 +729,9 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           type="checkbox"
           className={`qcard-check${isSelected?" checked":""}`}
           checked={!!isSelected}
-          onChange={()=>onToggleSelect(asset.id)}
-          onClick={e=>e.stopPropagation()}
-          title="Select for bulk actions"
+          onChange={()=>{ /* handled by onClick to capture shift key */ }}
+          onClick={e=>{e.stopPropagation();onToggleSelect(asset.id,e.shiftKey);}}
+          title="Shift-click to select a range"
         />
       )}
       {menuItems && (
@@ -825,7 +827,8 @@ function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelet
 interface ListViewProps {
   assets: Asset[];
   selectedIds: Set<string>;
-  onToggleSelect: (id: string) => void;
+  onToggleSelect: (id: string, shiftKey?: boolean) => void;
+  onSelectAll: () => void;
   onClick: (a: Asset) => void;
   onSetPublicationStatus: (a: Asset, next: "published" | "draft" | "archived") => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
@@ -994,8 +997,15 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
+  const allSelected = assets.length > 0 && assets.every(a => selectedIds.has(a.id));
+  const someSelected = !allSelected && assets.some(a => selectedIds.has(a.id));
+  const headerCheckRef = React.useRef<HTMLInputElement>(null);
+  // Native HTML doesn't support indeterminate via attribute — set via DOM
+  useEffect(() => {
+    if (headerCheckRef.current) headerCheckRef.current.indeterminate = someSelected;
+  }, [someSelected]);
 
   if (assets.length === 0) {
     return <div className="lv"><div className="lv-empty">No assets to show.</div></div>;
@@ -1003,7 +1013,14 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onSetPublicati
   return (
     <div className="lv">
       <div className="lv-head">
-        <div></div>
+        <input
+          type="checkbox"
+          ref={headerCheckRef}
+          className="lv-check"
+          checked={allSelected}
+          onChange={onSelectAll}
+          title={allSelected ? "Deselect all" : "Select all"}
+        />
         <div>Title</div>
         <div>Vertical</div>
         <div>Publication</div>
@@ -1030,9 +1047,9 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onSetPublicati
               type="checkbox"
               className="lv-check"
               checked={isSelected}
-              onChange={() => onToggleSelect(a.id)}
-              onClick={(e) => e.stopPropagation()}
-              title="Select for bulk actions"
+              onChange={() => { /* handled by onClick to capture shift key */ }}
+              onClick={(e) => { e.stopPropagation(); onToggleSelect(a.id, e.shiftKey); }}
+              title="Shift-click to select a range"
             />
             <div className="lv-thumb">
               <img src={thumb} alt={a.company} loading="lazy" />
@@ -1898,6 +1915,7 @@ export default function App(){
   const[showArchived,setShowArchived]=useState(false); // admin-only: include archived assets in views
   const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
+  const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
   // StoryMatch state
@@ -2022,14 +2040,52 @@ export default function App(){
   };
 
   // ── MULTI-SELECT HELPERS ──
-  const toggleSelected=(id: string)=>{
+  // toggleSelected is shift-aware: with shift held, it selects the range between
+  // the last-selected anchor and the current id (using the currently-displayed
+  // asset order). Without shift, it just toggles the single id.
+  const toggleSelected=(id: string, shiftKey: boolean = false)=>{
+    if(shiftKey && lastSelectedId && lastSelectedId !== id){
+      const ids=displayAssets.map(a=>a.id);
+      const a=ids.indexOf(lastSelectedId);
+      const b=ids.indexOf(id);
+      if(a>=0 && b>=0){
+        const [lo,hi]=a<b?[a,b]:[b,a];
+        const range=ids.slice(lo,hi+1);
+        setSelectedIds(prev=>{
+          const next=new Set(prev);
+          range.forEach(x=>next.add(x));
+          return next;
+        });
+        setLastSelectedId(id);
+        return;
+      }
+    }
     setSelectedIds(prev=>{
       const next=new Set(prev);
       if(next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+    setLastSelectedId(id);
   };
-  const clearSelection=()=>setSelectedIds(new Set());
+  const clearSelection=()=>{setSelectedIds(new Set());setLastSelectedId(null);};
+  // Select-all: toggles all currently-displayed assets in/out of the selection.
+  const toggleSelectAll=()=>{
+    const allIds=displayAssets.map(a=>a.id);
+    const allSelected=allIds.length>0 && allIds.every(id=>selectedIds.has(id));
+    if(allSelected){
+      setSelectedIds(prev=>{
+        const next=new Set(prev);
+        allIds.forEach(id=>next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedIds(prev=>{
+        const next=new Set(prev);
+        allIds.forEach(id=>next.add(id));
+        return next;
+      });
+    }
+  };
 
   // ── BULK ACTIONS ──
   // All bulk actions iterate the current selection, apply, then clear the selection.
@@ -2630,6 +2686,7 @@ export default function App(){
                   assets={displayAssets}
                   selectedIds={selectedIds}
                   onToggleSelect={toggleSelected}
+                  onSelectAll={toggleSelectAll}
                   onClick={openAsset}
                   onSetPublicationStatus={setPublicationStatus}
                   onSetClientStatus={setClientStatus}
