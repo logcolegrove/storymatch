@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
 import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
+import AssetEditPanel from "./components/AssetEditPanel";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -861,6 +862,7 @@ interface ListViewProps {
   onToggleSelect: (id: string, shiftKey?: boolean) => void;
   onSelectAll: () => void;
   onClick: (a: Asset) => void;
+  onEdit: (a: Asset) => void;
   onSetPublicationStatus: (a: Asset, next: "published" | "draft" | "archived") => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
@@ -1029,7 +1031,7 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
   const allSelected = assets.length > 0 && assets.every(a => selectedIds.has(a.id));
   const someSelected = !allSelected && assets.some(a => selectedIds.has(a.id));
@@ -1131,6 +1133,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, o
             <div className="lv-actions">
               <DotsMenu items={[
                 { label: "Open", onClick: () => onClick(a) },
+                { label: "Edit details", onClick: () => onEdit(a) },
                 { label: "Copy share link", onClick: () => onCopyShareLink(a) },
                 { label: "✓ Mark verified", onClick: () => onMarkVerified(a) },
                 { divider: true },
@@ -1759,134 +1762,6 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onSyncSource,on
   );
 }
 
-// ─── ADMIN: ASSETS PANEL ─────────────────────────────────────────────────────
-interface AssetsPanelProps {
-  assets: Asset[];
-  onUpdate: (a: Asset) => void;
-  onDelete: (id: string) => void;
-  onAdd: (a: Asset) => void;
-  onPreview: (id: string) => void;
-}
-
-function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProps) {
-  const[editingId,setEditingId]=useState<string|null>(null);
-  const[search,setSearch]=useState("");
-  const[form,setForm]=useState<Asset|null>(null);
-  const[creating,setCreating]=useState(false);
-
-  const editing=editingId?assets.find(a=>a.id===editingId):null;
-  useEffect(()=>{
-    if(editing){
-      // Coerce any null fields to empty strings so controlled inputs don't crash.
-      // (Postgres can return null for empty columns; React inputs require strings.)
-      const safe = {
-        ...editing,
-        clientName: editing.clientName || "",
-        company: editing.company || "",
-        vertical: editing.vertical || "",
-        geography: editing.geography || "",
-        companySize: editing.companySize || "",
-        challenge: editing.challenge || "",
-        outcome: editing.outcome || "",
-        assetType: editing.assetType || "Video Testimonial",
-        videoUrl: editing.videoUrl || "",
-        status: editing.status || "published",
-        headline: editing.headline || "",
-        pullQuote: editing.pullQuote || "",
-        transcript: editing.transcript || "",
-        description: editing.description || "",
-        thumbnail: editing.thumbnail || "",
-        dateCreated: editing.dateCreated || new Date().toISOString().split("T")[0],
-      };
-      setForm(safe);
-    }
-    else if(creating)setForm({id:`new-${Date.now()}`,clientName:"",company:"",vertical:"Healthcare",geography:"Northeast US",companySize:"50-200",challenge:"",outcome:"",assetType:"Video Testimonial",videoUrl:"",status:"published",headline:"",pullQuote:"",transcript:"",description:"",thumbnail:"",dateCreated:new Date().toISOString().split("T")[0]});
-    else setForm(null);
-  },[editingId,creating,editing]);
-
-  const s=(k: keyof Asset, v: string) => setForm(p => p ? {...p, [k]: v} : p);
-  const save=()=>{if(!form)return;if(creating){onAdd(form);setCreating(false);setEditingId(form.id);}else{onUpdate(form);setEditingId(null);}};
-  const del=()=>{if(editingId&&confirm("Delete this asset?")){onDelete(editingId);setEditingId(null);}};
-
-  const filtered=assets.filter(a=>{if(!search)return true;const q=search.toLowerCase();return (a.company||"").toLowerCase().includes(q)||(a.clientName||"").toLowerCase().includes(q)||(a.vertical||"").toLowerCase().includes(q);});
-
-  if(form){
-    return(
-      <React.Fragment>
-        <div className="ap-head">
-          <div className="ap-edit-head">
-            <button className="ap-back" onClick={()=>{setEditingId(null);setCreating(false);}}>← Back</button>
-            <div className="ap-title" style={{fontSize:15}}>{creating?"New Asset":"Edit Asset"}</div>
-            {!creating&&editingId&&<button className="ap-preview-btn" onClick={()=>onPreview(editingId)}>Preview</button>}
-          </div>
-          {!creating&&<div className="ap-sub">{editing?.company} · {editing?.vertical}</div>}
-        </div>
-        <div className="ap-body edit-form">
-          <div className="frow">
-            <div className="fgrp"><label>Client Name *</label><input className="fin" value={form.clientName} onChange={e=>s("clientName",e.target.value)}/></div>
-            <div className="fgrp"><label>Company *</label><input className="fin" value={form.company} onChange={e=>s("company",e.target.value)}/></div>
-          </div>
-          <div className="frow">
-            <div className="fgrp"><label>Vertical</label><select className="fss" value={form.vertical} onChange={e=>s("vertical",e.target.value)}>{VERTICALS.filter(v=>v!=="All").map(v=>(<option key={v}>{v}</option>))}</select></div>
-            <div className="fgrp"><label>Type</label><select className="fss" value={form.assetType} onChange={e=>s("assetType",e.target.value)}>{ASSET_TYPES.filter(v=>v!=="All").map(v=>(<option key={v}>{v}</option>))}</select></div>
-          </div>
-          <div className="frow">
-            <div className="fgrp"><label>Geography</label><input className="fin" value={form.geography} onChange={e=>s("geography",e.target.value)}/></div>
-            <div className="fgrp"><label>Size</label><input className="fin" value={form.companySize} onChange={e=>s("companySize",e.target.value)}/></div>
-          </div>
-          <div className="frow">
-            <div className="fgrp"><label>Status</label><select className="fss" value={form.status} onChange={e=>s("status",e.target.value)}><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></select></div>
-            <div className="fgrp"><label>Challenge</label><input className="fin" value={form.challenge} onChange={e=>s("challenge",e.target.value)}/></div>
-          </div>
-          <div className="fgrp"><label>Headline</label><input className="fin" value={form.headline} onChange={e=>s("headline",e.target.value)}/></div>
-          <div className="fgrp"><label>Outcome</label><input className="fin" value={form.outcome} onChange={e=>s("outcome",e.target.value)}/></div>
-          <div className="fgrp"><label>Pull Quote</label><textarea className="ftxt" style={{minHeight:60}} value={form.pullQuote} onChange={e=>s("pullQuote",e.target.value)}/></div>
-          <div className="fgrp"><label>Video URL</label><input className="fin" value={form.videoUrl} onChange={e=>s("videoUrl",e.target.value)}/></div>
-          <div className="fgrp"><label>Thumbnail URL</label><input className="fin" value={form.thumbnail} onChange={e=>s("thumbnail",e.target.value)} placeholder="Auto from YouTube"/></div>
-          <div className="fgrp"><label>Transcript / Content</label><textarea className="ftxt" value={form.transcript} onChange={e=>s("transcript",e.target.value)}/></div>
-          <div className="edit-save">
-            <button className="save-btn" onClick={save}>{creating?"Create":"Save changes"}</button>
-            {!creating&&<button className="del-btn" onClick={del}>Delete</button>}
-          </div>
-        </div>
-      </React.Fragment>
-    );
-  }
-
-  return(
-    <React.Fragment>
-      <div className="ap-head">
-        <div className="ap-title">Assets</div>
-        <div className="ap-sub">{assets.length} testimonials in your library</div>
-      </div>
-      <div className="ap-body">
-        <input className="asset-search" placeholder="Search assets..." value={search} onChange={e=>setSearch(e.target.value)}/>
-        <button className="sbtn" style={{width:"100%",padding:"8px",borderRadius:"7px",border:"1px dashed var(--border2)",background:"var(--bg2)",color:"var(--t2)",fontFamily:"var(--font)",fontSize:12,fontWeight:600,cursor:"pointer",marginBottom:12}} onClick={()=>setCreating(true)}>+ Add new asset</button>
-        <div className="asset-list">
-          {filtered.map(a=>{
-            const c=VERT_CLR[a.vertical]||"#4f46e5";
-            const vid=extractVid(a.videoUrl);
-            let thumb=a.thumbnail;if(!thumb&&vid?.p==="yt")thumb=ytThumb(vid.id);
-            const isQ=a.assetType==="Quote";
-            return(
-              <div key={a.id} className="asset-row" onClick={()=>setEditingId(a.id)}>
-                <div className="asset-row-thumb" style={isQ?{background:c}:{}}>
-                  {isQ?<div className="asset-row-quote">"</div>:thumb?<img src={thumb} alt={a.company}/>:null}
-                </div>
-                <div className="asset-row-info">
-                  <div className="asset-row-co">{a.company}</div>
-                  <div className="asset-row-meta">{a.vertical} · {a.assetType==="Video Testimonial"?"Video":a.assetType==="Written Case Study"?"Case Study":"Quote"}</div>
-                </div>
-                <div className={`asset-row-status ${a.status}`}/>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </React.Fragment>
-  );
-}
-
 // ─── APP ─────────────────────────────────────────────────────────────────────
 export default function App(){
   const{user,org,signOut}=useAuth();
@@ -1905,6 +1780,7 @@ export default function App(){
   const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
+  const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
 
   // StoryMatch state
@@ -2038,6 +1914,29 @@ export default function App(){
         archivedReason:null,
       },next==="published"?"Published":"Moved to draft");
     }
+  };
+
+  // Save the full asset edit form. Mirrors what the old AssetsPanel did:
+  // optimistic state update, persist via PUT, then re-embed in background so
+  // semantic StoryMatch search reflects the new content.
+  const saveAssetEdit=async(updated: Asset)=>{
+    setAssets(prev=>prev.map(a=>a.id===updated.id?updated:a));
+    setToast("Saving…");
+    try{
+      const r=await fetch("/api/assets",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json",...(await authHeaders())},
+        body:JSON.stringify(updated),
+      });
+      if(!r.ok)throw new Error("Save failed");
+      setToast("Saved");
+      reembedAsset(updated.id);
+    }catch(e){
+      console.error("Asset save failed",e);
+      setToast("Save failed");
+    }
+    setTimeout(()=>setToast(null),1500);
+    setEditingAssetId(null);
   };
 
   // Delete an asset (irreversible). Used by per-row 3-dot menu and bulk bar.
@@ -2323,19 +2222,6 @@ export default function App(){
                 </svg>
                 Import
               </button>
-              <button
-                className={`rail-btn ${adminSection==="assets"?"on":""}`}
-                onClick={()=>setAdminSection(adminSection==="assets"?null:"assets")}
-                title="Assets"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <rect x="3" y="3" width="7" height="7" rx="1"/>
-                  <rect x="14" y="3" width="7" height="7" rx="1"/>
-                  <rect x="3" y="14" width="7" height="7" rx="1"/>
-                  <rect x="14" y="14" width="7" height="7" rx="1"/>
-                </svg>
-                Assets
-              </button>
               <button className="rail-btn disabled" title="Embed (coming soon)">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <polyline points="16 18 22 12 16 6"/>
@@ -2485,67 +2371,8 @@ export default function App(){
                   }}
                 />
               )}
-              {adminSection==="assets" && (
-                <AssetsPanel
-                  assets={assets}
-                  onUpdate={async u=>{
-                    // Optimistic UI: update local state immediately
-                    setAssets(p=>p.map(a=>a.id===u.id?u:a));
-                    setToast("Saving…");
-                    try{
-                      const r=await fetch("/api/assets",{
-                        method:"PUT",
-                        headers:{"Content-Type":"application/json",...(await authHeaders())},
-                        body:JSON.stringify(u)
-                      });
-                      if(!r.ok)throw new Error("Save failed");
-                      setToast("Saved");
-                      // Re-embed in the background so semantic search reflects the new content
-                      reembedAsset(u.id);
-                    }catch(e){
-                      console.error(e);
-                      setToast("Save failed");
-                    }
-                    setTimeout(()=>setToast(null),1500);
-                  }}
-                  onDelete={async id=>{
-                    if(!confirm("Delete this asset? This cannot be undone."))return;
-                    setAssets(p=>p.filter(a=>a.id!==id));
-                    setToast("Deleting…");
-                    try{
-                      const r=await fetch(`/api/assets?id=${id}`,{method:"DELETE",headers:await authHeaders()});
-                      if(!r.ok)throw new Error("Delete failed");
-                      setToast("Deleted");
-                    }catch(e){
-                      console.error(e);
-                      setToast("Delete failed");
-                    }
-                    setTimeout(()=>setToast(null),1500);
-                  }}
-                  onAdd={async a=>{
-                    setAssets(p=>[a,...p]);
-                    setToast("Creating…");
-                    try{
-                      const r=await fetch("/api/assets",{
-                        method:"POST",
-                        headers:{"Content-Type":"application/json",...(await authHeaders())},
-                        body:JSON.stringify(a)
-                      });
-                      if(!r.ok)throw new Error("Create failed");
-                      setToast("Created");
-                      reembedAsset(a.id);
-                    }catch(e){
-                      console.error(e);
-                      setToast("Create failed");
-                    }
-                    setTimeout(()=>setToast(null),1500);
-                  }}
-                  onPreview={id=>{
-                    const a=assets.find(x=>x.id===id);
-                    if(a)openAsset(a);
-                  }}
-                />
-              )}
+              {/* Assets panel removed — admins now use Edit on the 3-dot menu of any
+                  card or row to open the AssetEditPanel side drawer. */}
             </aside>
           )}
 
@@ -2718,6 +2545,7 @@ export default function App(){
                   onToggleSelect={toggleSelected}
                   onSelectAll={toggleSelectAll}
                   onClick={openAsset}
+                  onEdit={(a)=>setEditingAssetId(a.id)}
                   onSetPublicationStatus={setPublicationStatus}
                   onSetClientStatus={setClientStatus}
                   onSetApproval={setApproval}
@@ -2733,6 +2561,7 @@ export default function App(){
                     const restore = adminMgmt ? restoreAsset : undefined;
                     const cardMenu: MenuItem[] | undefined = adminMgmt ? [
                       { label: "Open", onClick: () => openAsset(a) },
+                      { label: "Edit details", onClick: () => setEditingAssetId(a.id) },
                       { label: "Copy share link", onClick: () => copyShareLink(a) },
                       { label: "✓ Mark verified", onClick: () => markVerified(a) },
                       { divider: true },
@@ -2769,6 +2598,13 @@ export default function App(){
             onClear={clearSelection}
           />
         )}
+        <AssetEditPanel
+          asset={editingAssetId ? assets.find(a => a.id === editingAssetId) ?? null : null}
+          onSave={(updated)=>saveAssetEdit(updated as Asset)}
+          onDelete={(id)=>{deleteAssetInline(id);setEditingAssetId(null);}}
+          onPreview={(id)=>{const a=assets.find(x=>x.id===id);if(a){setEditingAssetId(null);openAsset(a);}}}
+          onClose={()=>setEditingAssetId(null)}
+        />
       </div>
     </React.Fragment>
   );
