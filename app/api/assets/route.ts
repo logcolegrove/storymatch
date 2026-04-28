@@ -60,6 +60,10 @@ type AssetDB = {
   client_status_updated_at: string | null;
   crm_account_id: string | null;
   last_verified_at: string | null;
+  // Approval (one of three signals feeding the "Cleared" indicator)
+  approval_status: string;
+  approval_note: string | null;
+  approval_recorded_at: string | null;
 };
 
 type AssetFE = {
@@ -89,6 +93,10 @@ type AssetFE = {
   clientStatusUpdatedAt?: string | null;
   crmAccountId?: string | null;
   lastVerifiedAt?: string | null;
+  // Approval
+  approvalStatus?: string;
+  approvalNote?: string | null;
+  approvalRecordedAt?: string | null;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -118,6 +126,9 @@ function dbToFe(r: AssetDB): AssetFE {
     clientStatusUpdatedAt: r.client_status_updated_at,
     crmAccountId: r.crm_account_id,
     lastVerifiedAt: r.last_verified_at,
+    approvalStatus: r.approval_status,
+    approvalNote: r.approval_note,
+    approvalRecordedAt: r.approval_recorded_at,
   };
 }
 
@@ -147,6 +158,9 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string): Partial<As
   if (a.clientStatusUpdatedAt !== undefined) o.client_status_updated_at = a.clientStatusUpdatedAt;
   if (a.crmAccountId !== undefined) o.crm_account_id = a.crmAccountId;
   if (a.lastVerifiedAt !== undefined) o.last_verified_at = a.lastVerifiedAt;
+  if (a.approvalStatus !== undefined) o.approval_status = a.approvalStatus;
+  if (a.approvalNote !== undefined) o.approval_note = a.approvalNote;
+  if (a.approvalRecordedAt !== undefined) o.approval_recorded_at = a.approvalRecordedAt;
   return o;
 }
 

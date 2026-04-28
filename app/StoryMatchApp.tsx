@@ -50,9 +50,10 @@ function reembedAsset(assetId: string) {
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 type AssetType = "Video Testimonial" | "Written Case Study" | "Quote";
-type AssetStatus = "active" | "archived" | "draft" | "inactive";
+type AssetStatus = "published" | "archived" | "draft";
 type ClientStatus = "current" | "former" | "unknown";
 type ClientStatusSource = "manual" | "crm" | "system" | "unset";
+type ApprovalStatus = "approved" | "pending" | "denied" | "unset";
 
 interface Asset {
   id: string;
@@ -81,6 +82,10 @@ interface Asset {
   clientStatusUpdatedAt?: string | null;
   crmAccountId?: string | null;
   lastVerifiedAt?: string | null;
+  // Approval (one of three signals feeding the "Cleared" indicator)
+  approvalStatus?: ApprovalStatus | string;
+  approvalNote?: string | null;
+  approvalRecordedAt?: string | null;
 }
 
 interface Source {
@@ -437,7 +442,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 
 /* ── LIFECYCLE PILLS — used in both list view and detail/edit ── */
 .lc-pill{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:3px 8px;border-radius:4px;border:1px solid;white-space:nowrap;}
-.lc-pill.active{background:#ecfdf5;color:var(--green);border-color:#a7f3d0;}
+.lc-pill.published,.lc-pill.active{background:#ecfdf5;color:var(--green);border-color:#a7f3d0;}
 .lc-pill.archived{background:var(--amberL);color:var(--amber);border-color:#fcd34d;}
 .lc-pill.draft{background:var(--bg2);color:var(--t3);border-color:var(--border2);}
 .lc-pill.current{background:#ecfdf5;color:var(--green);border-color:#a7f3d0;}
@@ -452,10 +457,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .view-toggle-btn+.view-toggle-btn{border-left:1px solid var(--border);}
 
 /* ── LIST VIEW ── */
-.lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;overflow:hidden;}
-.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 100px 110px 130px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);}
-.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 100px 110px 130px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;}
-.lv-row:last-child{border-bottom:none;}
+.lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;}
+.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 130px 130px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;}
+.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 130px 130px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;}
+.lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
 .lv-row.archived{opacity:.65;}
 .lv-thumb{width:72px;height:48px;border-radius:6px;overflow:hidden;background:var(--bg3);position:relative;}
@@ -465,16 +470,40 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.lv-cs-select{font-family:var(--font);font-size:11px;padding:4px 6px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;width:100%;}
-.lv-verify{font-size:11px;color:var(--t3);display:flex;align-items:center;gap:6px;}
-.lv-verify-btn{font-family:var(--font);font-size:10.5px;padding:3px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--accent);cursor:pointer;font-weight:600;}
-.lv-verify-btn:hover{background:var(--accentLL);}
+.lv-pub-select{font-family:var(--font);font-size:11.5px;font-weight:600;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;cursor:pointer;width:100%;}
+.lv-pub-select.published{color:var(--green);border-color:#a7f3d0;background:#ecfdf5;}
+.lv-pub-select.archived{color:var(--amber);border-color:#fcd34d;background:var(--amberL);}
+.lv-pub-select.draft{color:var(--t3);background:var(--bg2);}
 .lv-actions{display:flex;gap:5px;justify-content:flex-end;}
 .lv-act-btn{font-family:var(--font);font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
 .lv-act-btn:hover{background:var(--bg2);color:var(--t1);}
-.lv-act-btn.danger{color:var(--amber);}
 .lv-act-btn.accent{color:var(--accent);border-color:var(--accent);}
 .lv-empty{padding:40px;text-align:center;color:var(--t3);}
+
+/* ── CLEARED INDICATOR + POPOVER ── */
+.cl-cell{position:relative;}
+.cl-trigger{display:inline-flex;align-items:center;gap:7px;cursor:pointer;border:1px solid transparent;padding:4px 8px;border-radius:6px;font-size:11.5px;color:var(--t2);}
+.cl-trigger:hover{border-color:var(--border);background:#fff;}
+.cl-trigger.open{border-color:var(--accent);background:var(--accentLL);}
+.cl-circle{width:11px;height:11px;border-radius:50%;flex-shrink:0;border:1px solid rgba(0,0,0,.08);}
+.cl-circle.green{background:var(--green);}
+.cl-circle.yellow{background:var(--amber);}
+.cl-circle.red{background:var(--red);}
+.cl-pop{position:absolute;top:calc(100% + 6px);left:0;width:340px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14);padding:14px;z-index:60;cursor:default;}
+.cl-pop-head{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);margin-bottom:8px;}
+.cl-section{padding:10px 0;border-top:1px solid var(--border);}
+.cl-section:first-of-type{border-top:none;padding-top:4px;}
+.cl-section-head{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
+.cl-section-head .cl-circle{width:9px;height:9px;}
+.cl-section-title{font-size:12.5px;font-weight:600;color:var(--t1);flex:1;}
+.cl-section-meta{font-size:11px;color:var(--t3);}
+.cl-input,.cl-select,.cl-textarea{font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);width:100%;margin-top:5px;box-sizing:border-box;}
+.cl-textarea{min-height:64px;resize:vertical;font-family:var(--font);}
+.cl-row-actions{display:flex;gap:6px;margin-top:6px;}
+.cl-mini-btn{font-family:var(--font);font-size:11px;padding:4px 9px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
+.cl-mini-btn:hover{background:var(--bg2);color:var(--t1);}
+.cl-mini-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+.cl-mini-btn.primary:hover{background:var(--accent2);}
 
 /* ── QUOTE CARD ── */
 .qcard{border-radius:var(--r);cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;min-height:340px;display:flex;flex-direction:column;justify-content:flex-end;}
@@ -671,10 +700,229 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore}: CardProps) {
 interface ListViewProps {
   assets: Asset[];
   onClick: (a: Asset) => void;
-  onArchive: (a: Asset) => void;
-  onRestore: (a: Asset) => void;
-  onMarkVerified: (a: Asset) => void;
+  onSetPublicationStatus: (a: Asset, next: "published" | "draft" | "archived") => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
+  onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
+  onMarkVerified: (a: Asset) => void;
+}
+
+// Compute the "Cleared for use" composite signal from approval, client status,
+// and freshness. Worst-of-three logic. Returns the level (green / yellow / red)
+// and a per-signal breakdown for the popover.
+type ClearedLevel = "green" | "yellow" | "red";
+interface ClearedReason { signal: "approval" | "client" | "freshness"; level: ClearedLevel; label: string; }
+
+function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedReason[] } {
+  const reasons: ClearedReason[] = [];
+
+  // Approval
+  const approval = (asset.approvalStatus || "unset") as ApprovalStatus;
+  if (approval === "approved") reasons.push({ signal: "approval", level: "green", label: "Approval received" });
+  else if (approval === "denied") reasons.push({ signal: "approval", level: "red", label: "Approval denied" });
+  else if (approval === "pending") reasons.push({ signal: "approval", level: "yellow", label: "Approval pending" });
+  else reasons.push({ signal: "approval", level: "yellow", label: "Approval not recorded" });
+
+  // Client relationship
+  const cs = (asset.clientStatus || "current") as ClientStatus;
+  if (cs === "current") reasons.push({ signal: "client", level: "green", label: "Current client" });
+  else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "Former client" });
+  else reasons.push({ signal: "client", level: "yellow", label: "Client status unknown" });
+
+  // Freshness
+  if (asset.lastVerifiedAt) {
+    const months = (Date.now() - new Date(asset.lastVerifiedAt).getTime()) / (1000 * 60 * 60 * 24 * 30);
+    if (months < 6) reasons.push({ signal: "freshness", level: "green", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)}` });
+    else if (months < 18) reasons.push({ signal: "freshness", level: "yellow", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)} — getting stale` });
+    else reasons.push({ signal: "freshness", level: "red", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)} — too old` });
+  } else {
+    reasons.push({ signal: "freshness", level: "red", label: "Never verified" });
+  }
+
+  let level: ClearedLevel = "green";
+  for (const r of reasons) {
+    if (r.level === "red") { level = "red"; break; }
+    if (r.level === "yellow") level = "yellow";
+  }
+  return { level, reasons };
+}
+
+interface ClearedPopoverProps {
+  asset: Asset;
+  reasons: ClearedReason[];
+  onClose: () => void;
+  onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
+  onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
+  onMarkVerified: (a: Asset) => void;
+}
+
+function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedPopoverProps) {
+  const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
+  const popRef = React.useRef<HTMLDivElement>(null);
+
+  // Close on click outside
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    // Defer one tick so the click that opened us doesn't immediately close us
+    const timer = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+    return () => { clearTimeout(timer); document.removeEventListener("mousedown", onDoc); };
+  }, [onClose]);
+
+  const reasonFor = (signal: "approval" | "client" | "freshness") => reasons.find(r => r.signal === signal)!;
+
+  return (
+    <div className="cl-pop" ref={popRef} onClick={(e) => e.stopPropagation()}>
+      <div className="cl-pop-head">Cleared for use</div>
+
+      {/* Approval section */}
+      <div className="cl-section">
+        <div className="cl-section-head">
+          <span className={`cl-circle ${reasonFor("approval").level}`}/>
+          <span className="cl-section-title">Approval</span>
+          {asset.approvalRecordedAt && (
+            <span className="cl-section-meta">recorded {timeAgoShort(asset.approvalRecordedAt)}</span>
+          )}
+        </div>
+        <select
+          className="cl-select"
+          value={asset.approvalStatus || "unset"}
+          onChange={(e) => onSetApproval(asset, { status: e.target.value as ApprovalStatus })}
+        >
+          <option value="unset">Not recorded</option>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="denied">Denied</option>
+        </select>
+        <textarea
+          className="cl-textarea"
+          placeholder="Paste the email thread, or write a note about how approval was obtained…"
+          value={noteDraft}
+          onChange={(e) => setNoteDraft(e.target.value)}
+        />
+        {noteDraft !== (asset.approvalNote || "") && (
+          <div className="cl-row-actions">
+            <button className="cl-mini-btn primary" onClick={() => onSetApproval(asset, { note: noteDraft })}>Save note</button>
+            <button className="cl-mini-btn" onClick={() => setNoteDraft(asset.approvalNote || "")}>Cancel</button>
+          </div>
+        )}
+      </div>
+
+      {/* Client status section */}
+      <div className="cl-section">
+        <div className="cl-section-head">
+          <span className={`cl-circle ${reasonFor("client").level}`}/>
+          <span className="cl-section-title">Client relationship</span>
+          {asset.clientStatusSource && asset.clientStatusSource !== "unset" && (
+            <span className="cl-section-meta">via {asset.clientStatusSource}</span>
+          )}
+        </div>
+        <select
+          className="cl-select"
+          value={(asset.clientStatus || "current") as string}
+          onChange={(e) => onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown")}
+        >
+          <option value="current">Current client</option>
+          <option value="former">Former client</option>
+          <option value="unknown">Unknown</option>
+        </select>
+      </div>
+
+      {/* Freshness section */}
+      <div className="cl-section">
+        <div className="cl-section-head">
+          <span className={`cl-circle ${reasonFor("freshness").level}`}/>
+          <span className="cl-section-title">Freshness</span>
+          <span className="cl-section-meta">verified {timeAgoShort(asset.lastVerifiedAt)}</span>
+        </div>
+        <button className="cl-mini-btn primary" onClick={() => onMarkVerified(asset)}>
+          ✓ Mark verified now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ListView({ assets, onClick, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified }: ListViewProps) {
+  const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
+
+  if (assets.length === 0) {
+    return <div className="lv"><div className="lv-empty">No assets to show.</div></div>;
+  }
+  return (
+    <div className="lv">
+      <div className="lv-head">
+        <div></div>
+        <div>Title</div>
+        <div>Vertical</div>
+        <div>Publication</div>
+        <div title="Cleared for use: approval, client status, freshness">Cleared</div>
+        <div style={{ textAlign: "right" }}>Actions</div>
+      </div>
+      {assets.map((a) => {
+        const isArchived = a.status === "archived";
+        const cleared = computeCleared(a);
+        const open = openClearedFor === a.id;
+        const vid = extractVid(a.videoUrl);
+        let thumb = a.thumbnail;
+        if (!thumb && vid?.p === "yt") thumb = ytThumb(vid.id);
+        if (!thumb) thumb = "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=160&h=90&fit=crop";
+        const pubStatus = (a.status || "published") as "published" | "draft" | "archived";
+        return (
+          <div
+            key={a.id}
+            className={`lv-row${isArchived ? " archived" : ""}`}
+            onClick={() => onClick(a)}
+          >
+            <div className="lv-thumb">
+              <img src={thumb} alt={a.company} loading="lazy" />
+            </div>
+            <div className="lv-title">
+              <div className="lv-title-h">{a.headline || "Untitled"}</div>
+              <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
+            </div>
+            <div className="lv-vert">{a.vertical || "—"}</div>
+            <div onClick={(e) => e.stopPropagation()}>
+              <select
+                className={`lv-pub-select ${pubStatus}`}
+                value={pubStatus}
+                onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
+              >
+                <option value="published">Published</option>
+                <option value="draft">Draft</option>
+                <option value="archived">Archived</option>
+              </select>
+            </div>
+            <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
+              <div
+                className={`cl-trigger${open ? " open" : ""}`}
+                onClick={() => setOpenClearedFor(open ? null : a.id)}
+                title="Cleared for use: approval, client status, freshness"
+              >
+                <span className={`cl-circle ${cleared.level}`}/>
+                <span>{cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"}</span>
+              </div>
+              {open && (
+                <ClearedPopover
+                  asset={a}
+                  reasons={cleared.reasons}
+                  onClose={() => setOpenClearedFor(null)}
+                  onSetClientStatus={onSetClientStatus}
+                  onSetApproval={onSetApproval}
+                  onMarkVerified={onMarkVerified}
+                />
+              )}
+            </div>
+            <div className="lv-actions" onClick={(e) => e.stopPropagation()}>
+              <button className="lv-act-btn" onClick={() => onClick(a)}>Open</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function timeAgoShort(iso: string | null | undefined): string {
@@ -734,8 +982,8 @@ function ListView({ assets, onClick, onArchive, onRestore, onMarkVerified, onSet
             </div>
             <div className="lv-vert">{a.vertical || "—"}</div>
             <div>
-              <span className={`lc-pill ${isArchived ? "archived" : a.status === "draft" ? "draft" : "active"}`}>
-                {isArchived ? "Archived" : a.status === "draft" ? "Draft" : "Active"}
+              <span className={`lc-pill ${isArchived ? "archived" : a.status === "draft" ? "draft" : "published"}`}>
+                {isArchived ? "Archived" : a.status === "draft" ? "Draft" : "Published"}
               </span>
             </div>
             <div onClick={(e) => e.stopPropagation()}>
@@ -805,7 +1053,7 @@ function DetailPage({asset,onBack,allAssets,onSelect}: DetailPageProps) {
     <div className="dp">
       <button className="dp-back" onClick={onBack}>← Back to library</button>
       <div className="dp-hero"><div className="dp-hero-img"><img src={thumb} alt={asset.company}/></div><div className="dp-hero-content"><div className="dp-hero-eyebrow"><span className="dp-hero-co">{asset.company}</span><span className="dp-hero-vbadge">{asset.assetType}</span></div><h1>{asset.headline}.</h1><div className="dp-hero-sub">{asset.pullQuote}</div></div></div>
-      <div className="dp-summary-bar"><div className="dp-summary"><h3>Summary</h3><p>{asset.pullQuote}</p></div><div className="dp-about"><h3>About</h3><p>{asset.clientName} at {asset.company}. {asset.companySize} employees, {asset.geography}.</p><div className="dp-about-tags"><span className="pill" style={{borderColor:c,color:c}}>{asset.vertical}</span><span className="pill">{asset.geography}</span><span className="pill" style={{borderColor:asset.status==="active"?"var(--green)":"var(--red)",color:asset.status==="active"?"var(--green)":"var(--red)"}}>{asset.status}</span></div></div></div>
+      <div className="dp-summary-bar"><div className="dp-summary"><h3>Summary</h3><p>{asset.pullQuote}</p></div><div className="dp-about"><h3>About</h3><p>{asset.clientName} at {asset.company}. {asset.companySize} employees, {asset.geography}.</p><div className="dp-about-tags"><span className="pill" style={{borderColor:c,color:c}}>{asset.vertical}</span><span className="pill">{asset.geography}</span><span className="pill" style={{borderColor:asset.status==="published"?"var(--green)":"var(--amber)",color:asset.status==="published"?"var(--green)":"var(--amber)"}}>{asset.status}</span></div></div></div>
       {parseStats.length>0&&<div className="dp-stats">{parseStats.map((s,i)=>(<div className="dp-stat" key={i}><div><span className="dp-stat-num">{s.num}</span><span className="dp-stat-unit">{s.unit}</span></div><div className="dp-stat-label">{s.label||asset.challenge}</div></div>))}</div>}
       {vid&&<div style={{maxWidth:900,margin:"0 auto 28px"}}><div className="dp-video-embed">{vid.p==="yt"?<iframe src={`https://www.youtube.com/embed/${vid.id}`} frameBorder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowFullScreen/>:<iframe src={`https://player.vimeo.com/video/${vid.id}`} frameBorder="0" allow="autoplay;fullscreen;picture-in-picture" allowFullScreen/>}</div></div>}
       <div className="dp-body">
@@ -975,7 +1223,7 @@ async function importSingleVideo(urlInfo: UrlInfo, sourceId: string | null): Pro
     outcome:enriched?.outcome||"",
     assetType:"Video Testimonial",
     videoUrl:urlInfo.url,
-    status:"active",
+    status:"published",
     dateCreated:new Date().toISOString().split("T")[0],
     headline:enriched?.headline||title,
     pullQuote:enriched?.pullQuote||"",
@@ -1446,7 +1694,7 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProp
         outcome: editing.outcome || "",
         assetType: editing.assetType || "Video Testimonial",
         videoUrl: editing.videoUrl || "",
-        status: editing.status || "active",
+        status: editing.status || "published",
         headline: editing.headline || "",
         pullQuote: editing.pullQuote || "",
         transcript: editing.transcript || "",
@@ -1456,7 +1704,7 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProp
       };
       setForm(safe);
     }
-    else if(creating)setForm({id:`new-${Date.now()}`,clientName:"",company:"",vertical:"Healthcare",geography:"Northeast US",companySize:"50-200",challenge:"",outcome:"",assetType:"Video Testimonial",videoUrl:"",status:"active",headline:"",pullQuote:"",transcript:"",description:"",thumbnail:"",dateCreated:new Date().toISOString().split("T")[0]});
+    else if(creating)setForm({id:`new-${Date.now()}`,clientName:"",company:"",vertical:"Healthcare",geography:"Northeast US",companySize:"50-200",challenge:"",outcome:"",assetType:"Video Testimonial",videoUrl:"",status:"published",headline:"",pullQuote:"",transcript:"",description:"",thumbnail:"",dateCreated:new Date().toISOString().split("T")[0]});
     else setForm(null);
   },[editingId,creating,editing]);
 
@@ -1491,7 +1739,7 @@ function AssetsPanel({assets,onUpdate,onDelete,onAdd,onPreview}: AssetsPanelProp
             <div className="fgrp"><label>Size</label><input className="fin" value={form.companySize} onChange={e=>s("companySize",e.target.value)}/></div>
           </div>
           <div className="frow">
-            <div className="fgrp"><label>Status</label><select className="fss" value={form.status} onChange={e=>s("status",e.target.value)}><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+            <div className="fgrp"><label>Status</label><select className="fss" value={form.status} onChange={e=>s("status",e.target.value)}><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></select></div>
             <div className="fgrp"><label>Challenge</label><input className="fin" value={form.challenge} onChange={e=>s("challenge",e.target.value)}/></div>
           </div>
           <div className="fgrp"><label>Headline</label><input className="fin" value={form.headline} onChange={e=>s("headline",e.target.value)}/></div>
@@ -1621,18 +1869,7 @@ export default function App(){
   // Restore an archived asset back to active. Clears archived metadata so the
   // asset reappears in normal views and StoryMatch search.
   const restoreAsset=async(asset: Asset)=>{
-    await updateAssetInline(asset.id,{status:"active",archivedAt:null,archivedReason:null},"Restored");
-  };
-
-  // Manually archive an active asset (admin action from the list view).
-  const archiveAsset=async(asset: Asset)=>{
-    if(!confirm(`Archive "${asset.headline||asset.company||"this asset"}"? It will be hidden from sales reps and excluded from StoryMatch search.`))return;
-    const today=new Date().toISOString().split("T")[0];
-    await updateAssetInline(asset.id,{
-      status:"archived",
-      archivedAt:new Date().toISOString(),
-      archivedReason:`Manually archived on ${today}`,
-    },"Archived");
+    await updateAssetInline(asset.id,{status:"published",archivedAt:null,archivedReason:null},"Restored");
   };
 
   // Mark an asset as verified — bumps last_verified_at to now.
@@ -1649,6 +1886,37 @@ export default function App(){
       clientStatusSource:"manual",
       clientStatusUpdatedAt:new Date().toISOString(),
     },next==="current"?"Marked current":next==="former"?"Marked former":"Marked unknown");
+  };
+
+  // Update approval status and/or note. Records timestamp so we can show
+  // "approved on April 12" in the cleared popover.
+  const setApproval=async(asset: Asset, patch: { status?: ApprovalStatus; note?: string })=>{
+    const update: Partial<Asset> = {};
+    if(patch.status!==undefined){
+      update.approvalStatus=patch.status;
+      update.approvalRecordedAt=new Date().toISOString();
+    }
+    if(patch.note!==undefined) update.approvalNote=patch.note;
+    await updateAssetInline(asset.id,update,patch.status?`Approval: ${patch.status}`:"Note saved");
+  };
+
+  // Change publication status (published / draft / archived) inline.
+  const setPublicationStatus=async(asset: Asset, next: "published"|"draft"|"archived")=>{
+    if(next==="archived"){
+      const today=new Date().toISOString().split("T")[0];
+      await updateAssetInline(asset.id,{
+        status:"archived",
+        archivedAt:new Date().toISOString(),
+        archivedReason:`Manually archived on ${today}`,
+      },"Archived");
+    } else {
+      // Moving to published or draft — clear archive metadata if previously archived
+      await updateAssetInline(asset.id,{
+        status:next,
+        archivedAt:null,
+        archivedReason:null,
+      },next==="published"?"Published":"Moved to draft");
+    }
   };
 
   const runStoryMatch=useCallback(async(query: string)=>{
@@ -2205,10 +2473,10 @@ export default function App(){
                 <ListView
                   assets={displayAssets}
                   onClick={openAsset}
-                  onArchive={archiveAsset}
-                  onRestore={restoreAsset}
-                  onMarkVerified={markVerified}
+                  onSetPublicationStatus={setPublicationStatus}
                   onSetClientStatus={setClientStatus}
+                  onSetApproval={setApproval}
+                  onMarkVerified={markVerified}
                 />
               ) : (
                 <div className="grid">
