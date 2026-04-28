@@ -2120,7 +2120,7 @@ export default function App(){
   if(route.page==="shares"){
     return(<React.Fragment><style>{css}</style><div style={{minHeight:"100vh",background:"var(--bg)"}}>
       <header className="hdr"><div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}></div><div className="hdr-r"><span className="badge">{assets.length} assets</span></div></header>
-      <MySharesView isAdmin={isAdmin} authHeaders={authHeaders} onBack={goHome}/>
+      <MySharesView authHeaders={authHeaders} onBack={goHome}/>
     </div></React.Fragment>);
   }
 

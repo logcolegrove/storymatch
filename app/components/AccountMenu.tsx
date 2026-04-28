@@ -188,11 +188,11 @@ function timeAgo(iso: string | null): string {
 const ROLE_OVERVIEWS: Record<"admin" | "sales", { title: string; desc: string }> = {
   sales: {
     title: "Sales",
-    desc: "Can search the library, copy share links for prospects, and see engagement on the links they personally sent.",
+    desc: "Can search the library, copy share links for prospects, and see engagement on every share link the team has sent.",
   },
   admin: {
     title: "Admin",
-    desc: "Everything sales can do — plus import showcases, edit testimonials, manage the team, and see the whole team's engagement.",
+    desc: "Everything sales can do — plus import showcases, edit testimonials, and manage the team.",
   },
 };
 
@@ -434,6 +434,8 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
 }
 
 // ── Per-row role dropdown (Sales / Admin / Remove) ─────────────────────────
+// Uses position:fixed for the popup so it escapes the modal-body's overflow:auto
+// clipping context. Coords are computed from the trigger's bounding rect on open.
 function RoleMenu({
   role,
   onChange,
@@ -446,25 +448,42 @@ function RoleMenu({
   removeLabel: string;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+
+  const POP_WIDTH = 170;
+
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      // Anchor the popup's right edge to the trigger's right edge, just below it.
+      setPopPos({ top: r.bottom + 4, left: r.right - POP_WIDTH });
+    }
+    setOpen(o => !o);
+  };
+
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || popRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const t = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
     return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
   }, [open]);
+
   return (
-    <div className="am-rolemenu" ref={ref}>
-      <button className={`am-team-role ${role} am-rolemenu-trigger`} onClick={() => setOpen(o => !o)}>
+    <>
+      <button ref={triggerRef} className={`am-team-role ${role} am-rolemenu-trigger`} onClick={toggle}>
         {role}
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </button>
-      {open && (
-        <div className="am-rolemenu-pop">
+      {open && popPos && (
+        <div ref={popRef} className="am-rolemenu-pop" style={{ top: popPos.top, left: popPos.left, width: POP_WIDTH }}>
           <button className="am-rolemenu-item" onClick={() => { setOpen(false); if (role !== "sales") onChange("sales"); }}>
             <span>{role === "sales" ? "✓" : ""}</span> Sales
           </button>
@@ -477,7 +496,7 @@ function RoleMenu({
           </button>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -617,10 +636,10 @@ const css = `
 .am-team-row.just-added{background:var(--accentLL);transition:background 1s ease-out;}
 
 /* ── Role dropdown (per row) ── */
-.am-rolemenu{position:relative;}
 .am-rolemenu-trigger{cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:var(--font);}
 .am-rolemenu-trigger:hover{filter:brightness(.95);}
-.am-rolemenu-pop{position:absolute;top:calc(100% + 4px);right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:4px;z-index:50;min-width:160px;}
+/* position:fixed so it escapes the modal body's overflow:auto. Coords set inline. */
+.am-rolemenu-pop{position:fixed;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:4px;z-index:250;}
 .am-rolemenu-item{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;background:none;border:none;border-radius:5px;cursor:pointer;color:var(--t1);font-family:var(--font);font-size:12.5px;text-align:left;}
 .am-rolemenu-item span{display:inline-block;width:14px;color:var(--accent);font-weight:700;}
 .am-rolemenu-item:hover{background:var(--bg2);}

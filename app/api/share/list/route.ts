@@ -62,8 +62,11 @@ export async function GET(req: NextRequest) {
   const ctx = await getCurrentUserOrg(req);
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const scope = req.nextUrl.searchParams.get("scope"); // "org" for admin org-wide view
-  const orgWide = scope === "org" && ctx.role === "admin";
+  // ?scope=org returns every share in the user's org (admin AND sales reps
+  // can see what the whole team is sending — there's no privacy concern,
+  // and visibility tends to encourage more sharing).
+  const scope = req.nextUrl.searchParams.get("scope");
+  const orgWide = scope === "org";
 
   // Pull share_links — own (default) or org-wide (admin only)
   let q = supabaseAdmin

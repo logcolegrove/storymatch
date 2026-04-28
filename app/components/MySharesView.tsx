@@ -48,7 +48,6 @@ function formatDuration(sec: number): string {
 }
 
 interface Props {
-  isAdmin: boolean;
   authHeaders: () => Promise<HeadersInit>;
   onBack: () => void;
 }
@@ -72,7 +71,7 @@ function copyToClipboard(text: string) {
   navigator.clipboard?.writeText(text);
 }
 
-export default function MySharesView({ isAdmin, authHeaders, onBack }: Props) {
+export default function MySharesView({ authHeaders, onBack }: Props) {
   const [shares, setShares] = useState<ShareSummary[] | null>(null);
   const [scope, setScope] = useState<"self" | "org">("self");
   const [loading, setLoading] = useState(false);
@@ -114,12 +113,12 @@ export default function MySharesView({ isAdmin, authHeaders, onBack }: Props) {
             <h1 className="ms-title">My shared links</h1>
             <div className="ms-sub">Track which prospects are actually engaging with the testimonials you sent.</div>
           </div>
-          {isAdmin && (
-            <div className="ms-scope-toggle">
-              <button className={`ms-scope-btn ${scope === "self" ? "on" : ""}`} onClick={() => setScope("self")}>Mine</button>
-              <button className={`ms-scope-btn ${scope === "org" ? "on" : ""}`} onClick={() => setScope("org")}>Whole team</button>
-            </div>
-          )}
+          {/* Sales reps and admins both see the whole-team view — visibility into
+              what colleagues are sharing tends to encourage more activity. */}
+          <div className="ms-scope-toggle">
+            <button className={`ms-scope-btn ${scope === "self" ? "on" : ""}`} onClick={() => setScope("self")}>Mine</button>
+            <button className={`ms-scope-btn ${scope === "org" ? "on" : ""}`} onClick={() => setScope("org")}>Whole team</button>
+          </div>
         </div>
 
         {loading && <div className="ms-empty">Loading…</div>}
