@@ -77,17 +77,20 @@ export async function GET(req: NextRequest) {
   const nowIso = new Date().toISOString();
   const { data: invites } = await supabaseAdmin
     .from("invites")
-    .select("id, role, expires_at, created_at, accepted_at")
+    .select("id, role, expires_at, created_at, accepted_at, invited_email, token")
     .eq("org_id", ctx.orgId)
     .is("accepted_at", null)
     .gt("expires_at", nowIso)
     .order("created_at", { ascending: false });
 
+  const origin = req.nextUrl.origin;
   const pendingInvites = (invites || []).map((i) => ({
     id: i.id,
     role: i.role,
+    invited_email: i.invited_email || null,
     created_at: i.created_at,
     expires_at: i.expires_at,
+    url: `${origin}/signup?invite=${i.token}`,
   }));
 
   return NextResponse.json({ members: teamMembers, pending_invites: pendingInvites });

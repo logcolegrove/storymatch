@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Only admins can create invites" }, { status: 403 });
   }
 
-  let body: { role?: string };
+  let body: { role?: string; email?: string };
   try {
     body = await req.json();
   } catch {
@@ -46,6 +46,13 @@ export async function POST(req: NextRequest) {
   const role = body.role;
   if (!role || !ALLOWED_ROLES.has(role)) {
     return NextResponse.json({ error: "role must be 'admin' or 'sales'" }, { status: 400 });
+  }
+  // Optional email — stored on the invite so the admin can see who they sent
+  // it to in the pending-invites list. We don't actually email it out (admin
+  // shares the link manually), but tracking the recipient is useful.
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : null;
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: "Invalid email address" }, { status: 400 });
   }
 
   // 32 bytes of randomness → ~43 char base64url string. More than enough entropy.
@@ -59,8 +66,9 @@ export async function POST(req: NextRequest) {
       org_id: ctx.orgId,
       role,
       expires_at: expiresAt,
+      invited_email: email,
     })
-    .select("id, token, role, expires_at, created_at")
+    .select("id, token, role, expires_at, created_at, invited_email")
     .single();
 
   if (error) {
@@ -72,6 +80,7 @@ export async function POST(req: NextRequest) {
     id: data.id,
     token: data.token,
     role: data.role,
+    invited_email: data.invited_email,
     expires_at: data.expires_at,
     url: `${req.nextUrl.origin}/signup?invite=${data.token}`,
   });

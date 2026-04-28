@@ -43,7 +43,6 @@ function colorFromEmail(email: string): string {
 export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, onSignOut, authHeaders }: Props) {
   const [open, setOpen] = useState(false);
   const [popPos, setPopPos] = useState<{ left: number; bottom: number } | null>(null);
-  const [inviteOpen, setInviteOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -104,22 +103,13 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
             </div>
             <div className="am-divider"/>
             {isAdmin && (
-              <>
-                <button className="am-item" onClick={() => { setOpen(false); setTeamOpen(true); }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                  </svg>
-                  Manage team
-                </button>
-                <button className="am-item" onClick={() => { setOpen(false); setInviteOpen(true); }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/>
-                    <line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>
-                  </svg>
-                  Invite teammates
-                </button>
-              </>
+              <button className="am-item" onClick={() => { setOpen(false); setTeamOpen(true); }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+                Team
+              </button>
             )}
             <button className="am-item" onClick={() => { setOpen(false); setHelpOpen(true); }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -144,8 +134,7 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
         )}
       </div>
 
-      {inviteOpen && <InviteModal authHeaders={authHeaders} onClose={() => setInviteOpen(false)}/>}
-      {teamOpen && <TeamModal authHeaders={authHeaders} onClose={() => setTeamOpen(false)} onInvite={() => { setTeamOpen(false); setInviteOpen(true); }}/>}
+      {teamOpen && <TeamModal authHeaders={authHeaders} onClose={() => setTeamOpen(false)}/>}
       {helpOpen && <SimpleModal title="Help & docs" onClose={() => setHelpOpen(false)}>
         <p>Documentation isn&apos;t built out yet — for now, message Logan directly with questions or feature requests.</p>
         <p style={{ marginTop: 12 }}>Quick tips:</p>
@@ -157,80 +146,6 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
       </SimpleModal>}
       {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)}/>}
     </>
-  );
-}
-
-// ─── INVITE MODAL ──────────────────────────────────────────────────────────
-function InviteModal({ authHeaders, onClose }: { authHeaders: () => Promise<HeadersInit>; onClose: () => void }) {
-  const [role, setRole] = useState<"admin" | "sales">("sales");
-  const [generating, setGenerating] = useState(false);
-  const [link, setLink] = useState<string | null>(null);
-  const [expiresAt, setExpiresAt] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const generate = async () => {
-    setGenerating(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/invites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-        body: JSON.stringify({ role }),
-      });
-      if (!r.ok) throw new Error((await r.json()).error || "Failed to create invite");
-      const body = await r.json() as { url: string; expires_at: string };
-      setLink(body.url);
-      setExpiresAt(body.expires_at);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-    setGenerating(false);
-  };
-
-  const copy = async () => {
-    if (!link) return;
-    await navigator.clipboard?.writeText(link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
-  };
-
-  const expiresLabel = expiresAt ? new Date(expiresAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
-
-  return (
-    <SimpleModal title="Invite teammates" onClose={onClose}>
-      {!link ? (
-        <>
-          <p>Generate a link your teammate can use to sign up. The link is single-use and expires in 7 days.</p>
-          <div style={{ marginTop: 16 }}>
-            <label className="am-modal-label">Role</label>
-            <select className="am-modal-input" value={role} onChange={(e) => setRole(e.target.value as "admin" | "sales")}>
-              <option value="sales">Sales — can search & share testimonials</option>
-              <option value="admin">Admin — can also import & manage</option>
-            </select>
-          </div>
-          {error && <div className="am-modal-error">{error}</div>}
-          <div className="am-modal-actions">
-            <button className="am-modal-btn" onClick={onClose}>Cancel</button>
-            <button className="am-modal-btn primary" onClick={generate} disabled={generating}>
-              {generating ? "Generating…" : "Generate invite link"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p>Share this link with your teammate. Expires {expiresLabel}.</p>
-          <div className="am-modal-link">
-            <input className="am-modal-input mono" value={link} readOnly onFocus={(e) => e.currentTarget.select()}/>
-            <button className="am-modal-btn primary" onClick={copy}>{copied ? "Copied!" : "Copy"}</button>
-          </div>
-          <div className="am-modal-actions">
-            <button className="am-modal-btn" onClick={() => { setLink(null); setExpiresAt(null); }}>Generate another</button>
-            <button className="am-modal-btn primary" onClick={onClose}>Done</button>
-          </div>
-        </>
-      )}
-    </SimpleModal>
   );
 }
 
@@ -246,8 +161,10 @@ interface TeamMember {
 interface PendingInvite {
   id: string;
   role: string;
+  invited_email: string | null;
   created_at: string;
   expires_at: string;
+  url: string;
 }
 
 function timeAgo(iso: string | null): string {
@@ -265,38 +182,114 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
-function TeamModal({ authHeaders, onClose, onInvite }: { authHeaders: () => Promise<HeadersInit>; onClose: () => void; onInvite: () => void }) {
+function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<HeadersInit>; onClose: () => void }) {
   const [members, setMembers] = useState<TeamMember[] | null>(null);
   const [pending, setPending] = useState<PendingInvite[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Add-team-member form state
+  const [emailInput, setEmailInput] = useState("");
+  const [roleInput, setRoleInput] = useState<"admin" | "sales">("sales");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [justAddedId, setJustAddedId] = useState<string | null>(null);
+  const [copiedFor, setCopiedFor] = useState<string | null>(null);
+
+  const fetchTeam = async () => {
+    try {
+      const r = await fetch("/api/team", { headers: await authHeaders() });
+      if (!r.ok) throw new Error("Failed to load team");
+      const body = await r.json() as { members: TeamMember[]; pending_invites: PendingInvite[] };
+      setMembers(body.members || []);
+      setPending(body.pending_invites || []);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const r = await fetch("/api/team", { headers: await authHeaders() });
-        if (!r.ok) throw new Error("Failed to load team");
-        const body = await r.json() as { members: TeamMember[]; pending_invites: PendingInvite[] };
-        if (!cancelled) {
-          setMembers(body.members || []);
-          setPending(body.pending_invites || []);
-        }
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [authHeaders]);
+    setLoading(true);
+    fetchTeam().finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const submitInvite = async () => {
+    setFormError(null);
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+        body: JSON.stringify({ role: roleInput, email: emailInput.trim() || undefined }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || "Failed to create invite");
+      const body = await r.json() as { id: string };
+      setEmailInput("");
+      // Highlight the just-added invite for a moment so the admin sees the result
+      setJustAddedId(body.id);
+      setTimeout(() => setJustAddedId(null), 3000);
+      await fetchTeam();
+    } catch (e) {
+      setFormError((e as Error).message);
+    }
+    setSubmitting(false);
+  };
+
+  const copyInviteLink = async (id: string, url: string) => {
+    await navigator.clipboard?.writeText(url);
+    setCopiedFor(id);
+    setTimeout(() => setCopiedFor(null), 1600);
+  };
+
+  const expiresLabel = (iso: string) => {
+    const d = new Date(iso);
+    const days = Math.max(0, Math.round((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+    return days === 0 ? "today" : days === 1 ? "tomorrow" : `${days} days`;
+  };
 
   return (
-    <SimpleModal title="Manage team" onClose={onClose}>
-      {loading && <p>Loading team…</p>}
+    <SimpleModal title="Team" onClose={onClose}>
+      {/* ── Add new team member ── */}
+      <div className="am-team-add">
+        <div className="am-team-add-head">Add new team member</div>
+        <div className="am-team-add-row">
+          <div className="am-team-add-fld">
+            <label className="am-modal-label">Email address</label>
+            <input
+              className="am-modal-input"
+              type="email"
+              placeholder="teammate@company.com"
+              value={emailInput}
+              onChange={(e) => setEmailInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !submitting) submitInvite(); }}
+            />
+          </div>
+          <div className="am-team-add-fld" style={{ maxWidth: 180 }}>
+            <label className="am-modal-label">Role</label>
+            <select
+              className="am-modal-input"
+              value={roleInput}
+              onChange={(e) => setRoleInput(e.target.value as "admin" | "sales")}
+            >
+              <option value="sales">Sales</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <button className="am-modal-btn primary am-team-add-btn" onClick={submitInvite} disabled={submitting}>
+            {submitting ? "Adding…" : "Add team member"}
+          </button>
+        </div>
+        <div className="am-team-add-hint">
+          A single-use signup link will be generated below — copy it and send to your teammate. Expires in 7 days.
+        </div>
+        {formError && <div className="am-modal-error">{formError}</div>}
+      </div>
+
+      {loading && <p style={{ marginTop: 14 }}>Loading team…</p>}
       {error && <div className="am-modal-error">{error}</div>}
 
+      {/* ── Members ── */}
       {members && members.length > 0 && (
         <>
           <div className="am-team-head">Members ({members.length})</div>
@@ -320,19 +313,27 @@ function TeamModal({ authHeaders, onClose, onInvite }: { authHeaders: () => Prom
         </>
       )}
 
+      {/* ── Pending invites ── */}
       {pending.length > 0 && (
         <>
           <div className="am-team-head" style={{ marginTop: 18 }}>Pending invites ({pending.length})</div>
           <div className="am-team-list">
             {pending.map((p) => (
-              <div key={p.id} className="am-team-row pending">
+              <div key={p.id} className={`am-team-row pending${justAddedId === p.id ? " just-added" : ""}`}>
                 <div className="am-team-cell">
-                  <div className="am-team-email">Pending invite</div>
+                  <div className="am-team-email">{p.invited_email || "(no email recorded)"}</div>
                   <div className="am-team-meta">
-                    Sent {timeAgo(p.created_at)}  ·  expires {timeAgo(p.expires_at).replace(" ago", "")} from now
+                    Sent {timeAgo(p.created_at)}  ·  expires in {expiresLabel(p.expires_at)}
                   </div>
                 </div>
                 <div className={`am-team-role ${p.role}`}>{p.role}</div>
+                <button
+                  className="am-modal-btn am-team-copy"
+                  onClick={() => copyInviteLink(p.id, p.url)}
+                  title="Copy invite link"
+                >
+                  {copiedFor === p.id ? "Copied!" : "Copy link"}
+                </button>
               </div>
             ))}
           </div>
@@ -341,7 +342,6 @@ function TeamModal({ authHeaders, onClose, onInvite }: { authHeaders: () => Prom
 
       <div className="am-modal-actions">
         <button className="am-modal-btn" onClick={onClose}>Close</button>
-        <button className="am-modal-btn primary" onClick={onInvite}>+ Invite teammate</button>
       </div>
     </SimpleModal>
   );
@@ -465,4 +465,18 @@ const css = `
 .am-team-role{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:3px 8px;border-radius:5px;}
 .am-team-role.admin{background:var(--accentLL);color:var(--accent);border:1px solid var(--accentL);}
 .am-team-role.sales{background:var(--bg2);color:var(--t2);border:1px solid var(--border);}
+
+/* Add-new-team-member section at the top of the Team modal */
+.am-team-add{padding:14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;margin-bottom:18px;}
+.am-team-add-head{font-size:13px;font-weight:700;color:var(--t1);margin-bottom:10px;}
+.am-team-add-row{display:flex;gap:10px;align-items:flex-end;}
+.am-team-add-fld{flex:1;display:flex;flex-direction:column;gap:5px;min-width:0;}
+.am-team-add-btn{height:34px;align-self:flex-end;padding:0 14px;white-space:nowrap;}
+.am-team-add-hint{font-size:11.5px;color:var(--t3);margin-top:8px;line-height:1.5;}
+
+/* Pending invite per-row Copy link button */
+.am-team-copy{padding:4px 10px;font-size:11px;font-weight:600;height:auto;}
+
+/* Brief highlight on a just-created invite so the admin notices it appearing */
+.am-team-row.just-added{background:var(--accentLL);transition:background 1s ease-out;}
 `;
