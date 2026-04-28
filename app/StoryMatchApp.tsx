@@ -851,11 +851,10 @@ function isClearedEngaged(asset: Asset): boolean {
 }
 
 function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedReason[] } {
-  // No admin engagement yet — leave the cell empty, don't nag.
-  if (!isClearedEngaged(asset)) {
-    return { level: "unset", reasons: [] };
-  }
-
+  // Always compute the per-signal reasons so the popover can render them
+  // regardless of engagement state. Only the *overall* level is gated by
+  // engagement — when the admin hasn't touched anything, we return level:
+  // "unset" so the row shows no dot.
   const reasons: ClearedReason[] = [];
 
   // Approval
@@ -871,7 +870,7 @@ function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedRe
   else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "Former client" });
   else reasons.push({ signal: "client", level: "yellow", label: "Client status unknown" });
 
-  // Freshness — only contributes if engaged (otherwise we don't want to nag)
+  // Freshness
   if (asset.lastVerifiedAt) {
     const months = (Date.now() - new Date(asset.lastVerifiedAt).getTime()) / (1000 * 60 * 60 * 24 * 30);
     if (months < 6) reasons.push({ signal: "freshness", level: "green", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)}` });
@@ -879,6 +878,12 @@ function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedRe
     else reasons.push({ signal: "freshness", level: "red", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)} — too old` });
   } else {
     reasons.push({ signal: "freshness", level: "yellow", label: "Never verified" });
+  }
+
+  // No admin engagement yet — show no dot, but still expose the signals so the
+  // popover can render them when admin clicks to set things up.
+  if (!isClearedEngaged(asset)) {
+    return { level: "unset", reasons };
   }
 
   let level: "green" | "yellow" | "red" = "green";
@@ -914,7 +919,8 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
     return () => { clearTimeout(timer); document.removeEventListener("mousedown", onDoc); };
   }, [onClose]);
 
-  const reasonFor = (signal: "approval" | "client" | "freshness") => reasons.find(r => r.signal === signal)!;
+  const reasonFor = (signal: "approval" | "client" | "freshness"): ClearedReason =>
+    reasons.find(r => r.signal === signal) || { signal, level: "yellow", label: "—" };
 
   return (
     <div className="cl-pop" ref={popRef} onClick={(e) => e.stopPropagation()}>
