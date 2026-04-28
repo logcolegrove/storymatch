@@ -459,6 +459,14 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .view-toggle-btn:hover:not(.on){background:var(--bg2);}
 .view-toggle-btn+.view-toggle-btn{border-left:1px solid var(--border);}
 
+/* ── LIBRARY CONTROL BAR ── select-all + count + view toggle, sits above the content */
+.lib-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px 14px;}
+.lib-bar-l{display:flex;align-items:center;gap:14px;}
+.lib-selectall{display:inline-flex;align-items:center;gap:8px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--t2);cursor:pointer;user-select:none;}
+.lib-selectall input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer;}
+.lib-selectall:hover{color:var(--t1);}
+.lib-count{font-family:var(--font);font-size:12.5px;color:var(--t3);padding-left:14px;border-left:1px solid var(--border);}
+
 /* ── LIST VIEW ── */
 .lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;}
 .lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 130px 130px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;}
@@ -860,7 +868,6 @@ interface ListViewProps {
   assets: Asset[];
   selectedIds: Set<string>;
   onToggleSelect: (id: string, shiftKey?: boolean) => void;
-  onSelectAll: () => void;
   onClick: (a: Asset) => void;
   onEdit: (a: Asset) => void;
   onSetPublicationStatus: (a: Asset, next: "published" | "draft" | "archived") => void;
@@ -1031,15 +1038,8 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
-  const allSelected = assets.length > 0 && assets.every(a => selectedIds.has(a.id));
-  const someSelected = !allSelected && assets.some(a => selectedIds.has(a.id));
-  const headerCheckRef = React.useRef<HTMLInputElement>(null);
-  // Native HTML doesn't support indeterminate via attribute — set via DOM
-  useEffect(() => {
-    if (headerCheckRef.current) headerCheckRef.current.indeterminate = someSelected;
-  }, [someSelected]);
 
   if (assets.length === 0) {
     return <div className="lv"><div className="lv-empty">No assets to show.</div></div>;
@@ -1047,14 +1047,9 @@ function ListView({ assets, selectedIds, onToggleSelect, onSelectAll, onClick, o
   return (
     <div className="lv">
       <div className="lv-head">
-        <input
-          type="checkbox"
-          ref={headerCheckRef}
-          className="lv-check"
-          checked={allSelected}
-          onChange={onSelectAll}
-          title={allSelected ? "Deselect all" : "Select all"}
-        />
+        {/* Master checkbox lives in the library control bar above; this column
+            is intentionally empty here so it aligns with the per-row checkbox. */}
+        <div></div>
         <div>Title</div>
         <div>Vertical</div>
         <div>Publication</div>
@@ -2137,36 +2132,8 @@ export default function App(){
                 style={{padding:"5px 10px",border:"1px solid var(--border)",borderRadius:6,background:showArchived?"var(--accent-bg)":"#fff",color:showArchived?"var(--accent)":"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
               >{showArchived?`Hide archived (${archivedCount})`:`Show archived (${archivedCount})`}</button>
             )}
-            {isAdmin && adminMode && (
-              <div className="view-toggle" title="Toggle grid/list view">
-                <button
-                  className={`view-toggle-btn ${viewMode==="grid"?"on":""}`}
-                  onClick={()=>setViewMode("grid")}
-                  title="Grid view"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="3" width="7" height="7" rx="1"/>
-                    <rect x="14" y="3" width="7" height="7" rx="1"/>
-                    <rect x="3" y="14" width="7" height="7" rx="1"/>
-                    <rect x="14" y="14" width="7" height="7" rx="1"/>
-                  </svg>
-                </button>
-                <button
-                  className={`view-toggle-btn ${viewMode==="list"?"on":""}`}
-                  onClick={()=>setViewMode("list")}
-                  title="List view"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="8" y1="6" x2="21" y2="6"/>
-                    <line x1="8" y1="12" x2="21" y2="12"/>
-                    <line x1="8" y1="18" x2="21" y2="18"/>
-                    <circle cx="4" cy="6" r="1.5"/>
-                    <circle cx="4" cy="12" r="1.5"/>
-                    <circle cx="4" cy="18" r="1.5"/>
-                  </svg>
-                </button>
-              </div>
-            )}
+            {/* View toggle (grid/list) lives in the library control bar above
+                the content now — keeps the page header lean. */}
             {isAdmin && (
               <div className="mode-toggle">
                 <button
@@ -2530,6 +2497,67 @@ export default function App(){
               </div>
             )}
 
+            {/* ── Library control bar (Vimeo-style) ─────────────────────
+                Select-all + count on the left; grid/list view toggle on the
+                right (admin only). Visible whenever there are assets to
+                manage; hides on the empty state. */}
+            {displayAssets.length > 0 && (
+              <div className="lib-bar">
+                <div className="lib-bar-l">
+                  {isAdmin && adminMode ? (
+                    (() => {
+                      const allSelected = displayAssets.every(a => selectedIds.has(a.id));
+                      const someSelected = !allSelected && displayAssets.some(a => selectedIds.has(a.id));
+                      return (
+                        <label className="lib-selectall" title={allSelected ? "Deselect all" : "Select all"}>
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            ref={el => { if (el) el.indeterminate = someSelected; }}
+                            onChange={toggleSelectAll}
+                          />
+                          <span>Select all</span>
+                        </label>
+                      );
+                    })()
+                  ) : null}
+                  <span className="lib-count">
+                    {displayAssets.length} {displayAssets.length === 1 ? "item" : "items"}
+                  </span>
+                </div>
+                {isAdmin && adminMode && (
+                  <div className="view-toggle" title="Toggle grid/list view">
+                    <button
+                      className={`view-toggle-btn ${viewMode === "grid" ? "on" : ""}`}
+                      onClick={() => setViewMode("grid")}
+                      title="Grid view"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <rect x="3" y="3" width="7" height="7" rx="1"/>
+                        <rect x="14" y="3" width="7" height="7" rx="1"/>
+                        <rect x="3" y="14" width="7" height="7" rx="1"/>
+                        <rect x="14" y="14" width="7" height="7" rx="1"/>
+                      </svg>
+                    </button>
+                    <button
+                      className={`view-toggle-btn ${viewMode === "list" ? "on" : ""}`}
+                      onClick={() => setViewMode("list")}
+                      title="List view"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <line x1="8" y1="6" x2="21" y2="6"/>
+                        <line x1="8" y1="12" x2="21" y2="12"/>
+                        <line x1="8" y1="18" x2="21" y2="18"/>
+                        <circle cx="4" cy="6" r="1.5"/>
+                        <circle cx="4" cy="12" r="1.5"/>
+                        <circle cx="4" cy="18" r="1.5"/>
+                      </svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="lib-wrap">
               {displayAssets.length===0 ? (
                 <div className="empty">
@@ -2543,7 +2571,6 @@ export default function App(){
                   assets={displayAssets}
                   selectedIds={selectedIds}
                   onToggleSelect={toggleSelected}
-                  onSelectAll={toggleSelectAll}
                   onClick={openAsset}
                   onEdit={(a)=>setEditingAssetId(a.id)}
                   onSetPublicationStatus={setPublicationStatus}
