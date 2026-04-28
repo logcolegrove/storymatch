@@ -459,8 +459,9 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .view-toggle-btn:hover:not(.on){background:var(--bg2);}
 .view-toggle-btn+.view-toggle-btn{border-left:1px solid var(--border);}
 
-/* ── LIBRARY CONTROL BAR ── select-all + count + view toggle, sits above the content */
-.lib-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px 14px;}
+/* ── LIBRARY CONTROL BAR ── select-all + count + view toggle, sits above the content.
+    Matches .lib-wrap's max-width and horizontal padding so it aligns with the grid. */
+.lib-bar{max-width:1360px;width:100%;margin:0 auto;padding:18px 32px 8px;display:flex;align-items:center;justify-content:space-between;gap:14px;}
 .lib-bar-l{display:flex;align-items:center;gap:14px;}
 .lib-selectall{display:inline-flex;align-items:center;gap:8px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--t2);cursor:pointer;user-select:none;}
 .lib-selectall input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer;}
@@ -529,7 +530,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Grid card checkbox — appears on hover or when card is selected */
 .card-check,.qcard-check{position:absolute;top:10px;left:10px;width:20px;height:20px;cursor:pointer;accent-color:var(--accent);z-index:5;background:#fff;border-radius:4px;opacity:0;transition:opacity .15s;}
 .card:hover .card-check,.qcard:hover .qcard-check,.card.selected .card-check,.qcard.selected .qcard-check{opacity:1;}
-.card.selected,.qcard.selected{box-shadow:inset 0 0 0 2px var(--accent);}
+/* Outline (offset:0) draws OUTSIDE the card border, so the thumbnail image
+   inside .card-thumb can't paint over it — and modern browsers follow
+   border-radius for outlines, so the selection ring keeps the rounded corners. */
+.card.selected,.qcard.selected{outline:2px solid var(--accent);outline-offset:0;}
 /* Keep the 3-dot menu visible on selected cards too, so admin can act on them */
 .card.selected .card-dots,.qcard.selected .qcard-dots{opacity:1;}
 
