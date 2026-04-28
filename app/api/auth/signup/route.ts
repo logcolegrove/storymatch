@@ -60,7 +60,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      if (new Date(inviteData.expires_at) < new Date()) {
+      // expires_at is nullable now — invites without an expiration always work
+      // until accepted or revoked. Older invites still honor their stored expiry.
+      if (inviteData.expires_at && new Date(inviteData.expires_at) < new Date()) {
         return NextResponse.json(
           { error: "This invite has expired" },
           { status: 403 }

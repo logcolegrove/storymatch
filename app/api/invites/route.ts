@@ -22,7 +22,6 @@ async function getCurrentUserOrg(req: NextRequest) {
   };
 }
 
-const INVITE_DAYS = 7;
 const ALLOWED_ROLES = new Set(["admin", "sales"]);
 
 // POST /api/invites
@@ -57,15 +56,15 @@ export async function POST(req: NextRequest) {
 
   // 32 bytes of randomness → ~43 char base64url string. More than enough entropy.
   const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + INVITE_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
+  // No expiration — invites stay valid until accepted or revoked by an admin.
   const { data, error } = await supabaseAdmin
     .from("invites")
     .insert({
       token,
       org_id: ctx.orgId,
       role,
-      expires_at: expiresAt,
+      expires_at: null,
       invited_email: email,
     })
     .select("id, token, role, expires_at, created_at, invited_email")

@@ -73,14 +73,15 @@ export async function GET(req: NextRequest) {
     return a.email.localeCompare(b.email);
   });
 
-  // Pending invites (not yet accepted, not expired)
+  // Pending invites: not yet accepted; either no expiration set (new invites
+  // never expire) OR expiration is in the future (legacy invites).
   const nowIso = new Date().toISOString();
   const { data: invites } = await supabaseAdmin
     .from("invites")
     .select("id, role, expires_at, created_at, accepted_at, invited_email, token")
     .eq("org_id", ctx.orgId)
     .is("accepted_at", null)
-    .gt("expires_at", nowIso)
+    .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
     .order("created_at", { ascending: false });
 
   const origin = req.nextUrl.origin;

@@ -182,6 +182,20 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
+// Per-role descriptions shown in the Add form so admins know what they're
+// granting. Keep these in plain language — they're the user-facing definition
+// of what the role can do.
+const ROLE_OVERVIEWS: Record<"admin" | "sales", { title: string; desc: string }> = {
+  sales: {
+    title: "Sales",
+    desc: "Can search the library, copy share links for prospects, and see engagement on the links they personally sent.",
+  },
+  admin: {
+    title: "Admin",
+    desc: "Everything sales can do — plus import showcases, edit testimonials, manage the team, and see the whole team's engagement.",
+  },
+};
+
 function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<HeadersInit>; onClose: () => void }) {
   const [members, setMembers] = useState<TeamMember[] | null>(null);
   const [pending, setPending] = useState<PendingInvite[]>([]);
@@ -194,7 +208,7 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [justAddedId, setJustAddedId] = useState<string | null>(null);
-  const [copiedFor, setCopiedFor] = useState<string | null>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
 
   const fetchTeam = async () => {
     try {
@@ -214,7 +228,10 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const submitInvite = async () => {
+  // Generate the invite AND copy the URL to clipboard in one action — that's
+  // the actual job-to-be-done. (Calling it "Add team member" misleads users
+  // into thinking we send an email automatically; we don't.)
+  const generateAndCopy = async () => {
     setFormError(null);
     setSubmitting(true);
     try {
@@ -224,9 +241,11 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
         body: JSON.stringify({ role: roleInput, email: emailInput.trim() || undefined }),
       });
       if (!r.ok) throw new Error((await r.json()).error || "Failed to create invite");
-      const body = await r.json() as { id: string };
+      const body = await r.json() as { id: string; url: string };
+      await navigator.clipboard?.writeText(body.url);
+      setCopyToast("Invite link copied — paste into an email or message");
+      setTimeout(() => setCopyToast(null), 2800);
       setEmailInput("");
-      // Highlight the just-added invite for a moment so the admin sees the result
       setJustAddedId(body.id);
       setTimeout(() => setJustAddedId(null), 3000);
       await fetchTeam();
@@ -236,17 +255,71 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
     setSubmitting(false);
   };
 
-  const copyInviteLink = async (id: string, url: string) => {
+  const copyInviteLink = async (url: string) => {
     await navigator.clipboard?.writeText(url);
-    setCopiedFor(id);
-    setTimeout(() => setCopiedFor(null), 1600);
+    setCopyToast("Invite link copied");
+    setTimeout(() => setCopyToast(null), 1800);
   };
 
-  const expiresLabel = (iso: string) => {
-    const d = new Date(iso);
-    const days = Math.max(0, Math.round((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
-    return days === 0 ? "today" : days === 1 ? "tomorrow" : `${days} days`;
+  // ── Member role / removal actions ────────────────────────────────────
+  const changeMemberRole = async (userId: string, role: "admin" | "sales") => {
+    // Optimistic
+    setMembers(prev => prev ? prev.map(m => m.user_id === userId ? { ...m, role } : m) : prev);
+    try {
+      const r = await fetch(`/api/team/member/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+        body: JSON.stringify({ role }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || "Failed");
+    } catch (e) {
+      setError((e as Error).message);
+      await fetchTeam(); // revert from server
+    }
   };
+  const removeMember = async (userId: string, email: string) => {
+    if (!confirm(`Remove ${email} from the team? They'll lose access immediately.`)) return;
+    setMembers(prev => prev ? prev.filter(m => m.user_id !== userId) : prev);
+    try {
+      const r = await fetch(`/api/team/member/${userId}`, {
+        method: "DELETE",
+        headers: await authHeaders(),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || "Failed");
+    } catch (e) {
+      setError((e as Error).message);
+      await fetchTeam();
+    }
+  };
+
+  // ── Pending-invite role / revoke actions ─────────────────────────────
+  const changeInviteRole = async (id: string, role: "admin" | "sales") => {
+    setPending(prev => prev.map(p => p.id === id ? { ...p, role } : p));
+    try {
+      const r = await fetch(`/api/invites/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+        body: JSON.stringify({ role }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || "Failed");
+    } catch (e) {
+      setError((e as Error).message);
+      await fetchTeam();
+    }
+  };
+  const revokeInvite = async (id: string, label: string) => {
+    if (!confirm(`Revoke the invite for ${label}? The link will stop working.`)) return;
+    setPending(prev => prev.filter(p => p.id !== id));
+    try {
+      const r = await fetch(`/api/invites/${id}`, { method: "DELETE", headers: await authHeaders() });
+      if (!r.ok) throw new Error((await r.json()).error || "Failed");
+    } catch (e) {
+      setError((e as Error).message);
+      await fetchTeam();
+    }
+  };
+
+  const overview = ROLE_OVERVIEWS[roleInput];
 
   return (
     <SimpleModal title="Team" onClose={onClose}>
@@ -262,10 +335,10 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
               placeholder="teammate@company.com"
               value={emailInput}
               onChange={(e) => setEmailInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !submitting) submitInvite(); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !submitting) generateAndCopy(); }}
             />
           </div>
-          <div className="am-team-add-fld" style={{ maxWidth: 180 }}>
+          <div className="am-team-add-fld" style={{ maxWidth: 160 }}>
             <label className="am-modal-label">Role</label>
             <select
               className="am-modal-input"
@@ -276,12 +349,13 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
               <option value="admin">Admin</option>
             </select>
           </div>
-          <button className="am-modal-btn primary am-team-add-btn" onClick={submitInvite} disabled={submitting}>
-            {submitting ? "Adding…" : "Add team member"}
+          <button className="am-modal-btn primary am-team-add-btn" onClick={generateAndCopy} disabled={submitting}>
+            {submitting ? "Generating…" : "Copy invite link"}
           </button>
         </div>
-        <div className="am-team-add-hint">
-          A single-use signup link will be generated below — copy it and send to your teammate. Expires in 7 days.
+        <div className="am-team-overview">
+          <span className={`am-team-role ${roleInput}`}>{overview.title}</span>
+          <span>{overview.desc}</span>
         </div>
         {formError && <div className="am-modal-error">{formError}</div>}
       </div>
@@ -306,7 +380,12 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
                     {m.last_sign_in_at ? `  ·  last login ${timeAgo(m.last_sign_in_at)}` : `  ·  has not signed in yet`}
                   </div>
                 </div>
-                <div className={`am-team-role ${m.role}`}>{m.role}</div>
+                <RoleMenu
+                  role={m.role as "admin" | "sales"}
+                  onChange={(r) => changeMemberRole(m.user_id, r)}
+                  onRemove={() => removeMember(m.user_id, m.email)}
+                  removeLabel="Remove member"
+                />
               </div>
             ))}
           </div>
@@ -323,27 +402,82 @@ function TeamModal({ authHeaders, onClose }: { authHeaders: () => Promise<Header
                 <div className="am-team-cell">
                   <div className="am-team-email">{p.invited_email || "(no email recorded)"}</div>
                   <div className="am-team-meta">
-                    Sent {timeAgo(p.created_at)}  ·  expires in {expiresLabel(p.expires_at)}
+                    Sent {timeAgo(p.created_at)}
                   </div>
                 </div>
-                <div className={`am-team-role ${p.role}`}>{p.role}</div>
                 <button
                   className="am-modal-btn am-team-copy"
-                  onClick={() => copyInviteLink(p.id, p.url)}
+                  onClick={() => copyInviteLink(p.url)}
                   title="Copy invite link"
                 >
-                  {copiedFor === p.id ? "Copied!" : "Copy link"}
+                  Copy link
                 </button>
+                <RoleMenu
+                  role={p.role as "admin" | "sales"}
+                  onChange={(r) => changeInviteRole(p.id, r)}
+                  onRemove={() => revokeInvite(p.id, p.invited_email || "this teammate")}
+                  removeLabel="Revoke invite"
+                />
               </div>
             ))}
           </div>
         </>
       )}
 
+      {copyToast && <div className="am-team-toast">{copyToast}</div>}
+
       <div className="am-modal-actions">
         <button className="am-modal-btn" onClick={onClose}>Close</button>
       </div>
     </SimpleModal>
+  );
+}
+
+// ── Per-row role dropdown (Sales / Admin / Remove) ─────────────────────────
+function RoleMenu({
+  role,
+  onChange,
+  onRemove,
+  removeLabel,
+}: {
+  role: "admin" | "sales";
+  onChange: (next: "admin" | "sales") => void;
+  onRemove: () => void;
+  removeLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const t = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
+  }, [open]);
+  return (
+    <div className="am-rolemenu" ref={ref}>
+      <button className={`am-team-role ${role} am-rolemenu-trigger`} onClick={() => setOpen(o => !o)}>
+        {role}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="am-rolemenu-pop">
+          <button className="am-rolemenu-item" onClick={() => { setOpen(false); if (role !== "sales") onChange("sales"); }}>
+            <span>{role === "sales" ? "✓" : ""}</span> Sales
+          </button>
+          <button className="am-rolemenu-item" onClick={() => { setOpen(false); if (role !== "admin") onChange("admin"); }}>
+            <span>{role === "admin" ? "✓" : ""}</span> Admin
+          </button>
+          <div className="am-rolemenu-divider"/>
+          <button className="am-rolemenu-item danger" onClick={() => { setOpen(false); onRemove(); }}>
+            <span></span> {removeLabel}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -431,7 +565,7 @@ const css = `
 /* ── MODAL CHROME ── */
 .am-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:200;animation:amFade .18s ease-out;}
 @keyframes amFade{from{opacity:0;}to{opacity:1;}}
-.am-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:480px;max-width:calc(100vw - 32px);max-height:calc(100vh - 60px);background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.22);z-index:201;display:flex;flex-direction:column;font-family:var(--font);animation:amSlide .22s cubic-bezier(.4,0,.2,1);}
+.am-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:680px;max-width:calc(100vw - 32px);max-height:calc(100vh - 60px);background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.22);z-index:201;display:flex;flex-direction:column;font-family:var(--font);animation:amSlide .22s cubic-bezier(.4,0,.2,1);}
 @keyframes amSlide{from{transform:translate(-50%,-46%);opacity:0;}to{transform:translate(-50%,-50%);opacity:1;}}
 .am-modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);}
 .am-modal-title{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);}
@@ -473,10 +607,27 @@ const css = `
 .am-team-add-fld{flex:1;display:flex;flex-direction:column;gap:5px;min-width:0;}
 .am-team-add-btn{height:34px;align-self:flex-end;padding:0 14px;white-space:nowrap;}
 .am-team-add-hint{font-size:11.5px;color:var(--t3);margin-top:8px;line-height:1.5;}
+.am-team-overview{display:flex;align-items:flex-start;gap:10px;margin-top:10px;font-size:11.5px;color:var(--t2);line-height:1.55;}
+.am-team-overview .am-team-role{flex-shrink:0;margin-top:1px;}
 
 /* Pending invite per-row Copy link button */
 .am-team-copy{padding:4px 10px;font-size:11px;font-weight:600;height:auto;}
 
 /* Brief highlight on a just-created invite so the admin notices it appearing */
 .am-team-row.just-added{background:var(--accentLL);transition:background 1s ease-out;}
+
+/* ── Role dropdown (per row) ── */
+.am-rolemenu{position:relative;}
+.am-rolemenu-trigger{cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:var(--font);}
+.am-rolemenu-trigger:hover{filter:brightness(.95);}
+.am-rolemenu-pop{position:absolute;top:calc(100% + 4px);right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:4px;z-index:50;min-width:160px;}
+.am-rolemenu-item{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;background:none;border:none;border-radius:5px;cursor:pointer;color:var(--t1);font-family:var(--font);font-size:12.5px;text-align:left;}
+.am-rolemenu-item span{display:inline-block;width:14px;color:var(--accent);font-weight:700;}
+.am-rolemenu-item:hover{background:var(--bg2);}
+.am-rolemenu-item.danger{color:var(--red);}
+.am-rolemenu-item.danger:hover{background:#fef2f2;}
+.am-rolemenu-divider{height:1px;background:var(--border);margin:4px 0;}
+
+/* Floating toast inside the modal for "link copied" feedback */
+.am-team-toast{position:absolute;bottom:72px;left:50%;transform:translateX(-50%);background:#1a1a1f;color:#fff;padding:9px 16px;border-radius:8px;font-size:12.5px;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.2);z-index:10;animation:amSlide .22s cubic-bezier(.4,0,.2,1);}
 `;
