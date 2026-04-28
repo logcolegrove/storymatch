@@ -100,5 +100,5 @@ export default async function SharePage({
     console.error("share click tracking failed:", e);
   }
 
-  return <SharePageClient asset={asset} />;
+  return <SharePageClient asset={asset} shareId={shareLink.id} />;
 }

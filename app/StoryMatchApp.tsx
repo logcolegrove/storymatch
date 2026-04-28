@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
 import AssetDetail from "./components/AssetDetail";
+import MySharesView from "./components/MySharesView";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -150,7 +151,7 @@ interface Filters {
 }
 
 interface Route {
-  page: "home" | "detail";
+  page: "home" | "detail" | "shares";
   id: string | null;
 }
 
@@ -1914,7 +1915,7 @@ export default function App(){
   const[smResults,setSmResults]=useState<AIMatchResult[]|null>(null);
 
   useEffect(()=>{
-    const h=()=>{const hash=window.location.hash.slice(1);if(hash.startsWith("/asset/"))setRoute({page:"detail",id:hash.split("/asset/")[1]});else setRoute({page:"home",id:null});};
+    const h=()=>{const hash=window.location.hash.slice(1);if(hash.startsWith("/asset/"))setRoute({page:"detail",id:hash.split("/asset/")[1]});else if(hash.startsWith("/shares"))setRoute({page:"shares",id:null});else setRoute({page:"home",id:null});};
     h();window.addEventListener("hashchange",h);return()=>window.removeEventListener("hashchange",h);
   },[]);
 
@@ -2213,6 +2214,13 @@ export default function App(){
     </div></React.Fragment>);
   }
 
+  if(route.page==="shares"){
+    return(<React.Fragment><style>{css}</style><div style={{minHeight:"100vh",background:"var(--bg)"}}>
+      <header className="hdr"><div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}></div><div className="hdr-r"><span className="badge">{assets.length} assets</span></div></header>
+      <MySharesView isAdmin={isAdmin} authHeaders={authHeaders} onBack={goHome}/>
+    </div></React.Fragment>);
+  }
+
   return (
     <React.Fragment>
       <style>{css}</style>
@@ -2279,6 +2287,17 @@ export default function App(){
                 <div style={{fontWeight:600,color:"var(--t2)"}}>{user?.email}</div>
                 <div>{org?.name||"No workspace"} · {org?.role||"—"}</div>
               </div>
+              <button
+                onClick={()=>{window.location.hash="/shares";}}
+                title="See your shared links and engagement"
+                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--accent)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)",marginRight:6,display:"inline-flex",alignItems:"center",gap:5}}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                My shares
+              </button>
               <button
                 onClick={signOut}
                 title="Sign out"

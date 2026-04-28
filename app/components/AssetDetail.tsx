@@ -10,7 +10,7 @@
 // for a prospect. Both stay in sync because they're literally the same
 // component — no risk of drift between internal and public views.
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 export interface AssetDetailAsset {
@@ -72,9 +72,14 @@ interface Props {
   // issues when the parent's stricter Asset type has fields the shared
   // AssetDetailAsset doesn't model. Parent looks up the full asset itself.
   onSelect?: (id: string) => void;
+  // Public share page only — when set, attaches Vimeo Player JS event
+  // listeners and posts engagement events (play / progress / complete) to
+  // /api/share/[shareId]/event so the sender can see if the prospect
+  // actually watched the video.
+  shareTracking?: { shareId: string };
 }
 
-export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSelect }: Props) {
+export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSelect, shareTracking }: Props) {
   const c = VERT_CLR[asset.vertical] || "#4f46e5";
   const vid = extractVid(asset.videoUrl);
   let thumb = asset.thumbnail;
@@ -107,6 +112,85 @@ export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSe
     : [];
 
   const [activeCh, setActiveCh] = useState(0);
+
+  // ── Vimeo Player JS engagement tracking (public share page only) ──
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  useEffect(() => {
+    if (!shareTracking || !vid || vid.p !== "vm") return;
+    const shareId = shareTracking.shareId;
+
+    let player: { on: (e: string, fn: (d?: { seconds?: number; percent?: number }) => void) => void; destroy?: () => void } | null = null;
+    let cancelled = false;
+
+    const post = (eventType: "play" | "progress" | "complete", seconds?: number, percentZeroToOne?: number) => {
+      const body: { event_type: string; watched_seconds?: number; watched_percent?: number } = { event_type: eventType };
+      if (typeof seconds === "number") body.watched_seconds = Math.round(seconds);
+      if (typeof percentZeroToOne === "number") body.watched_percent = Math.round(percentZeroToOne * 100);
+      fetch(`/api/share/${shareId}/event`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        keepalive: true, // keep request alive even if user closes the tab
+      }).catch((e) => console.warn("share event post failed", e));
+    };
+
+    const init = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const Vimeo = (window as any).Vimeo;
+      if (cancelled || !Vimeo || !iframeRef.current) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      player = new Vimeo.Player(iframeRef.current);
+
+      let lastPostAt = 0;
+      let hasPlayedOnce = false;
+
+      player!.on("play", () => {
+        if (!hasPlayedOnce) {
+          hasPlayedOnce = true;
+          post("play");
+        }
+      });
+      player!.on("timeupdate", (data) => {
+        const now = Date.now();
+        // Throttle progress posts to one every 5 seconds — cheap on the
+        // backend but still gives a high-water mark of how far they got.
+        if (now - lastPostAt < 5000) return;
+        lastPostAt = now;
+        post("progress", data?.seconds, data?.percent);
+      });
+      player!.on("pause", (data) => {
+        // Capture the seek-out point on every pause so we don't lose state
+        // between throttled progress posts.
+        post("progress", data?.seconds, data?.percent);
+      });
+      player!.on("ended", (data) => {
+        post("complete", data?.seconds, 1);
+      });
+    };
+
+    // Load the Vimeo Player JS once per page (idempotent)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((window as any).Vimeo) {
+      init();
+    } else {
+      let script = document.querySelector<HTMLScriptElement>('script[data-vimeo-player-js]');
+      if (!script) {
+        script = document.createElement("script");
+        script.src = "https://player.vimeo.com/api/player.js";
+        script.async = true;
+        script.dataset.vimeoPlayerJs = "1";
+        document.head.appendChild(script);
+      }
+      script.addEventListener("load", init);
+    }
+
+    return () => {
+      cancelled = true;
+      try {
+        player?.destroy?.();
+      } catch {}
+    };
+  }, [shareTracking, vid]);
 
   return (
     <>
@@ -163,7 +247,7 @@ export default function AssetDetail({ asset, publicMode, onBack, allAssets, onSe
               {vid.p === "yt" ? (
                 <iframe src={`https://www.youtube.com/embed/${vid.id}`} frameBorder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowFullScreen />
               ) : (
-                <iframe src={`https://player.vimeo.com/video/${vid.id}`} frameBorder="0" allow="autoplay;fullscreen;picture-in-picture" allowFullScreen />
+                <iframe ref={iframeRef} src={`https://player.vimeo.com/video/${vid.id}`} frameBorder="0" allow="autoplay;fullscreen;picture-in-picture" allowFullScreen />
               )}
             </div>
           </div>
