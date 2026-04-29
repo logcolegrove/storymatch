@@ -196,6 +196,12 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUser
   if (a.lastSyncedTitle !== undefined) o.last_synced_title = a.lastSyncedTitle;
   if (a.lastSyncedDescription !== undefined) o.last_synced_description = a.lastSyncedDescription;
   if (a.lastSyncedTranscript !== undefined) o.last_synced_transcript = a.lastSyncedTranscript;
+  // publishedAt is normally set server-side by source-sync, but the
+  // showcase initial-import path goes through this endpoint and needs
+  // to persist Vimeo's created_time on insert. Otherwise the assets
+  // come back with null published_at and "Publish date not recorded yet"
+  // shows in the popover until a manual sync.
+  if (a.publishedAt !== undefined) o.published_at = a.publishedAt;
   // Per-asset freshness exception. When the FE writes a value (set or clear),
   // server stamps set_by_email + set_at from the auth context — clients
   // never set those directly, so we ignore any FE-supplied values.

@@ -648,6 +648,17 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-freshness-rel{color:var(--t3);font-weight:400;}
 .cl-freshness-note{font-size:11px;color:var(--t3);margin-top:6px;font-style:italic;}
 .cl-fresh-select{margin-top:6px;}
+/* Trigger pill + form share one bordered container so they read as a
+   single control. When the form is open, the trigger's bottom border is
+   removed so the box looks unified. */
+.cl-fresh-pill{margin-top:6px;border:1px solid var(--border);border-radius:7px;background:#fff;overflow:hidden;}
+.cl-fresh-trigger{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;background:#fff;border:none;padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--t1);cursor:pointer;text-align:left;}
+.cl-fresh-trigger:hover{background:var(--bg2);}
+.cl-fresh-pill.open .cl-fresh-trigger{border-bottom:1px solid var(--border);}
+.cl-fresh-chevron{color:var(--t3);font-size:11px;flex-shrink:0;}
+/* Form body inside the pill — drop its own border + radius so it merges
+   with the trigger above visually. */
+.cl-fresh-pill .cl-exception-form{margin-top:0;border:none;border-radius:0;background:#fff;padding:10px;}
 /* Yellow warning row that embeds the Make-exception button on the right
    when library rule flags the asset. Keeps action next to its problem. */
 .cl-freshness-warn-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap;}
@@ -1583,12 +1594,11 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
   const exceptionExpired = hasValidUntil && exceptionUntilDate.getTime() <= Date.now();
   const savedIsNever = isNeverExpiry(asset.freshnessExceptionUntil);
 
-  // Dropdown state (used in no-library-rule mode)
-  const initialMode: "none" | "set" = hasValidUntil ? "set" : "none";
-  const [mode, setMode] = useState<"none" | "set">(initialMode);
-  // Editing flag (used in library-rule mode — tracks whether "Make exception"
-  // form is open).
-  const [editing, setEditing] = useState(false);
+  // Editing flag — tracks whether the form is open. In no-library-rule mode
+  // the trigger pill toggles this. In library-rule mode the "Make exception"
+  // button toggles this. Default: open if there's a saved exception (so the
+  // user sees current values), closed otherwise.
+  const [editing, setEditing] = useState(hasValidUntil);
   // Within the form, "Never flag" vs "Set custom expiration"
   const [formMode, setFormMode] = useState<"never" | "custom">(savedIsNever ? "never" : "custom");
 
@@ -1602,10 +1612,10 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
 
   // Re-sync state when asset's saved value changes (e.g. after save lands)
   useEffect(() => {
-    setMode(hasValidUntil ? "set" : "none");
     setFormMode(savedIsNever ? "never" : "custom");
     if (hasValidUntil && !savedIsNever) setUntilDate(exceptionUntilDate.toISOString().split("T")[0]);
-    setEditing(false);
+    // Don't auto-collapse the form — keep it open when there's a saved
+    // exception so the user can see current values and Clear if they want.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.freshnessExceptionUntil]);
 
@@ -1629,14 +1639,6 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
       onSetFreshnessException(asset, new Date(untilDate).toISOString());
     }
     setEditing(false);
-  };
-
-  const handleDropdownChange = (next: "none" | "set") => {
-    setMode(next);
-    if (next === "none") {
-      // Auto-save: clearing the per-asset expiration is a single action.
-      onSetFreshnessException(asset, null);
-    }
   };
 
   // Shared form — used in both library-on (with radios) and library-off
@@ -1665,9 +1667,10 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
             onChange={(e) => setUntilDate(e.target.value)}
           />
           <div className="cl-exception-quick">
-            <button className="cl-quick-btn" onClick={() => setQuickPreset(6)}>+6mo</button>
             <button className="cl-quick-btn" onClick={() => setQuickPreset(12)}>+1y</button>
             <button className="cl-quick-btn" onClick={() => setQuickPreset(24)}>+2y</button>
+            <button className="cl-quick-btn" onClick={() => setQuickPreset(36)}>+3y</button>
+            <button className="cl-quick-btn" onClick={() => setQuickPreset(60)}>+5y</button>
           </div>
         </div>
       )}
@@ -1716,18 +1719,26 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
       </div>
 
       {!libraryRuleActive ? (
-        // ─── Mode A/B: No library rule — standalone dropdown ───
-        <>
-          <select
-            className="cl-select cl-fresh-select"
-            value={mode}
-            onChange={(e) => handleDropdownChange(e.target.value as "none" | "set")}
+        // ─── Mode A/B: No library rule — single trigger that toggles a form.
+        // Trigger label reflects current state: "Set expiration" when none is
+        // set, "Set to expire on: [date]" when one is. Trigger and form share
+        // a unified bordered box so they read as one connected control. ───
+        <div className={`cl-fresh-pill${editing ? " open" : ""}`}>
+          <button
+            type="button"
+            className="cl-fresh-trigger"
+            onClick={() => setEditing(o => !o)}
+            aria-expanded={editing}
           >
-            <option value="none">No expiration</option>
-            <option value="set">Set expiration</option>
-          </select>
-          {mode === "set" && renderForm(false, true)}
-        </>
+            <span>
+              {hasValidUntil
+                ? <>Set to expire on: <strong>{fmtDate(asset.freshnessExceptionUntil)}</strong></>
+                : "Set expiration"}
+            </span>
+            <span className="cl-fresh-chevron">{editing ? "▴" : "▾"}</span>
+          </button>
+          {editing && renderForm(false, true)}
+        </div>
       ) : (
         // ─── Mode C/D/E: Library rule active — exception button pattern ───
         <>
@@ -3218,11 +3229,22 @@ export default function App(){
     setAssets(prev=>prev.map(a=>a.id===id?{...a,...patch}:a));
     if(toastMsg){setToast(toastMsg);setTimeout(()=>setToast(null),1500);}
     try{
-      await fetch("/api/assets",{
+      const r=await fetch("/api/assets",{
         method:"PUT",
         headers:{"Content-Type":"application/json",...(await authHeaders())},
         body:JSON.stringify({id,...patch}),
       });
+      // Merge server response back into state — picks up any fields that
+      // the server stamped but the client didn't include in the patch
+      // (e.g. freshness_exception_set_by_email + set_at when admin sets a
+      // per-asset expiration). Without this, the audit info doesn't appear
+      // until a full assets reload.
+      if(r.ok){
+        try{
+          const updated=await r.json() as Asset;
+          setAssets(prev=>prev.map(a=>a.id===id?{...a,...updated}:a));
+        }catch{/* response body parse failed — fine, optimistic state is good enough */}
+      }
     }catch(e){console.error("Inline update failed",e);}
   };
 
