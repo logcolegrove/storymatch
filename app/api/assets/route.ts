@@ -68,6 +68,8 @@ type AssetDB = {
   last_synced_title: string | null;
   last_synced_description: string | null;
   last_synced_transcript: string | null;
+  // Vimeo publish date — drives the org's freshness Rule.
+  published_at: string | null;
 };
 
 type AssetFE = {
@@ -106,6 +108,8 @@ type AssetFE = {
   lastSyncedTitle?: string | null;
   lastSyncedDescription?: string | null;
   lastSyncedTranscript?: string | null;
+  // Read-only — set at insert time from Vimeo's created_time. Not editable.
+  publishedAt?: string | null;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -141,6 +145,7 @@ function dbToFe(r: AssetDB): AssetFE {
     lastSyncedTitle: r.last_synced_title,
     lastSyncedDescription: r.last_synced_description,
     lastSyncedTranscript: r.last_synced_transcript,
+    publishedAt: r.published_at,
   };
 }
 

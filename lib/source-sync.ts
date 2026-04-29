@@ -152,6 +152,9 @@ interface NormalizedVideo {
   description: string;
   thumbnail: string;
   transcript: string;
+  // Vimeo's created_time — the actual publish date of the video. Used by
+  // the Cleared signal to flag stale stories per org-level freshness rule.
+  publishedAt: string;
 }
 
 async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Promise<NormalizedVideo[] | null> {
@@ -190,6 +193,7 @@ async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Pr
     url: v.link,
     title: v.name,
     description: v.description || "",
+    publishedAt: v.created_time || "",
     thumbnailFallback: pickLargestThumb(v.pictures?.sizes),
   }));
 
@@ -218,6 +222,7 @@ async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Pr
     description: b.description,
     thumbnail: hiResThumbs[i] || b.thumbnailFallback,
     transcript: transcripts[i] || "",
+    publishedAt: b.publishedAt,
   }));
 }
 
@@ -250,6 +255,7 @@ async function fetchSingleVideo(videoUrl: string, accessToken: string): Promise<
       description: v.description || "",
       thumbnail: hiResThumb || pickLargestThumb(v.pictures?.sizes),
       transcript: transcript || "",
+      publishedAt: v.created_time || "",
     }];
   } catch {
     return null;
@@ -378,6 +384,8 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       transcript: v.transcript || "",
       description: v.description || "",
       thumbnail: v.thumbnail || "",
+      // Vimeo's actual publish date — drives the freshness Rule.
+      published_at: v.publishedAt || null,
       // Snapshot Vimeo's current values so future syncs can tell whether the
       // admin has edited a field locally vs. just hasn't touched it.
       last_synced_title: v.title || "",

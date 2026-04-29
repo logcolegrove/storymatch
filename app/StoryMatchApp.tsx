@@ -98,6 +98,15 @@ interface Asset {
   lastSyncedTitle?: string | null;
   lastSyncedDescription?: string | null;
   lastSyncedTranscript?: string | null;
+  // Vimeo's actual publish date (created_time). Drives the freshness Rule.
+  publishedAt?: string | null;
+}
+
+// Org-level configuration that drives Rules behavior. Loaded once at app
+// boot via /api/org/settings and refreshed when admin saves changes in the
+// Rules panel.
+interface OrgSettings {
+  freshnessWarnAfterMonths: number | null;
 }
 
 interface Source {
@@ -238,6 +247,24 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .ap-title{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;}
 .ap-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
 .ap-body{flex:1;overflow-y:auto;padding:16px 20px;}
+
+/* Rules panel — admin's place for org-level conditional behavior. Future
+   rules stack below the freshness section. */
+.rules-panel{padding:0;display:flex;flex-direction:column;height:100%;overflow-y:auto;}
+.rules-panel .ap-head h3{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);margin:0;}
+.rules-section{padding:18px 20px;border-bottom:1px solid var(--border);}
+.rules-section-head{margin-bottom:12px;}
+.rules-section-title{font-family:var(--serif);font-size:14px;font-weight:600;color:var(--t1);}
+.rules-section-help{font-size:11.5px;color:var(--t3);margin-top:4px;line-height:1.5;}
+.rules-row{display:flex;flex-direction:column;gap:6px;}
+.rules-label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+.rules-select{font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t1);width:100%;cursor:pointer;}
+.rules-select:focus{outline:none;border-color:var(--accent);}
+.rules-actions{display:flex;gap:8px;margin-top:12px;}
+.rules-save{padding:7px 14px;border:none;border-radius:6px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
+.rules-save:hover{background:var(--accent2);}
+.rules-cancel{padding:7px 14px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
+.rules-cancel:hover{border-color:var(--border2);color:var(--t1);}
 
 /* Assets list */
 .asset-list{display:flex;flex-direction:column;gap:6px;}
@@ -586,6 +613,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-section-head .cl-circle{width:9px;height:9px;}
 .cl-section-title{font-size:12.5px;font-weight:600;color:var(--t1);flex:1;}
 .cl-section-meta{font-size:11px;color:var(--t3);}
+.cl-freshness-line{font-size:12px;color:var(--t1);margin-top:4px;}
+.cl-freshness-warn{font-size:11px;color:var(--amber);margin-top:4px;background:var(--amberL);padding:5px 8px;border-radius:5px;}
+.cl-rules-link{display:inline-block;margin-top:8px;font-size:11px;color:var(--accent);text-decoration:none;font-weight:600;}
+.cl-rules-link:hover{text-decoration:underline;}
 .cl-input,.cl-select,.cl-textarea{font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);width:100%;margin-top:5px;box-sizing:border-box;}
 .cl-textarea{min-height:64px;resize:vertical;font-family:var(--font);}
 .cl-row-actions{display:flex;gap:6px;margin-top:6px;}
@@ -990,7 +1021,9 @@ function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelet
       <button className="bulk-btn" onClick={onPublish}>Publish</button>
       <button className="bulk-btn" onClick={onDraft}>Move to draft</button>
       <button className="bulk-btn" onClick={onArchive}>Archive</button>
-      <button className="bulk-btn" onClick={onMarkVerified}>✓ Mark verified</button>
+      {/* Mark verified retired — freshness is now driven by Vimeo publish
+          date + the Rules → Freshness threshold. onMarkVerified left in
+          props for parent compatibility; harmless if never invoked. */}
       <button className="bulk-btn danger" onClick={onDelete}>Delete</button>
       <button className="bulk-close" onClick={onClear} title="Clear selection">✕</button>
     </div>
@@ -1009,6 +1042,8 @@ interface ListViewProps {
   onMarkVerified: (a: Asset) => void;
   onDelete: (id: string) => void;
   onCopyShareLink: (a: Asset) => void;
+  // Org-level Rule that drives the freshness signal in the Cleared popover.
+  freshnessWarnAfterMonths: number | null;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -1027,7 +1062,7 @@ function isClearedEngaged(asset: Asset): boolean {
   return approvalEngaged || clientEngaged;
 }
 
-function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedReason[] } {
+function computeCleared(asset: Asset, freshnessWarnAfterMonths: number | null): { level: ClearedLevel; reasons: ClearedReason[] } {
   // Always compute the per-signal reasons so the popover can render them
   // regardless of engagement state. Only the *overall* level is gated by
   // engagement — when the admin hasn't touched anything, we return level:
@@ -1047,14 +1082,22 @@ function computeCleared(asset: Asset): { level: ClearedLevel; reasons: ClearedRe
   else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "Former client" });
   else reasons.push({ signal: "client", level: "yellow", label: "Client status unknown" });
 
-  // Freshness
-  if (asset.lastVerifiedAt) {
-    const months = (Date.now() - new Date(asset.lastVerifiedAt).getTime()) / (1000 * 60 * 60 * 24 * 30);
-    if (months < 6) reasons.push({ signal: "freshness", level: "green", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)}` });
-    else if (months < 18) reasons.push({ signal: "freshness", level: "yellow", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)} — getting stale` });
-    else reasons.push({ signal: "freshness", level: "red", label: `Verified ${timeAgoShort(asset.lastVerifiedAt)} — too old` });
+  // Freshness — driven by Vimeo publish date + org-level Rule.
+  //   • No org rule (NULL)  → freshness is informational only, always green
+  //   • Rule + within window → green, "Published Xy ago"
+  //   • Rule + over window  → yellow, "Older than Xy threshold"
+  // No more "Mark verified" — that concept is dead.
+  const pub = asset.publishedAt ? new Date(asset.publishedAt) : null;
+  const ageMonths = pub ? (Date.now() - pub.getTime()) / (1000 * 60 * 60 * 24 * 30) : null;
+  if (!pub || ageMonths === null) {
+    reasons.push({ signal: "freshness", level: "green", label: "Publish date not recorded" });
+  } else if (freshnessWarnAfterMonths === null || ageMonths <= freshnessWarnAfterMonths) {
+    reasons.push({ signal: "freshness", level: "green", label: `Published ${timeAgoShort(asset.publishedAt!)}` });
   } else {
-    reasons.push({ signal: "freshness", level: "yellow", label: "Never verified" });
+    const yLabel = freshnessWarnAfterMonths >= 12 && freshnessWarnAfterMonths % 12 === 0
+      ? `${freshnessWarnAfterMonths / 12}-year`
+      : `${freshnessWarnAfterMonths}-month`;
+    reasons.push({ signal: "freshness", level: "yellow", label: `Published ${timeAgoShort(asset.publishedAt!)} — over ${yLabel} threshold` });
   }
 
   // No admin engagement yet — show no dot, but still expose the signals so the
@@ -1235,23 +1278,33 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
         </select>
       </div>
 
-      {/* Freshness section */}
+      {/* Freshness section — driven by Vimeo publish date + org Rule.
+          No "Mark verified" anymore — the publish date is the truth. */}
       <div className="cl-section">
         <div className="cl-section-head">
           <span className={`cl-circle ${reasonFor("freshness").level}`}/>
           <span className="cl-section-title">Freshness</span>
-          <span className="cl-section-meta">verified {timeAgoShort(asset.lastVerifiedAt)}</span>
         </div>
-        <button className="cl-mini-btn primary" onClick={() => onMarkVerified(asset)}>
-          ✓ Mark verified now
-        </button>
+        <div className="cl-freshness-line">
+          {asset.publishedAt
+            ? <>Published <strong>{timeAgoShort(asset.publishedAt)}</strong></>
+            : <span style={{ color: "var(--t4)" }}>Publish date not recorded yet — sync the source to populate.</span>}
+        </div>
+        {reasonFor("freshness").level === "yellow" && (
+          <div className="cl-freshness-warn">{reasonFor("freshness").label}</div>
+        )}
+        <a
+          href="#/rules"
+          onClick={(e) => { e.preventDefault(); onClose(); window.location.hash = "/rules"; }}
+          className="cl-rules-link"
+        >Configure freshness Rule →</a>
       </div>
     </div>,
     document.body
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink, freshnessWarnAfterMonths }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -1274,7 +1327,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         const isDraft = a.status === "draft";
         const statusCls = isArchived ? " archived" : isDraft ? " draft" : "";
         const isSelected = selectedIds.has(a.id);
-        const cleared = computeCleared(a);
+        const cleared = computeCleared(a, freshnessWarnAfterMonths);
         const open = openClearedFor === a.id;
         const vid = extractVid(a.videoUrl);
         let thumb = a.thumbnail;
@@ -1329,7 +1382,6 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 { label: "Open", onClick: () => onClick(a) },
                 { label: "Edit details", onClick: () => onEdit(a) },
                 { label: "Copy share link", onClick: () => onCopyShareLink(a) },
-                { label: "✓ Mark verified", onClick: () => onMarkVerified(a) },
                 { divider: true },
                 isArchived
                   ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
@@ -1597,6 +1649,75 @@ interface Progress {
   total: number | "?";
   done?: boolean;
   error?: boolean;
+}
+
+// ─── ADMIN: RULES PANEL ─────────────────────────────────────────────────────
+// Org-level configuration that affects how the library behaves under
+// conditions. v1 has one rule (freshness threshold). Future rules will stack
+// vertically below — approval-required-before-share, AI metadata triggers,
+// retention windows, etc.
+interface RulesPanelProps {
+  settings: OrgSettings;
+  onSave: (next: OrgSettings) => Promise<void> | void;
+}
+function RulesPanel({ settings, onSave }: RulesPanelProps) {
+  // Local draft so the dropdown reflects user intent before save lands
+  const [draft, setDraft] = useState<number | null>(settings.freshnessWarnAfterMonths);
+  // Keep draft in sync if parent updates (e.g. settings load races with mount)
+  useEffect(() => { setDraft(settings.freshnessWarnAfterMonths); }, [settings.freshnessWarnAfterMonths]);
+
+  const dirty = draft !== settings.freshnessWarnAfterMonths;
+  const options: { label: string; value: number | null }[] = [
+    { label: "Never (off)", value: null },
+    { label: "1 year", value: 12 },
+    { label: "2 years", value: 24 },
+    { label: "3 years", value: 36 },
+    { label: "5 years", value: 60 },
+  ];
+
+  return (
+    <div className="rules-panel">
+      <div className="ap-head">
+        <h3>Rules</h3>
+        <p className="ap-sub">Configure how the library behaves under conditions. Rules apply to the whole org.</p>
+      </div>
+
+      <div className="rules-section">
+        <div className="rules-section-head">
+          <div className="rules-section-title">Freshness</div>
+          <div className="rules-section-help">
+            Flag testimonials older than the threshold for review. Each story&apos;s publish date comes from Vimeo. Sales reps still see flagged stories — this is a hint, not a hard filter.
+          </div>
+        </div>
+        <div className="rules-row">
+          <label className="rules-label">Flag testimonials older than</label>
+          <select
+            className="rules-select"
+            value={draft === null ? "null" : String(draft)}
+            onChange={(e) => setDraft(e.target.value === "null" ? null : parseInt(e.target.value, 10))}
+          >
+            {options.map((o) => (
+              <option key={String(o.value)} value={o.value === null ? "null" : String(o.value)}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+        {dirty && (
+          <div className="rules-actions">
+            <button
+              className="rules-save"
+              onClick={() => onSave({ ...settings, freshnessWarnAfterMonths: draft })}
+            >Save</button>
+            <button
+              className="rules-cancel"
+              onClick={() => setDraft(settings.freshnessWarnAfterMonths)}
+            >Cancel</button>
+          </div>
+        )}
+      </div>
+
+      {/* Future rules render here */}
+    </div>
+  );
 }
 
 function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onUpdateAssets,onUpdateSource,onRefresh}: SourcesPanelProps) {
@@ -2379,6 +2500,8 @@ export default function App(){
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
+  // Org-level Rules. Loaded on mount; refreshed when admin saves in Rules panel.
+  const[orgSettings,setOrgSettings]=useState<OrgSettings>({freshnessWarnAfterMonths:null});
 
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
@@ -2388,7 +2511,19 @@ export default function App(){
   const[smResults,setSmResults]=useState<AIMatchResult[]|null>(null);
 
   useEffect(()=>{
-    const h=()=>{const hash=window.location.hash.slice(1);if(hash.startsWith("/asset/"))setRoute({page:"detail",id:hash.split("/asset/")[1]});else if(hash.startsWith("/shares"))setRoute({page:"shares",id:null});else setRoute({page:"home",id:null});};
+    const h=()=>{
+      const hash=window.location.hash.slice(1);
+      if(hash.startsWith("/asset/"))setRoute({page:"detail",id:hash.split("/asset/")[1]});
+      else if(hash.startsWith("/shares"))setRoute({page:"shares",id:null});
+      else setRoute({page:"home",id:null});
+      // /rules hash opens the Rules panel from anywhere (e.g. the cleared popover's
+      // "Configure freshness Rule →" link). Clear the hash after consuming so back
+      // navigation doesn't re-trigger.
+      if(hash.startsWith("/rules")){
+        setAdminSection("rules");
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+    };
     h();window.addEventListener("hashchange",h);return()=>window.removeEventListener("hashchange",h);
   },[]);
 
@@ -2415,6 +2550,20 @@ export default function App(){
         const data=await r.json() as Source[];
         setSources(data);
       }catch(e){console.error("Failed to load sources",e);}
+    })();
+  },[]);
+
+  // Load org Rules settings on mount. Used by computeCleared to flag
+  // testimonials whose publish age exceeds the org's freshness threshold.
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const headers=await authHeaders();
+        const r=await fetch("/api/org/settings",{headers});
+        if(!r.ok)return; // Non-fatal — defaults stay in place
+        const data=await r.json() as OrgSettings;
+        setOrgSettings(data);
+      }catch(e){console.error("Failed to load org settings",e);}
     })();
   },[]);
 
@@ -2854,6 +3003,21 @@ export default function App(){
                 </svg>
                 Import
               </button>
+              <button
+                className={`rail-btn ${adminSection==="rules"?"on":""}`}
+                onClick={()=>setAdminSection(adminSection==="rules"?null:"rules")}
+                title="Rules — automate library behavior"
+              >
+                {/* Forking diagram (if-then) — represents conditional logic */}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="6" cy="5" r="2"/>
+                  <circle cx="18" cy="5" r="2"/>
+                  <circle cx="12" cy="19" r="2"/>
+                  <path d="M6 7v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7"/>
+                  <line x1="12" y1="13" x2="12" y2="17"/>
+                </svg>
+                Rules
+              </button>
               <button className="rail-btn disabled" title="Embed (coming soon)">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <polyline points="16 18 22 12 16 6"/>
@@ -3014,6 +3178,29 @@ export default function App(){
                       setToast("Save failed");
                     }
                     setTimeout(()=>setToast(null),2000);
+                  }}
+                />
+              )}
+              {adminSection==="rules" && (
+                <RulesPanel
+                  settings={orgSettings}
+                  onSave={async (next) => {
+                    // Optimistic — update local state then persist
+                    setOrgSettings(next);
+                    try {
+                      const r = await fetch("/api/org/settings", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+                        body: JSON.stringify(next),
+                      });
+                      if (!r.ok) throw new Error("Save failed");
+                      setToast("Rule saved");
+                      setTimeout(() => setToast(null), 1500);
+                    } catch (e) {
+                      console.error("Save org settings failed", e);
+                      setToast("Couldn't save rule");
+                      setTimeout(() => setToast(null), 2000);
+                    }
                   }}
                 />
               )}
@@ -3258,6 +3445,7 @@ export default function App(){
                   onMarkVerified={markVerified}
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
+                  freshnessWarnAfterMonths={orgSettings.freshnessWarnAfterMonths}
                 />
               ) : (
                 <div className="grid">
@@ -3269,7 +3457,6 @@ export default function App(){
                       { label: "Open", onClick: () => openAsset(a) },
                       { label: "Edit details", onClick: () => setEditingAssetId(a.id) },
                       { label: "Copy share link", onClick: () => copyShareLink(a) },
-                      { label: "✓ Mark verified", onClick: () => markVerified(a) },
                       { divider: true },
                       a.status === "archived"
                         ? { label: "Restore", onClick: () => setPublicationStatus(a, "published") }
