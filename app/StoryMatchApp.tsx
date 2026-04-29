@@ -657,6 +657,14 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    on but the asset isn't currently flagged. */
 .cl-make-exception-link{display:inline-block;margin-top:6px;background:none;border:none;padding:2px 0;color:var(--accent);font-family:var(--font);font-size:11.5px;font-weight:600;cursor:pointer;}
 .cl-make-exception-link:hover{text-decoration:underline;}
+/* Grey info box used in state C — "Set to expire on [date]" + Make exception
+   button. Unassuming, doesn't shout for attention. */
+.cl-freshness-info-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:8px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:11.5px;color:var(--t2);}
+.cl-freshness-info-row > span{flex:1;min-width:0;}
+.cl-freshness-info-row .cl-mini-btn{flex-shrink:0;}
+/* Radio rows in the Make exception form (library-rule mode). */
+.cl-radio{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--t1);padding:5px 0;cursor:pointer;}
+.cl-radio input{cursor:pointer;}
 /* Per-asset expiration form — appears below the dropdown when "Set
    expiration" is selected. Contains date picker, quick presets, save/cancel,
    and audit/expired notes. */
@@ -1194,6 +1202,11 @@ interface ClearedReason {
   // a green dot would imply a "passing" judgment when there's nothing to
   // judge against. List/grid views still show the aggregate dot.
   hideDot?: boolean;
+  // For freshness only — the date when the org rule will flag this asset.
+  // Set when a rolling org rule is active and the asset has a publish date.
+  // Null/undefined for absolute-date org rules or when no rule is active.
+  // Drives the "Set to expire on …" grey box in the popover.
+  effectiveExpiration?: string;
 }
 
 function isClearedEngaged(asset: Asset): boolean {
@@ -1239,6 +1252,10 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
 
     let flagged = false;
     let thresholdLabel = "";
+    // Compute the date when the rolling rule will flag this asset (if active).
+    // For absolute-date rules there's no future "expiration date" — a video
+    // is either before or after the cutoff, so effectiveExpiration is null.
+    let effectiveExpiration: string | undefined;
     if (orgSettings.freshnessWarnBeforeDate) {
       const cutoff = new Date(orgSettings.freshnessWarnBeforeDate);
       if (!Number.isNaN(cutoff.getTime()) && pub < cutoff) {
@@ -1254,6 +1271,10 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
           ? `over ${months / 12}-year threshold`
           : `over ${months}-month threshold`;
       }
+      // Effective expiration = publish + threshold months
+      const exp = new Date(pub);
+      exp.setMonth(exp.getMonth() + orgSettings.freshnessWarnAfterMonths);
+      effectiveExpiration = exp.toISOString();
     }
 
     // Per-asset freshness exception silences the org-level flag while active.
@@ -1270,14 +1291,12 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
       !exceptionActive;
 
     if (flagged && exceptionActive) {
-      // Asset would normally be flagged, but an exception is suppressing it.
-      // We keep the threshold info in the reason for the popover to show
-      // alongside the exception note ("over rule, but approved by...").
       reasons.push({
         signal: "freshness",
         level: "green",
         label: `${ageLabel} — exception active`,
         flagDetail: `Org rule says: ${thresholdLabel}`,
+        effectiveExpiration,
       });
     } else if (flagged) {
       reasons.push({
@@ -1285,12 +1304,12 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
         level: "yellow",
         label: `${ageLabel} — ${thresholdLabel}`,
         flagDetail: `Over org rule: ${thresholdLabel}`,
+        effectiveExpiration,
       });
     } else if (noRuleApplied) {
-      // Informational only — hide the dot.
       reasons.push({ signal: "freshness", level: "green", label: ageLabel, hideDot: true });
     } else {
-      reasons.push({ signal: "freshness", level: "green", label: ageLabel });
+      reasons.push({ signal: "freshness", level: "green", label: ageLabel, effectiveExpiration });
     }
   }
 
@@ -1542,22 +1561,39 @@ interface FreshnessSectionProps {
   onClose: () => void;
 }
 function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFreshnessException, onClose }: FreshnessSectionProps) {
+  // Sentinel for "never flag this asset" — stored as a far-future date so
+  // the schema stays simple. Detected on read and displayed as "Never expires."
+  const NEVER_EXPIRY_THRESHOLD_YEARS = 50;
+  const isNeverExpiry = (iso: string | null | undefined): boolean => {
+    if (!iso) return false;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return false;
+    return d.getTime() > Date.now() + NEVER_EXPIRY_THRESHOLD_YEARS * 365 * 24 * 60 * 60 * 1000;
+  };
+  const buildNeverExpiryIso = (): string => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 100);
+    return d.toISOString();
+  };
+
   // Per-asset rule data
   const exceptionUntilDate = asset.freshnessExceptionUntil ? new Date(asset.freshnessExceptionUntil) : null;
   const hasValidUntil = exceptionUntilDate !== null && !Number.isNaN(exceptionUntilDate.getTime());
   const exceptionActive = hasValidUntil && exceptionUntilDate.getTime() > Date.now();
   const exceptionExpired = hasValidUntil && exceptionUntilDate.getTime() <= Date.now();
+  const savedIsNever = isNeverExpiry(asset.freshnessExceptionUntil);
 
   // Dropdown state (used in no-library-rule mode)
   const initialMode: "none" | "set" = hasValidUntil ? "set" : "none";
   const [mode, setMode] = useState<"none" | "set">(initialMode);
   // Editing flag (used in library-rule mode — tracks whether "Make exception"
-  // form is open). When library rule is on, dropdown is hidden; instead
-  // admin clicks a button/link to open the same date-picker form.
+  // form is open).
   const [editing, setEditing] = useState(false);
+  // Within the form, "Never flag" vs "Set custom expiration"
+  const [formMode, setFormMode] = useState<"never" | "custom">(savedIsNever ? "never" : "custom");
 
   const defaultDate = (() => {
-    if (hasValidUntil) return exceptionUntilDate.toISOString().split("T")[0];
+    if (hasValidUntil && !savedIsNever) return exceptionUntilDate.toISOString().split("T")[0];
     const d = new Date();
     d.setFullYear(d.getFullYear() + 1);
     return d.toISOString().split("T")[0];
@@ -1567,7 +1603,8 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
   // Re-sync state when asset's saved value changes (e.g. after save lands)
   useEffect(() => {
     setMode(hasValidUntil ? "set" : "none");
-    if (hasValidUntil) setUntilDate(exceptionUntilDate.toISOString().split("T")[0]);
+    setFormMode(savedIsNever ? "never" : "custom");
+    if (hasValidUntil && !savedIsNever) setUntilDate(exceptionUntilDate.toISOString().split("T")[0]);
     setEditing(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.freshnessExceptionUntil]);
@@ -1581,12 +1618,16 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
     setUntilDate(d.toISOString().split("T")[0]);
   };
 
-  const savedDateStr = hasValidUntil ? exceptionUntilDate.toISOString().split("T")[0] : null;
-  // Form is dirty when picked date differs from saved — applies to both modes
-  const dirty = untilDate !== savedDateStr;
+  const savedDateStr = hasValidUntil && !savedIsNever ? exceptionUntilDate.toISOString().split("T")[0] : null;
+  // Dirty: form mode or date differs from saved state
+  const dirty = (formMode === "never") !== savedIsNever || (formMode === "custom" && untilDate !== savedDateStr);
 
   const save = () => {
-    onSetFreshnessException(asset, new Date(untilDate).toISOString());
+    if (formMode === "never") {
+      onSetFreshnessException(asset, buildNeverExpiryIso());
+    } else {
+      onSetFreshnessException(asset, new Date(untilDate).toISOString());
+    }
     setEditing(false);
   };
 
@@ -1598,28 +1639,44 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
     }
   };
 
-  // Shared date-picker form — same JSX in both UX modes
-  const renderForm = (showAuditWhenSaved: boolean) => (
+  // Shared form — used in both library-on (with radios) and library-off
+  // (without radios, just the date picker). showRadios=true exposes the
+  // "Never flag" option as a checkbox alongside "Set custom expiration."
+  const renderForm = (showRadios: boolean, showAuditWhenSaved: boolean) => (
     <div className="cl-exception-form">
-      <div className="cl-exception-until-row">
-        <input
-          className="cl-exception-date"
-          type="date"
-          value={untilDate}
-          onChange={(e) => setUntilDate(e.target.value)}
-        />
-        <div className="cl-exception-quick">
-          <button className="cl-quick-btn" onClick={() => setQuickPreset(6)}>+6mo</button>
-          <button className="cl-quick-btn" onClick={() => setQuickPreset(12)}>+1y</button>
-          <button className="cl-quick-btn" onClick={() => setQuickPreset(24)}>+2y</button>
+      {showRadios && (
+        <>
+          <label className="cl-radio">
+            <input type="radio" name={`fresh-${asset.id}`} checked={formMode === "never"} onChange={() => setFormMode("never")}/>
+            Never flag this asset
+          </label>
+          <label className="cl-radio">
+            <input type="radio" name={`fresh-${asset.id}`} checked={formMode === "custom"} onChange={() => setFormMode("custom")}/>
+            Set custom expiration
+          </label>
+        </>
+      )}
+      {(!showRadios || formMode === "custom") && (
+        <div className="cl-exception-until-row">
+          <input
+            className="cl-exception-date"
+            type="date"
+            value={untilDate}
+            onChange={(e) => setUntilDate(e.target.value)}
+          />
+          <div className="cl-exception-quick">
+            <button className="cl-quick-btn" onClick={() => setQuickPreset(6)}>+6mo</button>
+            <button className="cl-quick-btn" onClick={() => setQuickPreset(12)}>+1y</button>
+            <button className="cl-quick-btn" onClick={() => setQuickPreset(24)}>+2y</button>
+          </div>
         </div>
-      </div>
+      )}
       {dirty && (
         <div className="cl-exception-actions">
           <button className="cl-mini-btn primary" onClick={save}>Save</button>
           <button className="cl-mini-btn" onClick={() => {
             setUntilDate(savedDateStr || defaultDate);
-            // If we opened the form from a button (library mode), close it
+            setFormMode(savedIsNever ? "never" : "custom");
             if (libraryRuleActive && !hasValidUntil) setEditing(false);
           }}>Cancel</button>
         </div>
@@ -1631,8 +1688,9 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
       )}
       {!dirty && showAuditWhenSaved && exceptionActive && asset.freshnessExceptionSetByEmail && (
         <div className="cl-exception-meta">
-          Set by <strong>{asset.freshnessExceptionSetByEmail}</strong>
-          {asset.freshnessExceptionSetAt && <> on {fmtDate(asset.freshnessExceptionSetAt)}</>}
+          {savedIsNever
+            ? <>Set to never flag</>
+            : <>Set to expire on <strong>{fmtDate(asset.freshnessExceptionUntil)}</strong></>}
         </div>
       )}
       {!dirty && exceptionExpired && (
@@ -1650,8 +1708,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
         <span className="cl-section-title">Freshness</span>
       </div>
 
-      {/* Publish date sits at the top — keeps visual rhythm with Approval
-          and Client relationship sections that lead with their value. */}
+      {/* Publish date sits at the top */}
       <div className="cl-freshness-line">
         {asset.publishedAt
           ? <>Published <strong>{fmtDate(asset.publishedAt)}</strong> <span className="cl-freshness-rel">({timeAgoShort(asset.publishedAt)})</span></>
@@ -1669,15 +1726,13 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
             <option value="none">No expiration</option>
             <option value="set">Set expiration</option>
           </select>
-          {mode === "set" && renderForm(true)}
+          {mode === "set" && renderForm(false, true)}
         </>
       ) : (
         // ─── Mode C/D/E: Library rule active — exception button pattern ───
         <>
           {/* Yellow warning when asset is over the org threshold and no
-              active exception is suppressing it. Embeds the Make exception
-              button right on the warning so admin sees the action next to
-              the problem. */}
+              active exception is suppressing it. */}
           {dotLevel === "yellow" && freshnessReason.flagDetail && !editing && !exceptionActive && (
             <div className="cl-freshness-warn cl-freshness-warn-row">
               <span>{freshnessReason.flagDetail}</span>
@@ -1685,31 +1740,49 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
             </div>
           )}
 
-          {/* Info note when org rule applies but the asset isn't currently
-              flagged (either because it's still within window OR an exception
-              is suppressing the flag). */}
+          {/* Org-rule note + per-exception audit (state E) — both italic.
+              Logan's spec: keep the threshold message AND show who made the
+              exception below it. */}
           {dotLevel === "green" && freshnessReason.flagDetail && (
-            <div className="cl-freshness-note">{freshnessReason.flagDetail}</div>
+            <>
+              <div className="cl-freshness-note">{freshnessReason.flagDetail}</div>
+              {exceptionActive && asset.freshnessExceptionSetByEmail && (
+                <div className="cl-freshness-note">
+                  <strong>{asset.freshnessExceptionSetByEmail}</strong> made an exception
+                  {asset.freshnessExceptionSetAt && <> on {fmtDate(asset.freshnessExceptionSetAt)}</>}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Active exception form box — shows the saved date + audit info,
-              with Clear/Change controls. */}
-          {exceptionActive && !editing && renderForm(true)}
+          {/* Grey "set to expire on" box — when library rule is on, asset is
+              within window (not flagged), AND we have a computable effective
+              expiration. Lets admin pre-emptively set an exception if they
+              know the asset will outlast the rule. */}
+          {!editing && !exceptionActive && dotLevel !== "yellow" && freshnessReason.effectiveExpiration && (
+            <div className="cl-freshness-info-row">
+              <span>Set to expire on <strong>{fmtDate(freshnessReason.effectiveExpiration)}</strong></span>
+              <button className="cl-mini-btn" onClick={() => setEditing(true)}>Make exception</button>
+            </div>
+          )}
+
+          {/* Active exception form box — shows current values + Clear/Change */}
+          {exceptionActive && !editing && renderForm(true, true)}
 
           {/* Editing form (admin clicked Make exception) */}
-          {editing && renderForm(false)}
+          {editing && renderForm(true, false)}
 
-          {/* Expired exception — show a brief note (the form will appear if
-              admin clicks Make exception again to re-apply). */}
+          {/* Expired exception — show a brief note */}
           {exceptionExpired && !editing && !exceptionActive && (
             <div className="cl-exception-expired">
               ⌛ Previous exception expired {fmtDate(asset.freshnessExceptionUntil)}
             </div>
           )}
 
-          {/* Make-exception entry point for proactive use (asset isn't
-              currently flagged, no active exception). Small inline link. */}
-          {!editing && !exceptionActive && dotLevel !== "yellow" && (
+          {/* Fallback link for proactive use when there's no effective
+              expiration (e.g. absolute-date rule, or the asset's published_at
+              is missing). Rare path; keep it as a small link. */}
+          {!editing && !exceptionActive && dotLevel !== "yellow" && !freshnessReason.effectiveExpiration && (
             <button className="cl-make-exception-link" onClick={() => setEditing(true)}>
               {exceptionExpired ? "Re-apply exception" : "Make exception"} →
             </button>
