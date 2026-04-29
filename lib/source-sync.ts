@@ -291,6 +291,8 @@ interface AssetRow {
   description: string | null;
   thumbnail: string | null;
   transcript: string | null;
+  // Vimeo's actual upload date — auto-updated on every sync (never user-editable).
+  published_at: string | null;
   // last_synced_* track what the corresponding Vimeo field was at the most
   // recent successful sync. Lets us tell "user hasn't edited locally"
   // (current === last_synced) apart from "user has edited" (current !==
@@ -350,7 +352,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   if (existingAssetIds.length > 0) {
     const { data: rows } = await supabaseAdmin
       .from("assets")
-      .select("id, source_id, status, video_url, headline, description, thumbnail, transcript, last_synced_title, last_synced_description, last_synced_transcript")
+      .select("id, source_id, status, video_url, headline, description, thumbnail, transcript, published_at, last_synced_title, last_synced_description, last_synced_transcript")
       .in("id", existingAssetIds);
     existingAssets = (rows || []) as AssetRow[];
   }
@@ -452,6 +454,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
     description?: string;
     transcript?: string;
     thumbnail?: string;
+    published_at?: string;
     last_synced_title?: string;
     last_synced_description?: string;
     last_synced_transcript?: string;
@@ -509,6 +512,19 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
     if (v.thumbnail && v.thumbnail !== (a.thumbnail || "")) {
       updates.thumbnail = v.thumbnail;
       noteAutoApplied(a.id, displayHeadline, "thumbnail");
+    }
+
+    // PUBLISH DATE — always auto-apply (Vimeo source of truth, never
+    // user-editable). Repairs assets where the migration backfilled
+    // date_created instead of the real upload time, and any future drift.
+    // Not surfaced in autoApplied (admin doesn't care — it's a fact
+    // about Vimeo, not a content change to review).
+    if (v.publishedAt) {
+      const currentTs = a.published_at ? new Date(a.published_at).getTime() : 0;
+      const vimeoTs = new Date(v.publishedAt).getTime();
+      if (!Number.isNaN(vimeoTs) && currentTs !== vimeoTs) {
+        updates.published_at = v.publishedAt;
+      }
     }
 
     fieldDecide(
