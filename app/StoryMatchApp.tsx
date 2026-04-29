@@ -1644,7 +1644,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
   // Shared form — used in both library-on (with radios) and library-off
   // (without radios, just the date picker). showRadios=true exposes the
   // "Never flag" option as a checkbox alongside "Set custom expiration."
-  const renderForm = (showRadios: boolean, showAuditWhenSaved: boolean) => (
+  const renderForm = (showRadios: boolean) => (
     <div className="cl-exception-form">
       {showRadios && (
         <>
@@ -1684,18 +1684,22 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
           }}>Cancel</button>
         </div>
       )}
-      {!dirty && libraryRuleActive && hasValidUntil && (
+      {/* Clear button — show whenever there's a saved value and the form isn't
+          dirty. Available in both modes (library rule on/off). Label tracks
+          the surrounding terminology: "Clear exception" when there's an org
+          rule being deviated from, "Clear expiration" when the per-asset rule
+          stands alone. */}
+      {!dirty && hasValidUntil && (
         <div className="cl-exception-actions">
-          <button className="cl-mini-btn" onClick={() => onSetFreshnessException(asset, null)}>Clear exception</button>
+          <button className="cl-mini-btn" onClick={() => onSetFreshnessException(asset, null)}>
+            {libraryRuleActive ? "Clear exception" : "Clear expiration"}
+          </button>
         </div>
       )}
-      {!dirty && showAuditWhenSaved && exceptionActive && asset.freshnessExceptionSetByEmail && (
-        <div className="cl-exception-meta">
-          {savedIsNever
-            ? <>Set to never flag</>
-            : <>Set to expire on <strong>{fmtDate(asset.freshnessExceptionUntil)}</strong></>}
-        </div>
-      )}
+      {/* The "Set to expire on [date]" footer was here — removed per Logan:
+          users can see the date in the picker itself, so it was redundant.
+          The audit line ("[email] made an exception on [date]") still shows
+          above the form via the popover's freshness-note section. */}
       {!dirty && exceptionExpired && (
         <div className="cl-exception-expired">
           ⌛ Expired on {fmtDate(asset.freshnessExceptionUntil)}
@@ -1708,7 +1712,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
     <div className="cl-section">
       <div className="cl-section-head">
         {!hideDot && <span className={`cl-circle ${dotLevel}`}/>}
-        <span className="cl-section-title">Expiration</span>
+        <span className="cl-section-title">Freshness</span>
       </div>
 
       {/* Publish date sits at the top */}
@@ -1737,7 +1741,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
             </span>
             <span className="cl-fresh-chevron">{editing ? "▴" : "▾"}</span>
           </button>
-          {editing && renderForm(false, true)}
+          {editing && renderForm(false)}
         </div>
       ) : (
         // ─── Mode C/D/E: Library rule active — exception button pattern ───
@@ -1779,10 +1783,10 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
           )}
 
           {/* Active exception form box — shows current values + Clear/Change */}
-          {exceptionActive && !editing && renderForm(true, true)}
+          {exceptionActive && !editing && renderForm(true)}
 
           {/* Editing form (admin clicked Make exception) */}
-          {editing && renderForm(true, false)}
+          {editing && renderForm(true)}
 
           {/* Expired exception — show a brief note */}
           {exceptionExpired && !editing && !exceptionActive && (
