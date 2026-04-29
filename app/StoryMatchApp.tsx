@@ -646,7 +646,17 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-section-meta{font-size:11px;color:var(--t3);}
 .cl-freshness-line{font-size:12px;color:var(--t1);margin-top:6px;}
 .cl-freshness-rel{color:var(--t3);font-weight:400;}
-.cl-freshness-note{font-size:11px;color:var(--t3);margin-top:4px;font-style:italic;}
+.cl-freshness-note{font-size:11px;color:var(--t3);margin-top:6px;font-style:italic;}
+.cl-fresh-select{margin-top:6px;}
+/* Yellow warning row that embeds the Make-exception button on the right
+   when library rule flags the asset. Keeps action next to its problem. */
+.cl-freshness-warn-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap;}
+.cl-freshness-warn-row > span{flex:1;min-width:0;}
+.cl-freshness-warn-row .cl-mini-btn{flex-shrink:0;}
+/* Subtle inline link for proactive exception-setting when library rule is
+   on but the asset isn't currently flagged. */
+.cl-make-exception-link{display:inline-block;margin-top:6px;background:none;border:none;padding:2px 0;color:var(--accent);font-family:var(--font);font-size:11.5px;font-weight:600;cursor:pointer;}
+.cl-make-exception-link:hover{text-decoration:underline;}
 /* Per-asset expiration form — appears below the dropdown when "Set
    expiration" is selected. Contains date picker, quick presets, save/cancel,
    and audit/expired notes. */
@@ -856,6 +866,7 @@ interface CardProps {
   cleared?: {
     level: ClearedLevel;
     reasons: ClearedReason[];
+    libraryFreshnessRuleActive: boolean;
     onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
     onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
     onMarkVerified: (a: Asset) => void;
@@ -952,6 +963,7 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           asset={asset}
           reasons={cleared.reasons}
           onClose={() => setClearedOpen(false)}
+          libraryFreshnessRuleActive={cleared.libraryFreshnessRuleActive}
           onSetFreshnessException={cleared.onSetFreshnessException}
           onSetClientStatus={cleared.onSetClientStatus}
           onSetApproval={cleared.onSetApproval}
@@ -1306,6 +1318,10 @@ interface ClearedPopoverProps {
   asset: Asset;
   reasons: ClearedReason[];
   onClose: () => void;
+  // Whether the org-wide freshness rule is active. Drives the FreshnessSection
+  // between two distinct UX modes: standalone dropdown (rule off) vs.
+  // exception-button-on-warning (rule on).
+  libraryFreshnessRuleActive: boolean;
   // Set or clear the per-asset freshness exception. untilIso null = clear.
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
@@ -1330,12 +1346,13 @@ interface ClearedCellProps {
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
+  libraryFreshnessRuleActive: boolean;
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
 }
-function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
+function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
   return (
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
@@ -1359,6 +1376,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetFreshnessEx
           asset={asset}
           reasons={cleared.reasons}
           onClose={onClose}
+          libraryFreshnessRuleActive={libraryFreshnessRuleActive}
           onSetFreshnessException={onSetFreshnessException}
           onSetClientStatus={onSetClientStatus}
           onSetApproval={onSetApproval}
@@ -1370,7 +1388,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetFreshnessEx
   );
 }
 
-function ClearedPopover({ asset, reasons, onClose, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
+function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
   // Coords use either `top` (popover sits below trigger) or `bottom` (popover
@@ -1497,6 +1515,7 @@ function ClearedPopover({ asset, reasons, onClose, onSetFreshnessException, onSe
       <FreshnessSection
         asset={asset}
         freshnessReason={reasonFor("freshness")}
+        libraryRuleActive={libraryFreshnessRuleActive}
         onSetFreshnessException={onSetFreshnessException}
         onClose={onClose}
       />
@@ -1515,25 +1534,28 @@ function fmtDate(iso: string | null | undefined): string {
 interface FreshnessSectionProps {
   asset: Asset;
   freshnessReason: ClearedReason;
+  // When true, library-wide freshness rule is set — UX shifts to a
+  // "Make exception" pattern (button on warning, link otherwise). When
+  // false, the per-asset feature stands alone with a dropdown.
+  libraryRuleActive: boolean;
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onClose: () => void;
 }
-function FreshnessSection({ asset, freshnessReason, onSetFreshnessException, onClose }: FreshnessSectionProps) {
-  // Per-asset rule has two states: "none" (no per-asset expiration set) or
-  // "set" (an expiration date is set). Renamed from "exception" because the
-  // feature is useful even with no library-wide rule — admin just picks
-  // when this video should expire.
+function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFreshnessException, onClose }: FreshnessSectionProps) {
+  // Per-asset rule data
   const exceptionUntilDate = asset.freshnessExceptionUntil ? new Date(asset.freshnessExceptionUntil) : null;
   const hasValidUntil = exceptionUntilDate !== null && !Number.isNaN(exceptionUntilDate.getTime());
   const exceptionActive = hasValidUntil && exceptionUntilDate.getTime() > Date.now();
   const exceptionExpired = hasValidUntil && exceptionUntilDate.getTime() <= Date.now();
 
-  // Initial dropdown state mirrors current data: any saved date → "set"
+  // Dropdown state (used in no-library-rule mode)
   const initialMode: "none" | "set" = hasValidUntil ? "set" : "none";
   const [mode, setMode] = useState<"none" | "set">(initialMode);
+  // Editing flag (used in library-rule mode — tracks whether "Make exception"
+  // form is open). When library rule is on, dropdown is hidden; instead
+  // admin clicks a button/link to open the same date-picker form.
+  const [editing, setEditing] = useState(false);
 
-  // Date the user is editing in the form. Defaults to current saved value
-  // if there is one, else +1 year from today.
   const defaultDate = (() => {
     if (hasValidUntil) return exceptionUntilDate.toISOString().split("T")[0];
     const d = new Date();
@@ -1542,25 +1564,16 @@ function FreshnessSection({ asset, freshnessReason, onSetFreshnessException, onC
   })();
   const [untilDate, setUntilDate] = useState<string>(defaultDate);
 
-  // Re-sync local state when asset's saved value changes (e.g. after save)
+  // Re-sync state when asset's saved value changes (e.g. after save lands)
   useEffect(() => {
     setMode(hasValidUntil ? "set" : "none");
     if (hasValidUntil) setUntilDate(exceptionUntilDate.toISOString().split("T")[0]);
+    setEditing(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.freshnessExceptionUntil]);
 
   const dotLevel = freshnessReason.level;
   const hideDot = !!freshnessReason.hideDot;
-
-  const handleModeChange = (next: "none" | "set") => {
-    setMode(next);
-    if (next === "none") {
-      // Auto-save: clearing the per-asset expiration is a single deterministic action.
-      onSetFreshnessException(asset, null);
-    }
-    // For "set" mode we wait for a Save click — gives the user a chance to
-    // pick the date before committing.
-  };
 
   const setQuickPreset = (months: number) => {
     const d = new Date();
@@ -1568,14 +1581,67 @@ function FreshnessSection({ asset, freshnessReason, onSetFreshnessException, onC
     setUntilDate(d.toISOString().split("T")[0]);
   };
 
-  // The "set" form is dirty when the picked date differs from what's saved,
-  // OR when the user just switched to "set" mode and there's no saved value.
   const savedDateStr = hasValidUntil ? exceptionUntilDate.toISOString().split("T")[0] : null;
-  const dirty = mode === "set" && untilDate !== savedDateStr;
+  // Form is dirty when picked date differs from saved — applies to both modes
+  const dirty = untilDate !== savedDateStr;
 
   const save = () => {
     onSetFreshnessException(asset, new Date(untilDate).toISOString());
+    setEditing(false);
   };
+
+  const handleDropdownChange = (next: "none" | "set") => {
+    setMode(next);
+    if (next === "none") {
+      // Auto-save: clearing the per-asset expiration is a single action.
+      onSetFreshnessException(asset, null);
+    }
+  };
+
+  // Shared date-picker form — same JSX in both UX modes
+  const renderForm = (showAuditWhenSaved: boolean) => (
+    <div className="cl-exception-form">
+      <div className="cl-exception-until-row">
+        <input
+          className="cl-exception-date"
+          type="date"
+          value={untilDate}
+          onChange={(e) => setUntilDate(e.target.value)}
+        />
+        <div className="cl-exception-quick">
+          <button className="cl-quick-btn" onClick={() => setQuickPreset(6)}>+6mo</button>
+          <button className="cl-quick-btn" onClick={() => setQuickPreset(12)}>+1y</button>
+          <button className="cl-quick-btn" onClick={() => setQuickPreset(24)}>+2y</button>
+        </div>
+      </div>
+      {dirty && (
+        <div className="cl-exception-actions">
+          <button className="cl-mini-btn primary" onClick={save}>Save</button>
+          <button className="cl-mini-btn" onClick={() => {
+            setUntilDate(savedDateStr || defaultDate);
+            // If we opened the form from a button (library mode), close it
+            if (libraryRuleActive && !hasValidUntil) setEditing(false);
+          }}>Cancel</button>
+        </div>
+      )}
+      {!dirty && libraryRuleActive && hasValidUntil && (
+        <div className="cl-exception-actions">
+          <button className="cl-mini-btn" onClick={() => onSetFreshnessException(asset, null)}>Clear exception</button>
+        </div>
+      )}
+      {!dirty && showAuditWhenSaved && exceptionActive && asset.freshnessExceptionSetByEmail && (
+        <div className="cl-exception-meta">
+          Set by <strong>{asset.freshnessExceptionSetByEmail}</strong>
+          {asset.freshnessExceptionSetAt && <> on {fmtDate(asset.freshnessExceptionSetAt)}</>}
+        </div>
+      )}
+      {!dirty && exceptionExpired && (
+        <div className="cl-exception-expired">
+          ⌛ Expired on {fmtDate(asset.freshnessExceptionUntil)}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="cl-section">
@@ -1584,67 +1650,71 @@ function FreshnessSection({ asset, freshnessReason, onSetFreshnessException, onC
         <span className="cl-section-title">Freshness</span>
       </div>
 
-      {/* Per-asset expiration dropdown — matches Approval / Client visual.
-          Lives ABOVE the publish date line per Logan's spec. */}
-      <select
-        className="cl-select"
-        value={mode}
-        onChange={(e) => handleModeChange(e.target.value as "none" | "set")}
-      >
-        <option value="none">No expiration</option>
-        <option value="set">Set expiration</option>
-      </select>
-
-      {/* Date picker form — visible when "Set expiration" is chosen */}
-      {mode === "set" && (
-        <div className="cl-exception-form">
-          <div className="cl-exception-until-row">
-            <input
-              className="cl-exception-date"
-              type="date"
-              value={untilDate}
-              onChange={(e) => setUntilDate(e.target.value)}
-            />
-            <div className="cl-exception-quick">
-              <button className="cl-quick-btn" onClick={() => setQuickPreset(6)}>+6mo</button>
-              <button className="cl-quick-btn" onClick={() => setQuickPreset(12)}>+1y</button>
-              <button className="cl-quick-btn" onClick={() => setQuickPreset(24)}>+2y</button>
-            </div>
-          </div>
-          {dirty && (
-            <div className="cl-exception-actions">
-              <button className="cl-mini-btn primary" onClick={save}>Save</button>
-              <button className="cl-mini-btn" onClick={() => setUntilDate(savedDateStr || defaultDate)}>Cancel</button>
-            </div>
-          )}
-          {/* When saved + active, show audit info */}
-          {!dirty && exceptionActive && asset.freshnessExceptionSetByEmail && (
-            <div className="cl-exception-meta">
-              Set by <strong>{asset.freshnessExceptionSetByEmail}</strong>
-              {asset.freshnessExceptionSetAt && <> on {fmtDate(asset.freshnessExceptionSetAt)}</>}
-            </div>
-          )}
-          {/* Expired warning when saved date is in the past */}
-          {!dirty && exceptionExpired && (
-            <div className="cl-exception-expired">
-              ⌛ Expired on {fmtDate(asset.freshnessExceptionUntil)}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Publish date — informational, sits below the dropdown */}
+      {/* Publish date sits at the top — keeps visual rhythm with Approval
+          and Client relationship sections that lead with their value. */}
       <div className="cl-freshness-line">
         {asset.publishedAt
           ? <>Published <strong>{fmtDate(asset.publishedAt)}</strong> <span className="cl-freshness-rel">({timeAgoShort(asset.publishedAt)})</span></>
           : <span style={{ color: "var(--t4)" }}>Publish date not recorded yet — sync the source to populate.</span>}
       </div>
 
-      {/* Org rule note — only shows when an org rule exists */}
-      {freshnessReason.flagDetail && (
-        <div className={dotLevel === "green" ? "cl-freshness-note" : "cl-freshness-warn"}>
-          {freshnessReason.flagDetail}
-        </div>
+      {!libraryRuleActive ? (
+        // ─── Mode A/B: No library rule — standalone dropdown ───
+        <>
+          <select
+            className="cl-select cl-fresh-select"
+            value={mode}
+            onChange={(e) => handleDropdownChange(e.target.value as "none" | "set")}
+          >
+            <option value="none">No expiration</option>
+            <option value="set">Set expiration</option>
+          </select>
+          {mode === "set" && renderForm(true)}
+        </>
+      ) : (
+        // ─── Mode C/D/E: Library rule active — exception button pattern ───
+        <>
+          {/* Yellow warning when asset is over the org threshold and no
+              active exception is suppressing it. Embeds the Make exception
+              button right on the warning so admin sees the action next to
+              the problem. */}
+          {dotLevel === "yellow" && freshnessReason.flagDetail && !editing && !exceptionActive && (
+            <div className="cl-freshness-warn cl-freshness-warn-row">
+              <span>{freshnessReason.flagDetail}</span>
+              <button className="cl-mini-btn" onClick={() => setEditing(true)}>Make exception</button>
+            </div>
+          )}
+
+          {/* Info note when org rule applies but the asset isn't currently
+              flagged (either because it's still within window OR an exception
+              is suppressing the flag). */}
+          {dotLevel === "green" && freshnessReason.flagDetail && (
+            <div className="cl-freshness-note">{freshnessReason.flagDetail}</div>
+          )}
+
+          {/* Active exception form box — shows the saved date + audit info,
+              with Clear/Change controls. */}
+          {exceptionActive && !editing && renderForm(true)}
+
+          {/* Editing form (admin clicked Make exception) */}
+          {editing && renderForm(false)}
+
+          {/* Expired exception — show a brief note (the form will appear if
+              admin clicks Make exception again to re-apply). */}
+          {exceptionExpired && !editing && !exceptionActive && (
+            <div className="cl-exception-expired">
+              ⌛ Previous exception expired {fmtDate(asset.freshnessExceptionUntil)}
+            </div>
+          )}
+
+          {/* Make-exception entry point for proactive use (asset isn't
+              currently flagged, no active exception). Small inline link. */}
+          {!editing && !exceptionActive && dotLevel !== "yellow" && (
+            <button className="cl-make-exception-link" onClick={() => setEditing(true)}>
+              {exceptionExpired ? "Re-apply exception" : "Make exception"} →
+            </button>
+          )}
+        </>
       )}
 
       <a
@@ -1725,6 +1795,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               open={open}
               onToggle={() => setOpenClearedFor(open ? null : a.id)}
               onClose={() => setOpenClearedFor(null)}
+              libraryFreshnessRuleActive={!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate)}
               onSetFreshnessException={onSetFreshnessException}
               onSetClientStatus={onSetClientStatus}
               onSetApproval={onSetApproval}
@@ -3956,6 +4027,7 @@ export default function App(){
                       return {
                         level: c.level,
                         reasons: c.reasons,
+                        libraryFreshnessRuleActive: !!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate),
                         onSetClientStatus: setClientStatus,
                         onSetApproval: setApproval,
                         onMarkVerified: markVerified,
