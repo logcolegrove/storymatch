@@ -1303,7 +1303,7 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
         signal: "freshness",
         level: "yellow",
         label: `${ageLabel} — ${thresholdLabel}`,
-        flagDetail: `Over org rule: ${thresholdLabel}`,
+        flagDetail: `Flagged: ${thresholdLabel}`,
         effectiveExpiration,
       });
     } else if (noRuleApplied) {
@@ -1705,7 +1705,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
     <div className="cl-section">
       <div className="cl-section-head">
         {!hideDot && <span className={`cl-circle ${dotLevel}`}/>}
-        <span className="cl-section-title">Freshness</span>
+        <span className="cl-section-title">Expiration</span>
       </div>
 
       {/* Publish date sits at the top */}
@@ -1740,19 +1740,20 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
             </div>
           )}
 
-          {/* Org-rule note + per-exception audit (state E) — both italic.
-              Logan's spec: keep the threshold message AND show who made the
-              exception below it. */}
+          {/* Org-rule note (italic) — only shows when the rule would
+              otherwise fire on this asset. Keeps the threshold message
+              visible alongside the exception so admins see both. */}
           {dotLevel === "green" && freshnessReason.flagDetail && (
-            <>
-              <div className="cl-freshness-note">{freshnessReason.flagDetail}</div>
-              {exceptionActive && asset.freshnessExceptionSetByEmail && (
-                <div className="cl-freshness-note">
-                  <strong>{asset.freshnessExceptionSetByEmail}</strong> made an exception
-                  {asset.freshnessExceptionSetAt && <> on {fmtDate(asset.freshnessExceptionSetAt)}</>}
-                </div>
-              )}
-            </>
+            <div className="cl-freshness-note">{freshnessReason.flagDetail}</div>
+          )}
+          {/* Per-exception audit (italic) — always renders when an active
+              exception exists, regardless of whether the org rule would
+              fire. Captures Logan's "[admin email] made an exception" framing. */}
+          {exceptionActive && asset.freshnessExceptionSetByEmail && (
+            <div className="cl-freshness-note">
+              <strong>{asset.freshnessExceptionSetByEmail}</strong> made an exception
+              {asset.freshnessExceptionSetAt && <> on {fmtDate(asset.freshnessExceptionSetAt)}</>}
+            </div>
           )}
 
           {/* Grey "set to expire on" box — when library rule is on, asset is
@@ -1794,7 +1795,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
         href="#/rules"
         onClick={(e) => { e.preventDefault(); onClose(); window.location.hash = "/rules"; }}
         className="cl-rules-link"
-      >Configure freshness Rule →</a>
+      >Configure expiration rules →</a>
     </div>
   );
 }
@@ -2008,6 +2009,11 @@ interface ExtractedVideo {
   thumbnail?: string;
   durationSec?: number;
   transcript?: string;
+  // ISO timestamp from Vimeo's `created_time` — needed so the freshness
+  // signal works correctly on first import. Without it the asset gets a
+  // null published_at and shows "Publish date not recorded yet" until the
+  // admin manually re-syncs (which is what was happening before this fix).
+  createdAt?: string;
 }
 
 async function extractShowcaseVideos(sourceUrl: string): Promise<ExtractedVideo[]> {
@@ -2021,7 +2027,7 @@ async function extractShowcaseVideos(sourceUrl: string): Promise<ExtractedVideo[
         console.error("Vimeo showcase fetch failed:",body);
         return[];
       }
-      const data=await r.json() as {videos:{url:string;title:string;description?:string;thumbnail?:string;durationSec?:number;uploader?:string;transcript?:string}[]};
+      const data=await r.json() as {videos:{url:string;title:string;description?:string;thumbnail?:string;durationSec?:number;uploader?:string;transcript?:string;createdAt?:string}[]};
       return(data.videos||[]).map(v=>({
         url:v.url,
         title:v.title,
@@ -2029,6 +2035,7 @@ async function extractShowcaseVideos(sourceUrl: string): Promise<ExtractedVideo[
         thumbnail:v.thumbnail,
         durationSec:v.durationSec,
         transcript:v.transcript,
+        createdAt:v.createdAt,
       }));
     }
     // Fallback: non-Vimeo URLs get nothing for now
@@ -2232,7 +2239,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
 
       <div className="rules-section">
         <div className="rules-section-head">
-          <div className="rules-section-title">Freshness</div>
+          <div className="rules-section-title">Expiration</div>
           <div className="rules-section-help">
             Flag testimonials whose Vimeo publish date is too old for review. Sales reps still see flagged stories — this is a hint, not a hard filter.
           </div>
@@ -2447,6 +2454,8 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
       if(v.description){asset.description=v.description;asset.lastSyncedDescription=v.description;}
       if(v.thumbnail) asset.thumbnail=v.thumbnail;
       if(v.transcript){asset.transcript=v.transcript;asset.lastSyncedTranscript=v.transcript;}
+      // Vimeo's actual upload date — drives freshness on first import.
+      if(v.createdAt) asset.publishedAt=v.createdAt;
       newAssets.push(asset);
     }
     const source: Source = {id:sourceId,name:name||`${typeLabel(detected.kind)}`,url:detected.url,type:detected.kind,status:"synced",lastSync:new Date().toISOString(),videoCount:newAssets.length,assetIds:newAssets.map(a=>a.id)};
