@@ -1100,9 +1100,15 @@ function computeCleared(asset: Asset, freshnessWarnAfterMonths: number | null): 
     reasons.push({ signal: "freshness", level: "yellow", label: `Published ${timeAgoShort(asset.publishedAt!)} — over ${yLabel} threshold` });
   }
 
-  // No admin engagement yet — show no dot, but still expose the signals so the
-  // popover can render them when admin clicks to set things up.
-  if (!isClearedEngaged(asset)) {
+  // Show the dot when admin has engaged (approval/client) OR when freshness
+  // is automatically flagged (over org threshold). Other signals' yellow
+  // states ("approval not recorded", "client status unknown") are silenced
+  // until admin engages — the dot would be permanently nagging otherwise.
+  // Freshness is different: it's a real condition the admin needs to see
+  // even before they've touched the other governance fields.
+  const freshness = reasons.find(r => r.signal === "freshness");
+  const freshnessFlagged = freshness?.level === "yellow" || freshness?.level === "red";
+  if (!isClearedEngaged(asset) && !freshnessFlagged) {
     return { level: "unset", reasons };
   }
 
