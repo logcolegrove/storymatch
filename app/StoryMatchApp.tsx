@@ -575,6 +575,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-circle.yellow{background:var(--amber);}
 .cl-circle.red{background:var(--red);}
 .cl-pop{position:absolute;top:calc(100% + 6px);left:0;width:340px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14);padding:14px;z-index:60;cursor:default;}
+/* Portal variant — escapes the row's opacity:.65 grey-out for archived/draft
+   rows. position+top+left come from inline style; this rule just ensures
+   z-index sits above any other floating UI. */
+.cl-pop-portal{z-index:200;opacity:1 !important;}
 .cl-pop-head{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);margin-bottom:8px;}
 .cl-section{padding:10px 0;border-top:1px solid var(--border);}
 .cl-section:first-of-type{border-top:none;padding-top:4px;}
@@ -1076,27 +1080,106 @@ interface ClearedPopoverProps {
   onMarkVerified: (a: Asset) => void;
 }
 
-function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedPopoverProps) {
+interface ClearedPopoverPropsFull extends ClearedPopoverProps {
+  // Anchor element from the parent — we use its bounding rect to position the
+  // portal-rendered popover. Portaling escapes the row's opacity:.65
+  // grey-out so the popover renders at full readable contrast over
+  // archived/draft rows.
+  anchor?: HTMLElement | null;
+}
+
+// Wrapper that owns the trigger DOM node and feeds it as anchor to the
+// portal-rendered popover. Keeps the row markup compact + portals the
+// popover so opacity/grey-out from row state doesn't leak into it.
+interface ClearedCellProps {
+  asset: Asset;
+  cleared: { level: ClearedLevel; reasons: ClearedReason[] };
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
+  onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
+  onMarkVerified: (a: Asset) => void;
+}
+function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
+  const triggerRef = React.useRef<HTMLDivElement>(null);
+  return (
+    <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={triggerRef}
+        className={`cl-trigger${open ? " open" : ""}${cleared.level === "unset" ? " unset" : ""}`}
+        onClick={onToggle}
+        title={cleared.level === "unset" ? "Click to set approval & client status" : "Cleared for use: approval, client status, freshness"}
+      >
+        {cleared.level === "unset" ? (
+          <span className="cl-set-hint">—</span>
+        ) : (
+          <>
+            <span className={`cl-circle ${cleared.level}`}/>
+            <span>{cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"}</span>
+          </>
+        )}
+      </div>
+      {open && (
+        <ClearedPopover
+          asset={asset}
+          reasons={cleared.reasons}
+          onClose={onClose}
+          onSetClientStatus={onSetClientStatus}
+          onSetApproval={onSetApproval}
+          onMarkVerified={onMarkVerified}
+          anchor={triggerRef.current}
+        />
+      )}
+    </div>
+  );
+}
+
+function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+
+  // Position the popover under the anchor on open + reposition on scroll/resize.
+  useEffect(() => {
+    const compute = () => {
+      if (!anchor) return;
+      const r = anchor.getBoundingClientRect();
+      setCoords({ top: r.bottom + 6, left: r.left });
+    };
+    compute();
+    window.addEventListener("scroll", compute, true);
+    window.addEventListener("resize", compute);
+    return () => {
+      window.removeEventListener("scroll", compute, true);
+      window.removeEventListener("resize", compute);
+    };
+  }, [anchor]);
 
   // Close on click outside
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) {
-        onClose();
-      }
+      const t = e.target as Node;
+      if (popRef.current?.contains(t)) return;
+      if (anchor?.contains(t)) return;
+      onClose();
     };
     // Defer one tick so the click that opened us doesn't immediately close us
     const timer = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
     return () => { clearTimeout(timer); document.removeEventListener("mousedown", onDoc); };
-  }, [onClose]);
+  }, [onClose, anchor]);
 
   const reasonFor = (signal: "approval" | "client" | "freshness"): ClearedReason =>
     reasons.find(r => r.signal === signal) || { signal, level: "yellow", label: "—" };
 
-  return (
-    <div className="cl-pop" ref={popRef} onClick={(e) => e.stopPropagation()}>
+  if (!coords || typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      className="cl-pop cl-pop-portal"
+      ref={popRef}
+      style={{ position: "fixed", top: coords.top, left: coords.left }}
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className="cl-pop-head">Cleared for use</div>
 
       {/* Approval section */}
@@ -1163,7 +1246,8 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
           ✓ Mark verified now
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1230,32 +1314,16 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 <option value="archived">Archived</option>
               </select>
             </div>
-            <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
-              <div
-                className={`cl-trigger${open ? " open" : ""}${cleared.level === "unset" ? " unset" : ""}`}
-                onClick={() => setOpenClearedFor(open ? null : a.id)}
-                title={cleared.level === "unset" ? "Click to set approval & client status" : "Cleared for use: approval, client status, freshness"}
-              >
-                {cleared.level === "unset" ? (
-                  <span className="cl-set-hint">—</span>
-                ) : (
-                  <>
-                    <span className={`cl-circle ${cleared.level}`}/>
-                    <span>{cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"}</span>
-                  </>
-                )}
-              </div>
-              {open && (
-                <ClearedPopover
-                  asset={a}
-                  reasons={cleared.reasons}
-                  onClose={() => setOpenClearedFor(null)}
-                  onSetClientStatus={onSetClientStatus}
-                  onSetApproval={onSetApproval}
-                  onMarkVerified={onMarkVerified}
-                />
-              )}
-            </div>
+            <ClearedCell
+              asset={a}
+              cleared={cleared}
+              open={open}
+              onToggle={() => setOpenClearedFor(open ? null : a.id)}
+              onClose={() => setOpenClearedFor(null)}
+              onSetClientStatus={onSetClientStatus}
+              onSetApproval={onSetApproval}
+              onMarkVerified={onMarkVerified}
+            />
             <div className="lv-actions">
               <DotsMenu items={[
                 { label: "Open", onClick: () => onClick(a) },
