@@ -100,6 +100,12 @@ interface Asset {
   lastSyncedTranscript?: string | null;
   // Vimeo's actual publish date (created_time). Drives the freshness Rule.
   publishedAt?: string | null;
+  // Per-asset freshness exception — when set, this asset bypasses the org
+  // freshness rule until the until date (if set) or always (if until is in
+  // the far future). set_by_email + set_at are server-stamped from auth.
+  freshnessExceptionUntil?: string | null;
+  freshnessExceptionSetByEmail?: string | null;
+  freshnessExceptionSetAt?: string | null;
 }
 
 // Org-level configuration that drives Rules behavior. Loaded once at app
@@ -640,6 +646,24 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-section-meta{font-size:11px;color:var(--t3);}
 .cl-freshness-line{font-size:12px;color:var(--t1);margin-top:4px;}
 .cl-freshness-rel{color:var(--t3);font-weight:400;}
+.cl-freshness-note{font-size:11px;color:var(--t3);margin-top:4px;font-style:italic;}
+.cl-exception-active{margin-top:8px;padding:8px 10px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;}
+.cl-exception-line{font-size:12px;color:#166534;}
+.cl-exception-icon{display:inline-block;margin-right:4px;font-weight:700;}
+.cl-exception-meta{font-size:11px;color:var(--t3);margin-top:2px;}
+.cl-exception-actions{display:flex;gap:6px;margin-top:8px;}
+.cl-exception-expired{font-size:11px;color:var(--t3);margin-top:6px;padding:5px 8px;background:var(--bg2);border-radius:5px;}
+.cl-exception-form{margin-top:8px;padding:10px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;}
+.cl-exception-form-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;margin-bottom:6px;}
+.cl-radio{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--t1);padding:5px 0;cursor:pointer;}
+.cl-radio input{cursor:pointer;}
+.cl-exception-until-row{margin-top:4px;padding-left:22px;display:flex;flex-direction:column;gap:6px;}
+.cl-exception-date{font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);}
+.cl-exception-date:focus{outline:none;border-color:var(--accent);}
+.cl-exception-quick{display:flex;gap:5px;}
+.cl-quick-btn{font-family:var(--font);font-size:10.5px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
+.cl-quick-btn:hover{border-color:var(--accent);color:var(--accent);}
+.cl-set-exception{margin-top:8px;}
 .cl-freshness-warn{font-size:11px;color:var(--amber);margin-top:4px;background:var(--amberL);padding:5px 8px;border-radius:5px;}
 .cl-rules-link{display:inline-block;margin-top:8px;font-size:11px;color:var(--accent);text-decoration:none;font-weight:600;}
 .cl-rules-link:hover{text-decoration:underline;}
@@ -839,6 +863,7 @@ interface CardProps {
     onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
     onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
     onMarkVerified: (a: Asset) => void;
+    onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   };
 }
 
@@ -931,6 +956,7 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           asset={asset}
           reasons={cleared.reasons}
           onClose={() => setClearedOpen(false)}
+          onSetFreshnessException={cleared.onSetFreshnessException}
           onSetClientStatus={cleared.onSetClientStatus}
           onSetApproval={cleared.onSetApproval}
           onMarkVerified={cleared.onMarkVerified}
@@ -1132,6 +1158,7 @@ interface ListViewProps {
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
+  onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onDelete: (id: string) => void;
   onCopyShareLink: (a: Asset) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
@@ -1216,7 +1243,22 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
       }
     }
 
-    if (flagged) {
+    // Per-asset freshness exception silences the org-level flag while active.
+    // Active = until date is in the future (NULL means no exception is set).
+    const exceptionUntil = asset.freshnessExceptionUntil ? new Date(asset.freshnessExceptionUntil) : null;
+    const exceptionActive = exceptionUntil !== null && !Number.isNaN(exceptionUntil.getTime()) && exceptionUntil.getTime() > Date.now();
+
+    if (flagged && exceptionActive) {
+      // Asset would normally be flagged, but an exception is suppressing it.
+      // We keep the threshold info in the reason for the popover to show
+      // alongside the exception note ("over rule, but approved by...").
+      reasons.push({
+        signal: "freshness",
+        level: "green",
+        label: `${ageLabel} — exception active`,
+        flagDetail: `Org rule says: ${thresholdLabel}`,
+      });
+    } else if (flagged) {
       reasons.push({
         signal: "freshness",
         level: "yellow",
@@ -1252,6 +1294,8 @@ interface ClearedPopoverProps {
   asset: Asset;
   reasons: ClearedReason[];
   onClose: () => void;
+  // Set or clear the per-asset freshness exception. untilIso null = clear.
+  onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
@@ -1274,11 +1318,12 @@ interface ClearedCellProps {
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
+  onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
 }
-function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
+function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
   return (
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
@@ -1302,6 +1347,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetClientStatu
           asset={asset}
           reasons={cleared.reasons}
           onClose={onClose}
+          onSetFreshnessException={onSetFreshnessException}
           onSetClientStatus={onSetClientStatus}
           onSetApproval={onSetApproval}
           onMarkVerified={onMarkVerified}
@@ -1312,7 +1358,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetClientStatu
   );
 }
 
-function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
+function ClearedPopover({ asset, reasons, onClose, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
   // Coords use either `top` (popover sits below trigger) or `bottom` (popover
@@ -1436,33 +1482,184 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
         </select>
       </div>
 
-      {/* Freshness section — driven by Vimeo publish date + org Rule.
-          No "Mark verified" anymore — the publish date is the truth. */}
-      <div className="cl-section">
-        <div className="cl-section-head">
-          <span className={`cl-circle ${reasonFor("freshness").level}`}/>
-          <span className="cl-section-title">Freshness</span>
-        </div>
-        <div className="cl-freshness-line">
-          {asset.publishedAt
-            ? <>Published <strong>{new Date(asset.publishedAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}</strong> <span className="cl-freshness-rel">({timeAgoShort(asset.publishedAt)})</span></>
-            : <span style={{ color: "var(--t4)" }}>Publish date not recorded yet — sync the source to populate.</span>}
-        </div>
-        {reasonFor("freshness").level === "yellow" && (
-          <div className="cl-freshness-warn">{reasonFor("freshness").flagDetail || reasonFor("freshness").label}</div>
-        )}
-        <a
-          href="#/rules"
-          onClick={(e) => { e.preventDefault(); onClose(); window.location.hash = "/rules"; }}
-          className="cl-rules-link"
-        >Configure freshness Rule →</a>
-      </div>
+      <FreshnessSection
+        asset={asset}
+        freshnessReason={reasonFor("freshness")}
+        onSetFreshnessException={onSetFreshnessException}
+        onClose={onClose}
+      />
     </div>,
     document.body
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
+// Sentinel: dates ≥ this far in the future are treated as "no expiry" in
+// the UI. Stored as a real timestamptz to keep the schema simple (no
+// indefinite boolean column needed) while still letting the FE distinguish
+// "approve until X" from "never flag this asset."
+const NEVER_EXPIRY_THRESHOLD_YEARS = 50;
+function isNeverExpiry(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() > Date.now() + NEVER_EXPIRY_THRESHOLD_YEARS * 365 * 24 * 60 * 60 * 1000;
+}
+function buildNeverExpiryIso(): string {
+  // 100 years out — beyond any reasonable review horizon
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + 100);
+  return d.toISOString();
+}
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+interface FreshnessSectionProps {
+  asset: Asset;
+  freshnessReason: ClearedReason;
+  onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
+  onClose: () => void;
+}
+function FreshnessSection({ asset, freshnessReason, onSetFreshnessException, onClose }: FreshnessSectionProps) {
+  const [editing, setEditing] = useState(false);
+  // Form state: choose between "never" and "until <date>"
+  const [mode, setMode] = useState<"never" | "until">("until");
+  // Default the until picker to one year from now
+  const defaultUntil = (() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toISOString().split("T")[0];
+  })();
+  const [untilDate, setUntilDate] = useState<string>(defaultUntil);
+
+  const exceptionUntil = asset.freshnessExceptionUntil ? new Date(asset.freshnessExceptionUntil) : null;
+  const exceptionActive = exceptionUntil !== null && !Number.isNaN(exceptionUntil.getTime()) && exceptionUntil.getTime() > Date.now();
+  const exceptionExpired = exceptionUntil !== null && !Number.isNaN(exceptionUntil.getTime()) && exceptionUntil.getTime() <= Date.now();
+  const indefinite = isNeverExpiry(asset.freshnessExceptionUntil);
+
+  const dotLevel = freshnessReason.level;
+
+  const save = () => {
+    if (mode === "never") {
+      onSetFreshnessException(asset, buildNeverExpiryIso());
+    } else {
+      // Convert YYYY-MM-DD to ISO at midnight UTC
+      onSetFreshnessException(asset, new Date(untilDate).toISOString());
+    }
+    setEditing(false);
+  };
+
+  const setQuickPreset = (months: number) => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + months);
+    setUntilDate(d.toISOString().split("T")[0]);
+    setMode("until");
+  };
+
+  return (
+    <div className="cl-section">
+      <div className="cl-section-head">
+        <span className={`cl-circle ${dotLevel}`}/>
+        <span className="cl-section-title">Freshness</span>
+      </div>
+      <div className="cl-freshness-line">
+        {asset.publishedAt
+          ? <>Published <strong>{fmtDate(asset.publishedAt)}</strong> <span className="cl-freshness-rel">({timeAgoShort(asset.publishedAt)})</span></>
+          : <span style={{ color: "var(--t4)" }}>Publish date not recorded yet — sync the source to populate.</span>}
+      </div>
+
+      {/* Threshold note (when org rule would flag, regardless of exception status) */}
+      {freshnessReason.flagDetail && (
+        <div className={dotLevel === "green" ? "cl-freshness-note" : "cl-freshness-warn"}>
+          {freshnessReason.flagDetail}
+        </div>
+      )}
+
+      {/* Active exception display */}
+      {exceptionActive && !editing && (
+        <div className="cl-exception-active">
+          <div className="cl-exception-line">
+            <span className="cl-exception-icon">✓</span>
+            Approved by <strong>{asset.freshnessExceptionSetByEmail || "team member"}</strong>
+            {asset.freshnessExceptionSetAt && <> on {fmtDate(asset.freshnessExceptionSetAt)}</>}
+          </div>
+          <div className="cl-exception-meta">
+            {indefinite ? "No expiry — never flag this asset" : <>Expires {fmtDate(asset.freshnessExceptionUntil)}</>}
+          </div>
+          <div className="cl-exception-actions">
+            <button className="cl-mini-btn" onClick={() => setEditing(true)}>Change</button>
+            <button className="cl-mini-btn" onClick={() => onSetFreshnessException(asset, null)}>Clear exception</button>
+          </div>
+        </div>
+      )}
+
+      {/* Expired exception — show history + offer to re-apply */}
+      {exceptionExpired && !editing && (
+        <div className="cl-exception-expired">
+          ⌛ Previous exception expired {fmtDate(asset.freshnessExceptionUntil)}
+        </div>
+      )}
+
+      {/* Edit form */}
+      {editing && (
+        <div className="cl-exception-form">
+          <div className="cl-exception-form-title">Set freshness exception</div>
+          <label className="cl-radio">
+            <input type="radio" name="freshmode" checked={mode === "never"} onChange={() => setMode("never")}/>
+            Never flag this asset
+          </label>
+          <label className="cl-radio">
+            <input type="radio" name="freshmode" checked={mode === "until"} onChange={() => setMode("until")}/>
+            Approve until
+          </label>
+          {mode === "until" && (
+            <div className="cl-exception-until-row">
+              <input
+                className="cl-exception-date"
+                type="date"
+                value={untilDate}
+                onChange={(e) => setUntilDate(e.target.value)}
+                min={new Date().toISOString().split("T")[0]}
+              />
+              <div className="cl-exception-quick">
+                <button className="cl-quick-btn" onClick={() => setQuickPreset(6)}>+6mo</button>
+                <button className="cl-quick-btn" onClick={() => setQuickPreset(12)}>+1y</button>
+                <button className="cl-quick-btn" onClick={() => setQuickPreset(24)}>+2y</button>
+              </div>
+            </div>
+          )}
+          <div className="cl-exception-actions">
+            <button className="cl-mini-btn primary" onClick={save}>Save</button>
+            <button className="cl-mini-btn" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Set-exception entry point (always visible when not editing and no
+          active exception). Lets admins set proactive exceptions on any
+          asset, not just flagged ones. */}
+      {!editing && !exceptionActive && (
+        <button className="cl-mini-btn cl-set-exception" onClick={() => setEditing(true)}>
+          {exceptionExpired ? "Re-apply exception" : "Set freshness exception"}
+        </button>
+      )}
+
+      <a
+        href="#/rules"
+        onClick={(e) => { e.preventDefault(); onClose(); window.location.hash = "/rules"; }}
+        className="cl-rules-link"
+      >Configure freshness Rule →</a>
+    </div>
+  );
+    </div>,
+    document.body
+  );
+}
+
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -1531,6 +1728,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               open={open}
               onToggle={() => setOpenClearedFor(open ? null : a.id)}
               onClose={() => setOpenClearedFor(null)}
+              onSetFreshnessException={onSetFreshnessException}
               onSetClientStatus={onSetClientStatus}
               onSetApproval={onSetApproval}
               onMarkVerified={onMarkVerified}
@@ -2912,6 +3110,19 @@ export default function App(){
     await updateAssetInline(asset.id,update,patch.status?`Approval: ${patch.status}`:"Note saved");
   };
 
+  // Set or clear a per-asset freshness exception. The server stamps
+  // set_by_email and set_at automatically from the auth context — we just
+  // need to send the until value (null clears the exception).
+  const setFreshnessException=async(asset: Asset, untilIso: string | null)=>{
+    const toast = untilIso === null ? "Exception cleared" : "Exception set";
+    await updateAssetInline(asset.id, {
+      freshnessExceptionUntil: untilIso,
+      // Optimistically clear set_by_email/set_at when clearing; server will
+      // also clear them. When setting, server overwrites with auth context.
+      ...(untilIso === null ? { freshnessExceptionSetByEmail: null, freshnessExceptionSetAt: null } : {}),
+    }, toast);
+  };
+
   // Change publication status (published / draft / archived) inline.
   const setPublicationStatus=async(asset: Asset, next: "published"|"draft"|"archived")=>{
     if(next==="archived"){
@@ -3712,6 +3923,7 @@ export default function App(){
                   onSetClientStatus={setClientStatus}
                   onSetApproval={setApproval}
                   onMarkVerified={markVerified}
+                  onSetFreshnessException={setFreshnessException}
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
                   orgSettings={orgSettings}
@@ -3750,6 +3962,7 @@ export default function App(){
                         onSetClientStatus: setClientStatus,
                         onSetApproval: setApproval,
                         onMarkVerified: markVerified,
+                        onSetFreshnessException: setFreshnessException,
                       };
                     })() : undefined;
                     return a.assetType==="Quote"

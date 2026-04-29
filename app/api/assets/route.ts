@@ -24,6 +24,7 @@ async function getCurrentUserOrg(req: NextRequest) {
 
   return {
     userId: user.id,
+    userEmail: user.email || "",
     orgId: membership.org_id as string,
     role: membership.role as "admin" | "sales",
   };
@@ -70,6 +71,12 @@ type AssetDB = {
   last_synced_transcript: string | null;
   // Vimeo publish date — drives the org's freshness Rule.
   published_at: string | null;
+  // Per-asset freshness exception (overrides org freshness rule).
+  // until is null = no exception. Far-future = "never flag." With expiry =
+  // approve until that date.
+  freshness_exception_until: string | null;
+  freshness_exception_set_by_email: string | null;
+  freshness_exception_set_at: string | null;
 };
 
 type AssetFE = {
@@ -110,6 +117,11 @@ type AssetFE = {
   lastSyncedTranscript?: string | null;
   // Read-only — set at insert time from Vimeo's created_time. Not editable.
   publishedAt?: string | null;
+  // Per-asset freshness exception. set_by_email and set_at are stamped
+  // server-side from the auth context — clients only send the until date.
+  freshnessExceptionUntil?: string | null;
+  freshnessExceptionSetByEmail?: string | null;
+  freshnessExceptionSetAt?: string | null;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -146,10 +158,13 @@ function dbToFe(r: AssetDB): AssetFE {
     lastSyncedDescription: r.last_synced_description,
     lastSyncedTranscript: r.last_synced_transcript,
     publishedAt: r.published_at,
+    freshnessExceptionUntil: r.freshness_exception_until,
+    freshnessExceptionSetByEmail: r.freshness_exception_set_by_email,
+    freshnessExceptionSetAt: r.freshness_exception_set_at,
   };
 }
 
-function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string): Partial<AssetDB> {
+function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUserEmail?: string): Partial<AssetDB> {
   const o: Partial<AssetDB> = { id: a.id, org_id: orgId };
   if (a.sourceId !== undefined) o.source_id = a.sourceId;
   if (a.clientName !== undefined) o.client_name = a.clientName;
@@ -181,6 +196,21 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string): Partial<As
   if (a.lastSyncedTitle !== undefined) o.last_synced_title = a.lastSyncedTitle;
   if (a.lastSyncedDescription !== undefined) o.last_synced_description = a.lastSyncedDescription;
   if (a.lastSyncedTranscript !== undefined) o.last_synced_transcript = a.lastSyncedTranscript;
+  // Per-asset freshness exception. When the FE writes a value (set or clear),
+  // server stamps set_by_email + set_at from the auth context — clients
+  // never set those directly, so we ignore any FE-supplied values.
+  if (a.freshnessExceptionUntil !== undefined) {
+    o.freshness_exception_until = a.freshnessExceptionUntil;
+    if (a.freshnessExceptionUntil === null) {
+      // Clearing the exception clears the audit fields too.
+      o.freshness_exception_set_by_email = null;
+      o.freshness_exception_set_at = null;
+    } else {
+      // Setting/changing the exception stamps fresh audit fields.
+      o.freshness_exception_set_by_email = currentUserEmail || null;
+      o.freshness_exception_set_at = new Date().toISOString();
+    }
+  }
   return o;
 }
 
@@ -213,7 +243,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const items: AssetFE[] = Array.isArray(body) ? body : body.assets ? body.assets : [body];
-  const rows = items.map((it) => feToDb(it, ctx.orgId));
+  const rows = items.map((it) => feToDb(it, ctx.orgId, ctx.userEmail));
 
   const { data, error } = await supabaseAdmin
     .from("assets")
@@ -246,7 +276,7 @@ export async function PUT(req: NextRequest) {
   const body = (await req.json()) as Partial<AssetFE> & { id: string };
   if (!body.id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
-  const updates = feToDb(body, ctx.orgId);
+  const updates = feToDb(body, ctx.orgId, ctx.userEmail);
   const { data, error } = await supabaseAdmin
     .from("assets")
     .update(updates)
