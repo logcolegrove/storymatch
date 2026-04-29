@@ -1654,9 +1654,6 @@ function FreshnessSection({ asset, freshnessReason, onSetFreshnessException, onC
       >Configure freshness Rule →</a>
     </div>
   );
-    </div>,
-    document.body
-  );
 }
 
 function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
