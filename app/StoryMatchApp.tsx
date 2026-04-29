@@ -523,6 +523,11 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .card-co{font-size:11.5px;font-weight:500;color:var(--t3);display:flex;align-items:center;justify-content:space-between;}
 .card-co-name{display:flex;align-items:center;gap:7px;}
 .vdot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+/* Cleared-status colors for the in-card dot — match the list-view cl-circle
+   palette so admins see consistent governance status across both views. */
+.vdot.cl-green{background:var(--green);}
+.vdot.cl-yellow{background:var(--amber);}
+.vdot.cl-red{background:var(--red);}
 .card-vert{font-size:11px;color:var(--t4);font-weight:500;}
 
 /* ── AI ENRICHMENT on card ── */
@@ -803,10 +808,15 @@ interface CardProps {
   menuItems?: MenuItem[];
   // Copy-link is available to any signed-in user (sales reps share too)
   onCopyShareLink?: (a: Asset) => void;
+  // Cleared signal — only set for admin-in-admin-mode (matches list view's
+  // status dot). Hidden for sales reps and the public preview because the
+  // dot is admin governance UI, not customer-facing.
+  clearedLevel?: ClearedLevel;
 }
 
-function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems,onCopyShareLink}: CardProps) {
-  const c=VERT_CLR[asset.vertical]||"#4f46e5";
+function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems,onCopyShareLink,clearedLevel}: CardProps) {
+  // VERT_CLR no longer drives the body dot — clearedLevel does. Vertical
+  // color may come back as a thumbnail accent later; for now just elide.
   const isV=asset.assetType==="Video Testimonial";
   const vid=extractVid(asset.videoUrl);
   let thumb=asset.thumbnail;if(!thumb&&vid?.p==="yt")thumb=ytThumb(vid.id);if(!thumb)thumb="https://images.unsplash.com/photo-1557804506-669a67965ba0?w=640&h=360&fit=crop";
@@ -855,7 +865,19 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       </div>
       <div className="card-body">
         <div className="card-headline" title={asset.headline||"Untitled"}>{asset.headline||"Untitled"}</div>
-        <div className="card-co"><span className="card-co-name"><span className="vdot" style={{background:c}}/>{asset.company||"—"}</span><span className="card-vert">{cta} →</span></div>
+        <div className="card-co">
+          <span className="card-co-name">
+            {/* Dot reflects Cleared signal for admins (matches list view).
+                Hidden entirely for sales/public — clearedLevel is undefined
+                in those contexts. "unset" means admin hasn't engaged AND
+                no auto-flag, so we still hide rather than render a neutral dot. */}
+            {clearedLevel && clearedLevel !== "unset" && (
+              <span className={`vdot cl-${clearedLevel}`} title={`Cleared: ${clearedLevel}`}/>
+            )}
+            {asset.company||"—"}
+          </span>
+          <span className="card-vert">{cta} →</span>
+        </div>
       </div>
       {aiData&&(
         <div className="card-ai" onClick={e=>e.stopPropagation()}>
@@ -1187,14 +1209,30 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, onSetClientStatu
 function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  // Coords use either `top` (popover sits below trigger) or `bottom` (popover
+  // sits above trigger). We flip when there isn't enough room below the
+  // trigger — fixes the "popover cut off at bottom of viewport" bug.
+  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
 
-  // Position the popover under the anchor on open + reposition on scroll/resize.
+  // Position the popover relative to the anchor + reposition on scroll/resize.
   useEffect(() => {
     const compute = () => {
       if (!anchor) return;
       const r = anchor.getBoundingClientRect();
-      setCoords({ top: r.bottom + 6, left: r.left });
+      // The popover renders ~360–400px tall when fully expanded (3 sections,
+      // textarea, etc). Pre-flip if there's less room than that below.
+      const POP_HEIGHT_ESTIMATE = 380;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const spaceAbove = r.top;
+      const flipUp = spaceBelow < POP_HEIGHT_ESTIMATE && spaceAbove > spaceBelow;
+      // Also clamp horizontally so the popover doesn't run off the right edge.
+      const POP_WIDTH = 340;
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_WIDTH - 8));
+      if (flipUp) {
+        setCoords({ bottom: window.innerHeight - r.top + 6, left });
+      } else {
+        setCoords({ top: r.bottom + 6, left });
+      }
     };
     compute();
     window.addEventListener("scroll", compute, true);
@@ -1226,7 +1264,12 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
     <div
       className="cl-pop cl-pop-portal"
       ref={popRef}
-      style={{ position: "fixed", top: coords.top, left: coords.left }}
+      style={{
+        position: "fixed",
+        left: coords.left,
+        ...(coords.top !== undefined ? { top: coords.top } : {}),
+        ...(coords.bottom !== undefined ? { bottom: coords.bottom } : {}),
+      }}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="cl-pop-head">Cleared for use</div>
@@ -3476,9 +3519,14 @@ export default function App(){
                     // mode and sales reps. Hidden in admin's Public preview
                     // because that simulates the external customer view.
                     const share = ((isAdmin && adminMode) || org?.role === "sales") ? copyShareLink : undefined;
+                    // Cleared dot is admin-governance UI — only visible to
+                    // admins in admin mode. Sales/public never see it.
+                    const cardCleared = adminMgmt
+                      ? computeCleared(a, orgSettings.freshnessWarnAfterMonths).level
+                      : undefined;
                     return a.assetType==="Quote"
-                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share}/>
-                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share}/>;
+                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} clearedLevel={cardCleared}/>
+                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} clearedLevel={cardCleared}/>;
                   })}
                 </div>
               )}
