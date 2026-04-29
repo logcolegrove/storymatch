@@ -528,6 +528,11 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .vdot.cl-green{background:var(--green);}
 .vdot.cl-yellow{background:var(--amber);}
 .vdot.cl-red{background:var(--red);}
+/* Button form of the dot — clickable to open the Cleared popover. Slightly
+   larger hit area than the visual would suggest, and a hover bump for affordance. */
+.vdot.vdot-btn{border:none;padding:0;cursor:pointer;width:9px;height:9px;transition:transform .12s;}
+.vdot.vdot-btn:hover{transform:scale(1.3);}
+.vdot.vdot-btn:focus{outline:2px solid var(--accent);outline-offset:1px;}
 .card-vert{font-size:11px;color:var(--t4);font-weight:500;}
 
 /* ── AI ENRICHMENT on card ── */
@@ -808,16 +813,27 @@ interface CardProps {
   menuItems?: MenuItem[];
   // Copy-link is available to any signed-in user (sales reps share too)
   onCopyShareLink?: (a: Asset) => void;
-  // Cleared signal — only set for admin-in-admin-mode (matches list view's
-  // status dot). Hidden for sales reps and the public preview because the
-  // dot is admin governance UI, not customer-facing.
-  clearedLevel?: ClearedLevel;
+  // Cleared signal + handlers — only set for admin-in-admin-mode (matches
+  // list view's status dot). When set, the dot is rendered AND clickable
+  // to open the same popover as the list view. Hidden for sales reps and
+  // the public preview because the dot is admin governance UI.
+  cleared?: {
+    level: ClearedLevel;
+    reasons: ClearedReason[];
+    onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
+    onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
+    onMarkVerified: (a: Asset) => void;
+  };
 }
 
-function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems,onCopyShareLink,clearedLevel}: CardProps) {
-  // VERT_CLR no longer drives the body dot — clearedLevel does. Vertical
+function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSelect,menuItems,onCopyShareLink,cleared}: CardProps) {
+  // VERT_CLR no longer drives the body dot — cleared.level does. Vertical
   // color may come back as a thumbnail accent later; for now just elide.
   const isV=asset.assetType==="Video Testimonial";
+  // Cleared popover state for the grid dot — same UX as list view but
+  // anchored to the dot button inside the card.
+  const [clearedOpen, setClearedOpen] = useState(false);
+  const dotRef = React.useRef<HTMLButtonElement>(null);
   const vid=extractVid(asset.videoUrl);
   let thumb=asset.thumbnail;if(!thumb&&vid?.p==="yt")thumb=ytThumb(vid.id);if(!thumb)thumb="https://images.unsplash.com/photo-1557804506-669a67965ba0?w=640&h=360&fit=crop";
   const cta=CTA_MAP[asset.assetType]||"read";
@@ -868,11 +884,18 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
         <div className="card-co">
           <span className="card-co-name">
             {/* Dot reflects Cleared signal for admins (matches list view).
-                Hidden entirely for sales/public — clearedLevel is undefined
+                Hidden entirely for sales/public — cleared is undefined
                 in those contexts. "unset" means admin hasn't engaged AND
-                no auto-flag, so we still hide rather than render a neutral dot. */}
-            {clearedLevel && clearedLevel !== "unset" && (
-              <span className={`vdot cl-${clearedLevel}`} title={`Cleared: ${clearedLevel}`}/>
+                no auto-flag, so we still hide rather than render a neutral dot.
+                The button opens the same Cleared popover the list view uses. */}
+            {cleared && cleared.level !== "unset" && (
+              <button
+                ref={dotRef}
+                type="button"
+                className={`vdot vdot-btn cl-${cleared.level}`}
+                onClick={(e) => { e.stopPropagation(); setClearedOpen(o => !o); }}
+                title={`Cleared status: ${cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"} — click for details`}
+              />
             )}
             {asset.company||"—"}
           </span>
@@ -886,6 +909,17 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
             <div key={i} className="card-ai-q" onClick={e=>{e.stopPropagation();onCopyQuote(q);}}>"{q}"</div>
           ))}
         </div>
+      )}
+      {clearedOpen && cleared && (
+        <ClearedPopover
+          asset={asset}
+          reasons={cleared.reasons}
+          onClose={() => setClearedOpen(false)}
+          onSetClientStatus={cleared.onSetClientStatus}
+          onSetApproval={cleared.onSetApproval}
+          onMarkVerified={cleared.onMarkVerified}
+          anchor={dotRef.current}
+        />
       )}
     </div>
   );
@@ -965,7 +999,7 @@ function DotsMenu({ items }: { items: MenuItem[] }) {
   // Popup is portal-rendered to document.body with computed fixed coords so
   // it can escape the card's overflow:hidden (and any transformed ancestor's
   // containing block). Without this, the dropdown gets clipped at the card edge.
-  const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
+  const [coords, setCoords] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const btnRef = React.useRef<HTMLButtonElement>(null);
   const popRef = React.useRef<HTMLDivElement>(null);
 
@@ -977,12 +1011,19 @@ function DotsMenu({ items }: { items: MenuItem[] }) {
       if (popRef.current?.contains(t)) return;
       setOpen(false);
     };
-    // Reposition on scroll/resize so the popup follows its trigger.
+    // Compute coords + flip up if not enough room below.
+    const POP_HEIGHT_ESTIMATE = 220; // ~6 menu items, roomy guess
     const reposition = () => {
       if (!btnRef.current) return;
       const r = btnRef.current.getBoundingClientRect();
-      setCoords({ top: r.bottom + 4, right: window.innerWidth - r.right });
+      const right = window.innerWidth - r.right;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const spaceAbove = r.top;
+      const flipUp = spaceBelow < POP_HEIGHT_ESTIMATE && spaceAbove > spaceBelow;
+      if (flipUp) setCoords({ bottom: window.innerHeight - r.top + 4, right });
+      else        setCoords({ top: r.bottom + 4, right });
     };
+    reposition();
     const dt = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
     window.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
@@ -997,8 +1038,15 @@ function DotsMenu({ items }: { items: MenuItem[] }) {
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!open && btnRef.current) {
+      // Compute coords synchronously on open so the popup paints in one
+      // pass instead of flashing at coords=null first.
       const r = btnRef.current.getBoundingClientRect();
-      setCoords({ top: r.bottom + 4, right: window.innerWidth - r.right });
+      const right = window.innerWidth - r.right;
+      const POP_HEIGHT_ESTIMATE = 220;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const flipUp = spaceBelow < POP_HEIGHT_ESTIMATE && r.top > spaceBelow;
+      if (flipUp) setCoords({ bottom: window.innerHeight - r.top + 4, right });
+      else        setCoords({ top: r.bottom + 4, right });
     }
     setOpen(o => !o);
   };
@@ -1012,7 +1060,13 @@ function DotsMenu({ items }: { items: MenuItem[] }) {
         <div
           ref={popRef}
           className="dots-pop dots-pop-portal"
-          style={{ position: "fixed", top: coords.top, right: coords.right }}
+          style={{
+            position: "fixed",
+            right: coords.right,
+            // Explicit auto on unused axis so legacy class top doesn't leak.
+            top: coords.top !== undefined ? coords.top : "auto",
+            bottom: coords.bottom !== undefined ? coords.bottom : "auto",
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           {items.map((it, i) => "divider" in it
@@ -1267,8 +1321,11 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
       style={{
         position: "fixed",
         left: coords.left,
-        ...(coords.top !== undefined ? { top: coords.top } : {}),
-        ...(coords.bottom !== undefined ? { bottom: coords.bottom } : {}),
+        // Explicit "auto" on the unused axis so the class's legacy
+        // `top: calc(100% + 6px)` doesn't bleed through and push the
+        // popover off-screen when we're flipped above the trigger.
+        top: coords.top !== undefined ? coords.top : "auto",
+        bottom: coords.bottom !== undefined ? coords.bottom : "auto",
       }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -3520,13 +3577,21 @@ export default function App(){
                     // because that simulates the external customer view.
                     const share = ((isAdmin && adminMode) || org?.role === "sales") ? copyShareLink : undefined;
                     // Cleared dot is admin-governance UI — only visible to
-                    // admins in admin mode. Sales/public never see it.
-                    const cardCleared = adminMgmt
-                      ? computeCleared(a, orgSettings.freshnessWarnAfterMonths).level
-                      : undefined;
+                    // admins in admin mode. Sales/public never see it. Bundle
+                    // includes handlers so the dot can open the same popover.
+                    const cardCleared = adminMgmt ? (() => {
+                      const c = computeCleared(a, orgSettings.freshnessWarnAfterMonths);
+                      return {
+                        level: c.level,
+                        reasons: c.reasons,
+                        onSetClientStatus: setClientStatus,
+                        onSetApproval: setApproval,
+                        onMarkVerified: markVerified,
+                      };
+                    })() : undefined;
                     return a.assetType==="Quote"
-                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} clearedLevel={cardCleared}/>
-                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} clearedLevel={cardCleared}/>;
+                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>
+                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>;
                   })}
                 </div>
               )}
