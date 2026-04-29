@@ -104,9 +104,13 @@ interface Asset {
 
 // Org-level configuration that drives Rules behavior. Loaded once at app
 // boot via /api/org/settings and refreshed when admin saves changes in the
-// Rules panel.
+// Rules panel. Freshness has two mutually-exclusive modes:
+//   • freshnessWarnAfterMonths — rolling, "flag if older than X months"
+//   • freshnessWarnBeforeDate  — fixed cutoff (YYYY-MM-DD), "flag if before X"
+// At most one is non-null at any time (server enforces).
 interface OrgSettings {
   freshnessWarnAfterMonths: number | null;
+  freshnessWarnBeforeDate: string | null;
 }
 
 interface Source {
@@ -265,6 +269,17 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .rules-save:hover{background:var(--accent2);}
 .rules-cancel{padding:7px 14px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
 .rules-cancel:hover{border-color:var(--border2);color:var(--t1);}
+.rules-save:disabled{opacity:.4;cursor:not-allowed;}
+.rules-modes{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap;}
+.rules-mode{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:#fff;color:var(--t3);font-family:var(--font);font-size:11.5px;font-weight:600;cursor:pointer;}
+.rules-mode:hover{border-color:var(--border2);color:var(--t1);}
+.rules-mode.on{background:var(--accentL);border-color:var(--accent);color:var(--accent);}
+.rules-mode-help{font-size:11px;color:var(--t3);margin-top:6px;line-height:1.4;}
+.rules-row-inline{display:flex;gap:6px;align-items:center;}
+.rules-input{font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t1);width:100%;}
+.rules-input:focus{outline:none;border-color:var(--accent);}
+.rules-row-inline .rules-input{flex:1;min-width:80px;}
+.rules-unit{flex:0 0 auto;width:auto;cursor:pointer;}
 
 /* Assets list */
 .asset-list{display:flex;flex-direction:column;gap:6px;}
@@ -624,6 +639,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-section-title{font-size:12.5px;font-weight:600;color:var(--t1);flex:1;}
 .cl-section-meta{font-size:11px;color:var(--t3);}
 .cl-freshness-line{font-size:12px;color:var(--t1);margin-top:4px;}
+.cl-freshness-rel{color:var(--t3);font-weight:400;}
 .cl-freshness-warn{font-size:11px;color:var(--amber);margin-top:4px;background:var(--amberL);padding:5px 8px;border-radius:5px;}
 .cl-rules-link{display:inline-block;margin-top:8px;font-size:11px;color:var(--accent);text-decoration:none;font-weight:600;}
 .cl-rules-link:hover{text-decoration:underline;}
@@ -1118,8 +1134,8 @@ interface ListViewProps {
   onMarkVerified: (a: Asset) => void;
   onDelete: (id: string) => void;
   onCopyShareLink: (a: Asset) => void;
-  // Org-level Rule that drives the freshness signal in the Cleared popover.
-  freshnessWarnAfterMonths: number | null;
+  // Org-level Rules that drive the freshness signal in the Cleared popover.
+  orgSettings: OrgSettings;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -1130,7 +1146,15 @@ interface ListViewProps {
 // only appears once an admin records approval or actively sets client status,
 // because that's when the lifecycle data is meaningful enough to display.
 type ClearedLevel = "green" | "yellow" | "red" | "unset";
-interface ClearedReason { signal: "approval" | "client" | "freshness"; level: "green" | "yellow" | "red"; label: string; }
+interface ClearedReason {
+  signal: "approval" | "client" | "freshness";
+  level: "green" | "yellow" | "red";
+  label: string;
+  // Optional: just the threshold/violation portion of the message, used by
+  // the popover to render a short warning under the main info line. Only
+  // set on freshness yellow today; could expand to other signals later.
+  flagDetail?: string;
+}
 
 function isClearedEngaged(asset: Asset): boolean {
   const approvalEngaged = !!asset.approvalStatus && asset.approvalStatus !== "unset";
@@ -1138,7 +1162,7 @@ function isClearedEngaged(asset: Asset): boolean {
   return approvalEngaged || clientEngaged;
 }
 
-function computeCleared(asset: Asset, freshnessWarnAfterMonths: number | null): { level: ClearedLevel; reasons: ClearedReason[] } {
+function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: ClearedLevel; reasons: ClearedReason[] } {
   // Always compute the per-signal reasons so the popover can render them
   // regardless of engagement state. Only the *overall* level is gated by
   // engagement — when the admin hasn't touched anything, we return level:
@@ -1159,21 +1183,49 @@ function computeCleared(asset: Asset, freshnessWarnAfterMonths: number | null): 
   else reasons.push({ signal: "client", level: "yellow", label: "Client status unknown" });
 
   // Freshness — driven by Vimeo publish date + org-level Rule.
-  //   • No org rule (NULL)  → freshness is informational only, always green
-  //   • Rule + within window → green, "Published Xy ago"
-  //   • Rule + over window  → yellow, "Older than Xy threshold"
-  // No more "Mark verified" — that concept is dead.
+  // Two mutually-exclusive rule modes:
+  //   • freshnessWarnAfterMonths (rolling): flag if (now - published_at) > N months
+  //   • freshnessWarnBeforeDate (fixed):     flag if published_at < date
+  //   • neither set:                          freshness always green
   const pub = asset.publishedAt ? new Date(asset.publishedAt) : null;
-  const ageMonths = pub ? (Date.now() - pub.getTime()) / (1000 * 60 * 60 * 24 * 30) : null;
-  if (!pub || ageMonths === null) {
+  if (!pub || Number.isNaN(pub.getTime())) {
     reasons.push({ signal: "freshness", level: "green", label: "Publish date not recorded" });
-  } else if (freshnessWarnAfterMonths === null || ageMonths <= freshnessWarnAfterMonths) {
-    reasons.push({ signal: "freshness", level: "green", label: `Published ${timeAgoShort(asset.publishedAt!)}` });
   } else {
-    const yLabel = freshnessWarnAfterMonths >= 12 && freshnessWarnAfterMonths % 12 === 0
-      ? `${freshnessWarnAfterMonths / 12}-year`
-      : `${freshnessWarnAfterMonths}-month`;
-    reasons.push({ signal: "freshness", level: "yellow", label: `Published ${timeAgoShort(asset.publishedAt!)} — over ${yLabel} threshold` });
+    // Build a verbose age label: "Published Apr 15, 2023 (2y ago)" — the
+    // exact date removes the ambiguity that pure "2y ago" rounding caused.
+    const dateLabel = pub.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    const relLabel = timeAgoShort(asset.publishedAt!);
+    const ageLabel = `Published ${dateLabel} (${relLabel})`;
+
+    let flagged = false;
+    let thresholdLabel = "";
+    if (orgSettings.freshnessWarnBeforeDate) {
+      const cutoff = new Date(orgSettings.freshnessWarnBeforeDate);
+      if (!Number.isNaN(cutoff.getTime()) && pub < cutoff) {
+        flagged = true;
+        thresholdLabel = `before ${cutoff.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })} cutoff`;
+      }
+    } else if (orgSettings.freshnessWarnAfterMonths !== null) {
+      const ageMonths = (Date.now() - pub.getTime()) / (1000 * 60 * 60 * 24 * 30);
+      if (ageMonths > orgSettings.freshnessWarnAfterMonths) {
+        flagged = true;
+        const months = orgSettings.freshnessWarnAfterMonths;
+        thresholdLabel = months >= 12 && months % 12 === 0
+          ? `over ${months / 12}-year threshold`
+          : `over ${months}-month threshold`;
+      }
+    }
+
+    if (flagged) {
+      reasons.push({
+        signal: "freshness",
+        level: "yellow",
+        label: `${ageLabel} — ${thresholdLabel}`,
+        flagDetail: `Over org rule: ${thresholdLabel}`,
+      });
+    } else {
+      reasons.push({ signal: "freshness", level: "green", label: ageLabel });
+    }
   }
 
   // Show the dot when admin has engaged (approval/client) OR when freshness
@@ -1393,11 +1445,11 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
         </div>
         <div className="cl-freshness-line">
           {asset.publishedAt
-            ? <>Published <strong>{timeAgoShort(asset.publishedAt)}</strong></>
+            ? <>Published <strong>{new Date(asset.publishedAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}</strong> <span className="cl-freshness-rel">({timeAgoShort(asset.publishedAt)})</span></>
             : <span style={{ color: "var(--t4)" }}>Publish date not recorded yet — sync the source to populate.</span>}
         </div>
         {reasonFor("freshness").level === "yellow" && (
-          <div className="cl-freshness-warn">{reasonFor("freshness").label}</div>
+          <div className="cl-freshness-warn">{reasonFor("freshness").flagDetail || reasonFor("freshness").label}</div>
         )}
         <a
           href="#/rules"
@@ -1410,7 +1462,7 @@ function ClearedPopover({ asset, reasons, onClose, onSetClientStatus, onSetAppro
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink, freshnessWarnAfterMonths }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -1433,7 +1485,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         const isDraft = a.status === "draft";
         const statusCls = isArchived ? " archived" : isDraft ? " draft" : "";
         const isSelected = selectedIds.has(a.id);
-        const cleared = computeCleared(a, freshnessWarnAfterMonths);
+        const cleared = computeCleared(a, orgSettings);
         const open = openClearedFor === a.id;
         const vid = extractVid(a.videoUrl);
         let thumb = a.thumbnail;
@@ -1766,20 +1818,71 @@ interface RulesPanelProps {
   settings: OrgSettings;
   onSave: (next: OrgSettings) => Promise<void> | void;
 }
-function RulesPanel({ settings, onSave }: RulesPanelProps) {
-  // Local draft so the dropdown reflects user intent before save lands
-  const [draft, setDraft] = useState<number | null>(settings.freshnessWarnAfterMonths);
-  // Keep draft in sync if parent updates (e.g. settings load races with mount)
-  useEffect(() => { setDraft(settings.freshnessWarnAfterMonths); }, [settings.freshnessWarnAfterMonths]);
+// "off" / "preset" / "custom-rolling" / "custom-date" — the four conceptual
+// modes the freshness rule can be in. "preset" covers the 1y/2y/3y/5y
+// dropdown values (which all map to freshnessWarnAfterMonths). Internally
+// the data model is just two columns; this enum drives the UI tabs only.
+type FreshMode = "off" | "preset" | "custom-rolling" | "custom-date";
+const PRESET_MONTHS = [12, 24, 36, 60];
 
-  const dirty = draft !== settings.freshnessWarnAfterMonths;
-  const options: { label: string; value: number | null }[] = [
-    { label: "Never (off)", value: null },
-    { label: "1 year", value: 12 },
-    { label: "2 years", value: 24 },
-    { label: "3 years", value: 36 },
-    { label: "5 years", value: 60 },
-  ];
+function deriveMode(s: OrgSettings): FreshMode {
+  if (s.freshnessWarnBeforeDate) return "custom-date";
+  if (s.freshnessWarnAfterMonths === null) return "off";
+  if (PRESET_MONTHS.includes(s.freshnessWarnAfterMonths)) return "preset";
+  return "custom-rolling";
+}
+
+function RulesPanel({ settings, onSave }: RulesPanelProps) {
+  // Three pieces of draft state — only one is meaningful at a time, but
+  // tracking all three lets the user switch modes without losing data
+  // they'd just typed.
+  const [mode, setMode] = useState<FreshMode>(deriveMode(settings));
+  const [draftMonths, setDraftMonths] = useState<number | null>(settings.freshnessWarnAfterMonths);
+  const [draftDate, setDraftDate] = useState<string | null>(settings.freshnessWarnBeforeDate);
+  // For custom-rolling, keep a separate number+unit so users can type "18 months" or "2 years" naturally.
+  const [customRollingNum, setCustomRollingNum] = useState<number>(() => {
+    const m = settings.freshnessWarnAfterMonths;
+    if (m === null || PRESET_MONTHS.includes(m)) return 18;
+    return m % 12 === 0 ? m / 12 : m;
+  });
+  const [customRollingUnit, setCustomRollingUnit] = useState<"months" | "years">(() => {
+    const m = settings.freshnessWarnAfterMonths;
+    if (m === null || PRESET_MONTHS.includes(m)) return "months";
+    return m % 12 === 0 ? "years" : "months";
+  });
+
+  // Re-derive when parent updates (post-save refresh, etc.)
+  useEffect(() => {
+    setMode(deriveMode(settings));
+    setDraftMonths(settings.freshnessWarnAfterMonths);
+    setDraftDate(settings.freshnessWarnBeforeDate);
+  }, [settings.freshnessWarnAfterMonths, settings.freshnessWarnBeforeDate]);
+
+  // Compute the target settings for whatever mode is selected.
+  const targetSettings = ((): OrgSettings => {
+    if (mode === "off") {
+      return { freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: null };
+    }
+    if (mode === "preset") {
+      return { freshnessWarnAfterMonths: draftMonths ?? 24, freshnessWarnBeforeDate: null };
+    }
+    if (mode === "custom-rolling") {
+      const months = customRollingUnit === "years" ? customRollingNum * 12 : customRollingNum;
+      return { freshnessWarnAfterMonths: months, freshnessWarnBeforeDate: null };
+    }
+    // custom-date
+    return { freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: draftDate };
+  })();
+
+  const dirty =
+    targetSettings.freshnessWarnAfterMonths !== settings.freshnessWarnAfterMonths ||
+    targetSettings.freshnessWarnBeforeDate !== settings.freshnessWarnBeforeDate;
+
+  const canSave = (() => {
+    if (mode === "custom-rolling") return customRollingNum > 0 && customRollingNum <= 600;
+    if (mode === "custom-date") return !!draftDate;
+    return true;
+  })();
 
   return (
     <div className="rules-panel">
@@ -1792,30 +1895,90 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
         <div className="rules-section-head">
           <div className="rules-section-title">Freshness</div>
           <div className="rules-section-help">
-            Flag testimonials older than the threshold for review. Each story&apos;s publish date comes from Vimeo. Sales reps still see flagged stories — this is a hint, not a hard filter.
+            Flag testimonials whose Vimeo publish date is too old for review. Sales reps still see flagged stories — this is a hint, not a hard filter.
           </div>
         </div>
-        <div className="rules-row">
-          <label className="rules-label">Flag testimonials older than</label>
-          <select
-            className="rules-select"
-            value={draft === null ? "null" : String(draft)}
-            onChange={(e) => setDraft(e.target.value === "null" ? null : parseInt(e.target.value, 10))}
-          >
-            {options.map((o) => (
-              <option key={String(o.value)} value={o.value === null ? "null" : String(o.value)}>{o.label}</option>
-            ))}
-          </select>
+
+        {/* Mode tabs — pick one of four shapes. Switching modes preserves
+            whatever values the user has typed in each so they can compare. */}
+        <div className="rules-modes">
+          <button className={`rules-mode${mode === "off" ? " on" : ""}`} onClick={() => setMode("off")}>Off</button>
+          <button className={`rules-mode${mode === "preset" ? " on" : ""}`} onClick={() => setMode("preset")}>Preset</button>
+          <button className={`rules-mode${mode === "custom-rolling" ? " on" : ""}`} onClick={() => setMode("custom-rolling")}>Custom rolling</button>
+          <button className={`rules-mode${mode === "custom-date" ? " on" : ""}`} onClick={() => setMode("custom-date")}>Specific date</button>
         </div>
+
+        {mode === "off" && (
+          <div className="rules-mode-help">No freshness flagging. Stories never trigger a review on age alone.</div>
+        )}
+
+        {mode === "preset" && (
+          <div className="rules-row">
+            <label className="rules-label">Flag testimonials older than</label>
+            <select
+              className="rules-select"
+              value={draftMonths === null ? "24" : String(draftMonths)}
+              onChange={(e) => setDraftMonths(parseInt(e.target.value, 10))}
+            >
+              {PRESET_MONTHS.map((m) => (
+                <option key={m} value={String(m)}>{m === 12 ? "1 year" : `${m / 12} years`}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {mode === "custom-rolling" && (
+          <div className="rules-row">
+            <label className="rules-label">Flag testimonials older than</label>
+            <div className="rules-row-inline">
+              <input
+                className="rules-input"
+                type="number"
+                min="1"
+                max={customRollingUnit === "years" ? 50 : 600}
+                value={customRollingNum}
+                onChange={(e) => setCustomRollingNum(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              />
+              <select
+                className="rules-select rules-unit"
+                value={customRollingUnit}
+                onChange={(e) => setCustomRollingUnit(e.target.value as "months" | "years")}
+              >
+                <option value="months">months</option>
+                <option value="years">years</option>
+              </select>
+            </div>
+            <div className="rules-mode-help">Rolling — shifts as time passes. {customRollingNum} {customRollingUnit} from each story&apos;s Vimeo publish date.</div>
+          </div>
+        )}
+
+        {mode === "custom-date" && (
+          <div className="rules-row">
+            <label className="rules-label">Flag testimonials published before</label>
+            <input
+              className="rules-input"
+              type="date"
+              value={draftDate || ""}
+              onChange={(e) => setDraftDate(e.target.value || null)}
+            />
+            <div className="rules-mode-help">Fixed cutoff — every story published before this date will be flagged. Doesn&apos;t shift over time.</div>
+          </div>
+        )}
+
         {dirty && (
           <div className="rules-actions">
             <button
               className="rules-save"
-              onClick={() => onSave({ ...settings, freshnessWarnAfterMonths: draft })}
+              disabled={!canSave}
+              onClick={() => onSave(targetSettings)}
             >Save</button>
             <button
               className="rules-cancel"
-              onClick={() => setDraft(settings.freshnessWarnAfterMonths)}
+              onClick={() => {
+                setMode(deriveMode(settings));
+                setDraftMonths(settings.freshnessWarnAfterMonths);
+                setDraftDate(settings.freshnessWarnBeforeDate);
+              }}
             >Cancel</button>
           </div>
         )}
@@ -2607,7 +2770,7 @@ export default function App(){
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
   // Org-level Rules. Loaded on mount; refreshed when admin saves in Rules panel.
-  const[orgSettings,setOrgSettings]=useState<OrgSettings>({freshnessWarnAfterMonths:null});
+  const[orgSettings,setOrgSettings]=useState<OrgSettings>({freshnessWarnAfterMonths:null,freshnessWarnBeforeDate:null});
 
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
@@ -3551,7 +3714,7 @@ export default function App(){
                   onMarkVerified={markVerified}
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
-                  freshnessWarnAfterMonths={orgSettings.freshnessWarnAfterMonths}
+                  orgSettings={orgSettings}
                 />
               ) : (
                 <div className="grid">
@@ -3580,7 +3743,7 @@ export default function App(){
                     // admins in admin mode. Sales/public never see it. Bundle
                     // includes handlers so the dot can open the same popover.
                     const cardCleared = adminMgmt ? (() => {
-                      const c = computeCleared(a, orgSettings.freshnessWarnAfterMonths);
+                      const c = computeCleared(a, orgSettings);
                       return {
                         level: c.level,
                         reasons: c.reasons,

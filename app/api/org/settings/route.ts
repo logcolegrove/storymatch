@@ -4,6 +4,12 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 // /api/org/settings — read+write the current user's org-level Rules settings.
 // GET: any member can read (so the cleared signal in the library reflects org policy).
 // PUT: admins only — Rules are policy decisions.
+//
+// Freshness rule modes (mutually exclusive, applied in this priority):
+//   1. freshnessWarnBeforeDate  — fixed cutoff, "flag if published before X"
+//   2. freshnessWarnAfterMonths — rolling, "flag if older than X months"
+//   3. neither set              — no flagging (default off)
+// When admin saves one mode, we clear the other so they can't both be active.
 
 async function getCurrentUserOrg(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -29,6 +35,9 @@ async function getCurrentUserOrg(req: NextRequest) {
 // new optional fields here but never remove old ones.
 type OrgSettingsFE = {
   freshnessWarnAfterMonths: number | null;
+  // ISO date string (YYYY-MM-DD) — fixed-cutoff mode. Mutually exclusive
+  // with freshnessWarnAfterMonths; when one is set the other is null.
+  freshnessWarnBeforeDate: string | null;
 };
 
 export async function GET(req: NextRequest) {
@@ -36,12 +45,13 @@ export async function GET(req: NextRequest) {
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { data, error } = await supabaseAdmin
     .from("organizations")
-    .select("freshness_warn_after_months")
+    .select("freshness_warn_after_months, freshness_warn_before_date")
     .eq("id", ctx.orgId)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const settings: OrgSettingsFE = {
     freshnessWarnAfterMonths: (data?.freshness_warn_after_months as number | null) ?? null,
+    freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
   };
   return NextResponse.json(settings);
 }
@@ -53,29 +63,56 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Admins only" }, { status: 403 });
   }
   const body = (await req.json().catch(() => ({}))) as Partial<OrgSettingsFE>;
-  // Validate: months must be a positive int (or null = "off")
+
+  // Validate months
   const months = body.freshnessWarnAfterMonths;
   if (months !== null && months !== undefined) {
     if (typeof months !== "number" || !Number.isInteger(months) || months <= 0 || months > 600) {
       return NextResponse.json({ error: "freshnessWarnAfterMonths must be a positive integer (or null to disable)" }, { status: 400 });
     }
   }
-  const updates: { freshness_warn_after_months?: number | null } = {};
+  // Validate date — accept YYYY-MM-DD strings and parse to Date for sanity check
+  const beforeDate = body.freshnessWarnBeforeDate;
+  if (beforeDate !== null && beforeDate !== undefined) {
+    if (typeof beforeDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(beforeDate)) {
+      return NextResponse.json({ error: "freshnessWarnBeforeDate must be YYYY-MM-DD (or null to disable)" }, { status: 400 });
+    }
+    const parsed = new Date(beforeDate);
+    if (Number.isNaN(parsed.getTime())) {
+      return NextResponse.json({ error: "freshnessWarnBeforeDate is not a valid date" }, { status: 400 });
+    }
+  }
+
+  // Build updates object. Enforce mutual exclusion: when admin sets months,
+  // clear the date; when admin sets date, clear months. Lets the FE send
+  // either field freely without worrying about the other.
+  const updates: { freshness_warn_after_months?: number | null; freshness_warn_before_date?: string | null } = {};
   if (body.freshnessWarnAfterMonths !== undefined) {
     updates.freshness_warn_after_months = body.freshnessWarnAfterMonths;
+    if (body.freshnessWarnAfterMonths !== null) {
+      updates.freshness_warn_before_date = null;
+    }
+  }
+  if (body.freshnessWarnBeforeDate !== undefined) {
+    updates.freshness_warn_before_date = body.freshnessWarnBeforeDate;
+    if (body.freshnessWarnBeforeDate !== null) {
+      updates.freshness_warn_after_months = null;
+    }
   }
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
+
   const { data, error } = await supabaseAdmin
     .from("organizations")
     .update(updates)
     .eq("id", ctx.orgId)
-    .select("freshness_warn_after_months")
+    .select("freshness_warn_after_months, freshness_warn_before_date")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const settings: OrgSettingsFE = {
     freshnessWarnAfterMonths: (data?.freshness_warn_after_months as number | null) ?? null,
+    freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
   };
   return NextResponse.json(settings);
 }
