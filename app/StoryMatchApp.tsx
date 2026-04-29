@@ -1610,12 +1610,24 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
   })();
   const [untilDate, setUntilDate] = useState<string>(defaultDate);
 
-  // Re-sync state when asset's saved value changes (e.g. after save lands)
+  // Re-sync state when asset's saved value changes (e.g. after save lands).
+  // Two distinct branches:
+  //   • hasValidUntil → there's still a saved value, sync local state to it
+  //     and KEEP the form open so the user sees current values + Clear.
+  //   • !hasValidUntil → the exception was cleared. Reset the picker to a
+  //     fresh default and CLOSE the form. Without this the date in the picker
+  //     stays at its previous value, dirty fires, Save/Cancel buttons appear,
+  //     and clicking Save would silently re-create the exception.
   useEffect(() => {
     setFormMode(savedIsNever ? "never" : "custom");
-    if (hasValidUntil && !savedIsNever) setUntilDate(exceptionUntilDate.toISOString().split("T")[0]);
-    // Don't auto-collapse the form — keep it open when there's a saved
-    // exception so the user can see current values and Clear if they want.
+    if (hasValidUntil) {
+      if (!savedIsNever) setUntilDate(exceptionUntilDate.toISOString().split("T")[0]);
+    } else {
+      const d = new Date();
+      d.setFullYear(d.getFullYear() + 1);
+      setUntilDate(d.toISOString().split("T")[0]);
+      setEditing(false);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.freshnessExceptionUntil]);
 
