@@ -610,9 +610,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 260px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;}
 /* Merged status cell — Cleared on the left (primary, content-sized),
    Publication select on the right (fills remaining space). The single
-   "Status" column header sits above both, so they read as one unit. */
+   "Status" column header sits above the Publication dropdown specifically
+   (shifted right via :nth-child below) since that's the visual anchor. */
 .lv-status{display:flex;align-items:center;gap:10px;}
 .lv-status > div:last-child{flex:1;min-width:0;}
+/* Shift the Status header text rightward so it sits centered over the
+   Publication dropdown. The cleared cell + gap takes ~95px on the left. */
+.lv-head > div:nth-child(4){padding-left:105px;}
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
 .lv-row.archived,.lv-row.draft{opacity:.65;}
@@ -705,8 +709,12 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    (cleared popover, list view publication, rules panel, asset edit panel)
    so the dropdown affordance is visually consistent everywhere. */
 .cl-select,.lv-pub-select,.rules-select,.aep-sel{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1 1 5 5 9 1'/></svg>");background-repeat:no-repeat;background-position:right 9px center;padding-right:26px;}
-/* Lighter color when select is showing its default placeholder option */
+/* Lighter color when select is showing its default placeholder option.
+   Force option list back to normal color so users can read all choices
+   when the dropdown is open (browsers inherit the select color into
+   options by default). */
 .cl-select.placeholder{color:var(--t4);}
+.cl-select.placeholder option,.cl-select option,.lv-pub-select option,.rules-select option,.aep-sel option{color:var(--t1);}
 /* Primary/secondary section visual hierarchy in the popover.
    Approval = primary (the main thing admins come here to set).
    Client + Freshness = secondary (lighter weight, smaller). */
@@ -719,6 +727,11 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Hollow circle for "unset" cleared state — clearer "clickable" affordance
    than the previous em-dash. */
 .cl-circle-empty{background:transparent !important;border:1.5px solid var(--border2);}
+/* Disclosure toggle in the popover — collapses Client + Freshness behind
+   "advanced" so the default popover surfaces only Approval. */
+.cl-advanced-toggle{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;background:none;border:none;padding:8px 0 6px;margin-top:4px;border-top:1px solid var(--border);color:var(--t3);font-family:var(--font);font-size:11px;font-weight:600;cursor:pointer;text-transform:uppercase;letter-spacing:.4px;}
+.cl-advanced-toggle:hover{color:var(--t1);}
+.cl-advanced-chevron{font-size:9px;}
 .cl-textarea{min-height:64px;resize:vertical;font-family:var(--font);}
 .cl-row-actions{display:flex;gap:6px;margin-top:6px;}
 .cl-mini-btn{font-family:var(--font);font-size:11px;padding:4px 9px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
@@ -1458,6 +1471,12 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
   // sits above trigger). We flip when there isn't enough room below the
   // trigger — fixes the "popover cut off at bottom of viewport" bug.
   const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+  // Most admins just want to mark approval — collapse Still-a-client and
+  // Freshness behind an "Advanced" disclosure. Auto-expanded when there's
+  // existing data in either field so admins don't lose context.
+  const clientHasData = !!(asset.clientStatus && asset.clientStatus !== "unknown");
+  const freshnessHasData = !!asset.freshnessExceptionUntil;
+  const [showAdvanced, setShowAdvanced] = useState(clientHasData || freshnessHasData);
 
   // Position the popover relative to the anchor + reposition on scroll/resize.
   useEffect(() => {
@@ -1520,7 +1539,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
       }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="cl-pop-head">Cleared for use</div>
+      <div className="cl-pop-head">Status</div>
 
       {/* Approval section — primary focus. Larger title + select to reflect
           that this is the main thing admins come here to set. */}
@@ -1557,6 +1576,20 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
         )}
       </div>
 
+      {/* Disclosure for the secondary signals — most admins just need
+          approval, so client status + freshness are tucked behind an
+          "Advanced" toggle to keep the default view simple. */}
+      <button
+        className="cl-advanced-toggle"
+        onClick={() => setShowAdvanced(o => !o)}
+        type="button"
+      >
+        {showAdvanced ? "Hide advanced flagging options" : "Show advanced flagging options"}
+        <span className="cl-advanced-chevron">{showAdvanced ? "▴" : "▾"}</span>
+      </button>
+
+      {showAdvanced && (
+      <>
       {/* Client status section — secondary */}
       <div className="cl-section cl-section-secondary">
         <div className="cl-section-head">
@@ -1584,6 +1617,8 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
         onSetFreshnessException={onSetFreshnessException}
         onClose={onClose}
       />
+      </>
+      )}
     </div>,
     document.body
   );
