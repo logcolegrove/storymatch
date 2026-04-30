@@ -1565,6 +1565,68 @@ interface ListViewProps {
 // only appears once an admin records approval or actively sets client status,
 // because that's when the lifecycle data is meaningful enough to display.
 type ClearedLevel = "green" | "yellow" | "red" | "unset";
+// Build the patch that resets all status indicators on an asset back to
+// their default state. Used by both the per-asset Reset button and the
+// bulk modal's "Reset status indicators" action — single source of truth
+// so the two paths stay consistent.
+function buildResetStatusPatch(
+  orgSettings: { freshnessWarnAfterMonths: number | null; freshnessWarnBeforeDate: string | null },
+  userEmail: string,
+): Partial<Asset> {
+  const hasOrgFreshnessRule = !!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate);
+  const neverIso = (() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 100);
+    return d.toISOString();
+  })();
+  const nowIso = new Date().toISOString();
+  return {
+    approvalStatus: "unset",
+    approvalRecordedAt: null,
+    approvalNote: null,
+    clientStatus: "current",
+    clientStatusSource: "unset",
+    clientStatusUpdatedAt: null,
+    // Freshness: when org rule is on, set never-flag sentinel so reset
+    // doesn't immediately re-fire yellow. When off, just clear.
+    freshnessExceptionUntil: hasOrgFreshnessRule ? neverIso : null,
+    freshnessExceptionSetByEmail: hasOrgFreshnessRule ? (userEmail || null) : null,
+    freshnessExceptionSetAt: hasOrgFreshnessRule ? nowIso : null,
+    customFlags: [],
+  };
+}
+
+// Hook: makes a <select> propagate to multi-selection even when admin picks
+// the same value (native onChange doesn't fire in that case). Tracks
+// mousedown to distinguish "user actually clicked the select" from
+// "tab-navigation blur" — only fires on blur when the user actively
+// interacted AND multi-select is active. Returns props to spread onto the
+// <select> element.
+function useSameValueAwareSelect(
+  isInMultiSelection: boolean,
+  onApply: (value: string) => void,
+) {
+  const interactedRef = React.useRef(false);
+  return {
+    onMouseDown: () => { interactedRef.current = true; },
+    onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
+      // onChange always handles the value-changed case. Mark consumed so
+      // the trailing blur doesn't re-fire (would duplicate the apply).
+      interactedRef.current = false;
+      onApply(e.target.value);
+    },
+    onBlur: (e: React.FocusEvent<HTMLSelectElement>) => {
+      // Same-value pick path: user clicked, picker opened, picked same option,
+      // picker closed → onChange didn't fire but interaction did. Propagate
+      // when in multi-select mode so the same value applies to the selection.
+      if (interactedRef.current && isInMultiSelection) {
+        onApply(e.target.value);
+      }
+      interactedRef.current = false;
+    },
+  };
+}
+
 // Shared helper: build the hover/title message for the Cleared signal so
 // list view and grid view show the same wording.
 //   • unset  → "Click to set status"
@@ -1881,6 +1943,17 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
   const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
+  // Multi-select-aware handlers for the popover's status dropdowns. The
+  // hook tracks user interaction (mousedown) so onBlur only fires the apply
+  // when admin actually opened the picker — not on tab-away or focus loss.
+  const approvalSelectHandlers = useSameValueAwareSelect(
+    isInMultiSelection,
+    (v) => onSetApproval(asset, { status: v as ApprovalStatus }),
+  );
+  const clientSelectHandlers = useSameValueAwareSelect(
+    isInMultiSelection,
+    (v) => onSetClientStatus(asset, v as "current" | "former" | "unknown"),
+  );
   // Auto-open the approval dropdown ONLY when the asset is genuinely fresh
   // — nothing set, no flags fired by org rules. If anything is set or
   // flagged, opening the picker on top of an already-flagged asset reads
@@ -1998,16 +2071,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
           ref={approvalSelectRef}
           className={`cl-select cl-select-primary${(asset.approvalStatus || "unset") === "unset" ? " placeholder" : ""}`}
           value={asset.approvalStatus || "unset"}
-          onChange={(e) => onSetApproval(asset, { status: e.target.value as ApprovalStatus })}
-          onBlur={(e) => {
-            // Multi-select fix: native onChange doesn't fire when admin
-            // picks the same value. On blur, force-apply the current value
-            // so the selection propagation kicks in via updateAssetInline.
-            // Only fires when this asset is part of an active multi-select.
-            if (isInMultiSelection) {
-              onSetApproval(asset, { status: e.target.value as ApprovalStatus });
-            }
-          }}
+          {...approvalSelectHandlers}
         >
           <option value="unset">Blank</option>
           <option value="pending">Pending approval</option>
@@ -2065,12 +2129,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
             <select
               className={`cl-select${value === "unknown" ? " placeholder" : ""}`}
               value={value as string}
-              onChange={(e) => onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown")}
-              onBlur={(e) => {
-                if (isInMultiSelection) {
-                  onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown");
-                }
-              }}
+              {...clientSelectHandlers}
             >
               <option value="unknown">Blank</option>
               <option value="current">Yes</option>
@@ -2519,6 +2578,39 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
   );
 }
 
+// Wrapper around the publication dropdown that uses the same-value-aware
+// hook. Extracted into its own component because hooks can't be called
+// inside a map() body in ListView.
+function PublicationSelectCell({
+  asset,
+  pubStatus,
+  onSetPublicationStatus,
+  isInMultiSelection,
+}: {
+  asset: Asset;
+  pubStatus: "published" | "draft" | "archived";
+  onSetPublicationStatus: (a: Asset, next: "published" | "draft" | "archived") => void;
+  isInMultiSelection: boolean;
+}) {
+  const handlers = useSameValueAwareSelect(
+    isInMultiSelection,
+    (v) => onSetPublicationStatus(asset, v as "published" | "draft" | "archived"),
+  );
+  return (
+    <div onClick={(e) => e.stopPropagation()}>
+      <select
+        className="lv-pub-select"
+        value={pubStatus}
+        {...handlers}
+      >
+        <option value="published">Published</option>
+        <option value="draft">Draft</option>
+        <option value="archived">Archived</option>
+      </select>
+    </div>
+  );
+}
+
 function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
@@ -2573,26 +2665,12 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
             <div className="lv-vert">{a.vertical || "—"}</div>
             {/* Merged Status cell: Publication (left) + Cleared (right) */}
             <div className="lv-status">
-              <div onClick={(e) => e.stopPropagation()}>
-                <select
-                  className="lv-pub-select"
-                  value={pubStatus}
-                  onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
-                  onBlur={(e) => {
-                    // Multi-select fix: same as the popover's selects.
-                    // When this asset is part of an active multi-select,
-                    // force-fire on blur so picking the same value still
-                    // propagates to the selection.
-                    if (selectedIds.size > 1 && selectedIds.has(a.id)) {
-                      onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived");
-                    }
-                  }}
-                >
-                  <option value="published">Published</option>
-                  <option value="draft">Draft</option>
-                  <option value="archived">Archived</option>
-                </select>
-              </div>
+              <PublicationSelectCell
+                asset={a}
+                pubStatus={pubStatus}
+                onSetPublicationStatus={onSetPublicationStatus}
+                isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
+              />
               <ClearedCell
                 asset={a}
                 cleared={cleared}
@@ -4187,25 +4265,7 @@ export default function App(){
   const resetStatusIndicators=async(asset: Asset)=>{
     const ids=(selectedIds.size>1 && selectedIds.has(asset.id)) ? Array.from(selectedIds) : [asset.id];
     const isBulk=ids.length>1;
-    const hasOrgFreshnessRule=!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate);
-    const neverIso=(()=>{
-      const d=new Date();
-      d.setFullYear(d.getFullYear()+100);
-      return d.toISOString();
-    })();
-    const nowIso=new Date().toISOString();
-    const patch: Partial<Asset>={
-      approvalStatus:"unset",
-      approvalRecordedAt:null,
-      approvalNote:null,
-      clientStatus:"current",
-      clientStatusSource:"unset",
-      clientStatusUpdatedAt:null,
-      freshnessExceptionUntil:hasOrgFreshnessRule?neverIso:null,
-      freshnessExceptionSetByEmail:hasOrgFreshnessRule?(user?.email||null):null,
-      freshnessExceptionSetAt:hasOrgFreshnessRule?nowIso:null,
-      customFlags:[],
-    };
+    const patch=buildResetStatusPatch(orgSettings, user?.email || "");
     setAssets(prev=>prev.map(a=>ids.includes(a.id)?{...a,...patch}:a));
     setToast(isBulk?`Reset on ${ids.length} assets`:"Status indicators reset");
     setTimeout(()=>setToast(null),1800);
@@ -4409,31 +4469,11 @@ export default function App(){
     // any client-side derived bits (e.g. archivedAt for publication=archived).
     const buildAssetPatch=(a: Asset): Partial<Asset> => {
       // Clear-all action wipes every status indicator field back to default.
-      // Publication is intentionally untouched — admin can change it via
-      // the regular publication dropdown if desired.
-      // Freshness: when an org rule is active, "clear" must override it
-      // (set never-flag sentinel) so admins don't see lingering yellow
-      // "Content expired" flags after clearing. Without an org rule, null
-      // works because there's nothing to override.
+      // Shared with the per-asset Reset button via buildResetStatusPatch
+      // so the two paths stay consistent. Publication is intentionally
+      // untouched — admin can change it via the publication dropdown.
       if(patch.clearAll){
-        const hasOrgFreshnessRule = !!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate);
-        const neverIso = (() => {
-          const d = new Date();
-          d.setFullYear(d.getFullYear() + 100);
-          return d.toISOString();
-        })();
-        return {
-          approvalStatus:"unset",
-          approvalRecordedAt:null,
-          approvalNote:null,
-          clientStatus:"current",
-          clientStatusSource:"unset",
-          clientStatusUpdatedAt:null,
-          freshnessExceptionUntil:hasOrgFreshnessRule?neverIso:null,
-          freshnessExceptionSetByEmail:hasOrgFreshnessRule?(user?.email||null):null,
-          freshnessExceptionSetAt:hasOrgFreshnessRule?nowIso:null,
-          customFlags:[],
-        };
+        return buildResetStatusPatch(orgSettings, user?.email || "");
       }
       const p: Partial<Asset> = {};
       if(patch.publication){

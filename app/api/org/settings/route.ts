@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { applyPublicationRules, getOrgRulesContext } from "@/lib/publication-rules";
 
 // /api/org/settings — read+write the current user's org-level Rules settings.
 // GET: any member can read (so the cleared signal in the library reflects org policy).
@@ -153,6 +154,43 @@ export async function PUT(req: NextRequest) {
     .select("freshness_warn_after_months, freshness_warn_before_date, approval_required, default_approval_status, publication_rules")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // After saving rules, immediately re-evaluate every org asset against
+  // the new rule set. Without this, admin would have to wait for the next
+  // sync to see rules take effect — confusing since the Rules panel implies
+  // "save = active." Scanning fires rules for existing assets that newly
+  // meet (or stop meeting) a trigger.
+  const triggeredRulesChange =
+    body.approvalRequired !== undefined ||
+    body.publicationRules !== undefined ||
+    body.freshnessWarnAfterMonths !== undefined ||
+    body.freshnessWarnBeforeDate !== undefined;
+  if (triggeredRulesChange) {
+    const orgCtx = await getOrgRulesContext(ctx.orgId);
+    if (orgCtx) {
+      const { data: scan } = await supabaseAdmin
+        .from("assets")
+        .select("id, status, approval_status, published_at, freshness_exception_until, auto_status_by_rule")
+        .eq("org_id", ctx.orgId);
+      if (scan) {
+        for (const a of scan) {
+          try {
+            await applyPublicationRules({
+              id: a.id as string,
+              status: a.status as string,
+              approval_status: (a.approval_status as string | null),
+              published_at: (a.published_at as string | null),
+              freshness_exception_until: (a.freshness_exception_until as string | null),
+              auto_status_by_rule: (a.auto_status_by_rule as string | null),
+            }, orgCtx);
+          } catch (e) {
+            console.error("[org/settings] rule scan failed for asset", a.id, e);
+          }
+        }
+      }
+    }
+  }
+
   const settings: OrgSettingsFE = {
     freshnessWarnAfterMonths: (data?.freshness_warn_after_months as number | null) ?? null,
     freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
