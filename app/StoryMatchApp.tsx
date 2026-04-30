@@ -1343,9 +1343,12 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   else if (approval === "needs_edits") reasons.push({ signal: "approval", level: "yellow", label: "Needs edits", shortLabel: "Needs edits" });
   else reasons.push({ signal: "approval", level: "green", label: "Approval not recorded", hideDot: true });
 
-  // Client relationship — defaults to "unknown" (Unspecified). The default
-  // contributes no dot and no aggregate impact. Admin picks Yes/No to engage.
-  const cs = (asset.clientStatus || "unknown") as ClientStatus;
+  // Client relationship — treat unset/auto-default as "unknown" (Unspecified).
+  // The DB column defaults to "current" so we explicitly check
+  // clientStatusSource to distinguish "admin actively picked Yes" from
+  // "we just defaulted to current because the column required something."
+  const clientManuallySet = asset.clientStatusSource === "manual" || asset.clientStatusSource === "crm";
+  const cs = (clientManuallySet ? (asset.clientStatus || "unknown") : "unknown") as ClientStatus;
   if (cs === "current") reasons.push({ signal: "client", level: "green", label: "Current client", shortLabel: "Active client" });
   else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "No longer a client", shortLabel: "No longer a client" });
   else reasons.push({ signal: "client", level: "green", label: "Client status unspecified", hideDot: true });
@@ -1567,8 +1570,15 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
   // trigger — fixes the "popover cut off at bottom of viewport" bug.
   const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   // Most admins just want to mark approval — Client + Freshness sit
-  // behind an "Advanced" disclosure that defaults collapsed every time.
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // behind an "Advanced" disclosure. Default collapsed UNLESS there's a
+  // yellow/red flag from a non-approval signal (so the admin lands on the
+  // explanation when they click a flagged dot, instead of seeing only the
+  // approval section that doesn't explain the flag).
+  const hasNonApprovalFlag = reasons.some(r =>
+    (r.signal === "client" || r.signal === "freshness" || r.signal === "custom") &&
+    (r.level === "yellow" || r.level === "red")
+  );
+  const [showAdvanced, setShowAdvanced] = useState(hasNonApprovalFlag);
 
   // Position the popover relative to the anchor + reposition on scroll/resize.
   useEffect(() => {
@@ -1695,15 +1705,24 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
             </span>
           )}
         </div>
-        <select
-          className={`cl-select${(asset.clientStatus || "unknown") === "unknown" ? " placeholder" : ""}`}
-          value={(asset.clientStatus || "unknown") as string}
-          onChange={(e) => onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown")}
-        >
-          <option value="unknown">Unspecified</option>
-          <option value="current">Yes</option>
-          <option value="former">No</option>
-        </select>
+        {(() => {
+          // Match computeCleared: only respect clientStatus when admin has
+          // manually engaged (or CRM did). Otherwise show "Unspecified" as
+          // the default placeholder regardless of the DB column's stored value.
+          const manuallySet = asset.clientStatusSource === "manual" || asset.clientStatusSource === "crm";
+          const value = manuallySet ? (asset.clientStatus || "unknown") : "unknown";
+          return (
+            <select
+              className={`cl-select${value === "unknown" ? " placeholder" : ""}`}
+              value={value as string}
+              onChange={(e) => onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown")}
+            >
+              <option value="unknown">Unspecified</option>
+              <option value="current">Yes</option>
+              <option value="former">No</option>
+            </select>
+          );
+        })()}
       </div>
 
       <FreshnessSection
