@@ -816,10 +816,18 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bsm-title{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);}
 .bsm-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
 .bsm-body{flex:1;overflow-y:auto;padding:14px 20px;display:flex;flex-direction:column;gap:14px;}
+/* Top row mirrors the list view: Publication dropdown on the left, status
+   indicator label on the right. */
+.bsm-row-top{display:flex;align-items:flex-end;gap:14px;}
+.bsm-fld-pub{flex:0 0 auto;}
+.bsm-status-label{display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;padding-bottom:8px;}
+.bsm-status-fields{display:flex;flex-direction:column;gap:14px;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;}
 .bsm-fld{display:flex;flex-direction:column;gap:5px;}
 .bsm-fld > label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;display:flex;align-items:center;}
-.bsm-flag-form{margin-top:6px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
-.bsm-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;}
+.bsm-flag-form{margin-top:6px;padding:8px 10px;background:#fff;border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
+.bsm-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;}
+.bsm-clear-all{color:var(--t3);}
+.bsm-clear-all:hover{color:var(--red);border-color:var(--red);}
 
 /* ── 3-DOT MENU ── */
 .dots-btn{background:none;border:none;color:var(--t3);cursor:pointer;padding:5px 7px;border-radius:5px;display:grid;place-items:center;}
@@ -1248,11 +1256,15 @@ interface BulkStatusPatch {
   publication?: "published" | "draft" | "archived";
   approval?: ApprovalStatus;
   client?: "current" | "former" | "unknown";
-  // Freshness expiration: undefined = leave unchanged. null = clear.
-  // String = ISO date to set.
-  freshnessExceptionUntil?: string | null;
+  // Freshness expiration: undefined = leave unchanged.
+  //   string ISO    = set to that date.
+  //   "never"       = set sentinel (never-flag, overrides org rule).
+  //   null          = remove per-asset rule (asset falls back to org rule).
+  freshnessExpiration?: "never" | "leave" | string | null;
   // New custom flag to APPEND to every selected asset (additive, not replace).
   addFlag?: { color: "yellow" | "red"; label: string };
+  // Clear-all action: resets all status indicator fields to default state.
+  clearAll?: boolean;
 }
 
 interface BulkBarProps {
@@ -1309,8 +1321,11 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
   const [pub, setPub] = useState<"" | "published" | "draft" | "archived">("");
   const [approval, setApproval] = useState<"" | ApprovalStatus>("");
   const [client, setClient] = useState<"" | "current" | "former" | "unknown">("");
-  // Expiration: "leave" / "clear" / "set"
-  const [expMode, setExpMode] = useState<"leave" | "clear" | "set">("leave");
+  // Expiration: "leave" / "never" / "set"
+  // "never" → far-future sentinel that overrides any org rule (admins
+  // bulk-setting "no expiration" expect the asset to never be flagged,
+  // even when the library has an active expiration rule).
+  const [expMode, setExpMode] = useState<"leave" | "never" | "set">("leave");
   const [expDate, setExpDate] = useState<string>(() => {
     const d = new Date();
     d.setFullYear(d.getFullYear() + 1);
@@ -1321,19 +1336,30 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
   const [flagLabel, setFlagLabel] = useState<string>("");
   const [addFlagToggle, setAddFlagToggle] = useState(false);
 
+  const buildNeverExpiryIso = (): string => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 100);
+    return d.toISOString();
+  };
+
   const handleApply = () => {
     const patch: BulkStatusPatch = {};
     if (pub) patch.publication = pub;
     if (approval) patch.approval = approval as ApprovalStatus;
     if (client) patch.client = client as "current" | "former" | "unknown";
-    if (expMode === "clear") patch.freshnessExceptionUntil = null;
-    else if (expMode === "set") patch.freshnessExceptionUntil = new Date(expDate).toISOString();
+    if (expMode === "never") patch.freshnessExpiration = buildNeverExpiryIso();
+    else if (expMode === "set") patch.freshnessExpiration = new Date(expDate).toISOString();
     if (addFlagToggle) patch.addFlag = { color: flagColor, label: flagLabel.trim() };
     if (Object.keys(patch).length === 0) {
       onClose();
       return;
     }
     onApply(patch);
+  };
+
+  const handleClearAll = () => {
+    if (!confirm(`Clear all status indicators on ${count} ${count === 1 ? "asset" : "assets"}? This resets approval, client status, expiration, and custom flags to default. Publication is unchanged.`)) return;
+    onApply({ clearAll: true });
   };
 
   const dirty = !!pub || !!approval || !!client || expMode !== "leave" || addFlagToggle;
@@ -1347,82 +1373,96 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
           <div className="bsm-sub">Apply to {count} selected {count === 1 ? "asset" : "assets"}. Fields left as &quot;Leave unchanged&quot; aren&apos;t touched.</div>
         </div>
         <div className="bsm-body">
-          <div className="bsm-fld">
-            <label>Publication</label>
-            <select className="cl-select" value={pub} onChange={(e) => setPub(e.target.value as "" | "published" | "draft" | "archived")}>
-              <option value="">Leave unchanged</option>
-              <option value="published">Published</option>
-              <option value="draft">Draft</option>
-              <option value="archived">Archived</option>
-            </select>
+          {/* Top row mirrors the list view: Publication on the left, status
+              indicator label on the right. The status indicator section
+              expands below with all editable cleared-signal fields. */}
+          <div className="bsm-row-top">
+            <div className="bsm-fld bsm-fld-pub">
+              <label>Publication</label>
+              <select className="cl-select" value={pub} onChange={(e) => setPub(e.target.value as "" | "published" | "draft" | "archived")}>
+                <option value="">Leave unchanged</option>
+                <option value="published">Published</option>
+                <option value="draft">Draft</option>
+                <option value="archived">Archived</option>
+              </select>
+            </div>
+            <div className="bsm-status-label">
+              <span className="cl-circle cl-circle-empty"/>
+              <span>Set status indicator</span>
+            </div>
           </div>
-          <div className="bsm-fld">
-            <label>Approval status</label>
-            <select className="cl-select" value={approval} onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}>
-              <option value="">Leave unchanged</option>
-              <option value="unset">Not recorded</option>
-              <option value="pending">Pending approval</option>
-              <option value="needs_edits">Needs edits</option>
-              <option value="approved">Approved</option>
-              <option value="denied">Denied</option>
-            </select>
-          </div>
-          <div className="bsm-fld">
-            <label>Still a client?</label>
-            <select className="cl-select" value={client} onChange={(e) => setClient(e.target.value as "" | "current" | "former" | "unknown")}>
-              <option value="">Leave unchanged</option>
-              <option value="unknown">Unspecified</option>
-              <option value="current">Yes</option>
-              <option value="former">No</option>
-            </select>
-          </div>
-          <div className="bsm-fld">
-            <label>Expiration</label>
-            <select className="cl-select" value={expMode} onChange={(e) => setExpMode(e.target.value as "leave" | "clear" | "set")}>
-              <option value="leave">Leave unchanged</option>
-              <option value="clear">Clear (no expiration)</option>
-              <option value="set">Set expiration date…</option>
-            </select>
-            {expMode === "set" && (
-              <input
-                className="cl-exception-date"
-                type="date"
-                value={expDate}
-                onChange={(e) => setExpDate(e.target.value)}
-                style={{ marginTop: 6 }}
-              />
-            )}
-          </div>
-          <div className="bsm-fld">
-            <label>
-              <input type="checkbox" checked={addFlagToggle} onChange={(e) => setAddFlagToggle(e.target.checked)} style={{ marginRight: 6 }}/>
-              Add a custom flag to all selected
-            </label>
-            {addFlagToggle && (
-              <div className="bsm-flag-form">
-                <div className="cf-severity-row">
-                  <label className="cl-radio">
-                    <input type="radio" name="bsm-color" checked={flagColor === "yellow"} onChange={() => setFlagColor("yellow")}/>
-                    <span className="cl-circle yellow"/> Yellow (review)
-                  </label>
-                  <label className="cl-radio">
-                    <input type="radio" name="bsm-color" checked={flagColor === "red"} onChange={() => setFlagColor("red")}/>
-                    <span className="cl-circle red"/> Red (do not share)
-                  </label>
-                </div>
+
+          <div className="bsm-status-fields">
+            <div className="bsm-fld">
+              <label>Approval status</label>
+              <select className="cl-select" value={approval} onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}>
+                <option value="">Leave unchanged</option>
+                <option value="unset">Not recorded</option>
+                <option value="pending">Pending approval</option>
+                <option value="needs_edits">Needs edits</option>
+                <option value="approved">Approved</option>
+                <option value="denied">Denied</option>
+              </select>
+            </div>
+            <div className="bsm-fld">
+              <label>Still a client?</label>
+              <select className="cl-select" value={client} onChange={(e) => setClient(e.target.value as "" | "current" | "former" | "unknown")}>
+                <option value="">Leave unchanged</option>
+                <option value="unknown">Unspecified</option>
+                <option value="current">Yes</option>
+                <option value="former">No</option>
+              </select>
+            </div>
+            <div className="bsm-fld">
+              <label>Expiration</label>
+              <select className="cl-select" value={expMode} onChange={(e) => setExpMode(e.target.value as "leave" | "never" | "set")}>
+                <option value="leave">Leave unchanged</option>
+                <option value="never">No expiration (never flag)</option>
+                <option value="set">Set expiration date…</option>
+              </select>
+              {expMode === "set" && (
                 <input
-                  className="cl-input"
-                  placeholder="Optional label"
-                  value={flagLabel}
-                  onChange={(e) => setFlagLabel(e.target.value)}
+                  className="cl-exception-date"
+                  type="date"
+                  value={expDate}
+                  onChange={(e) => setExpDate(e.target.value)}
+                  style={{ marginTop: 6 }}
                 />
-              </div>
-            )}
+              )}
+            </div>
+            <div className="bsm-fld">
+              <label>
+                <input type="checkbox" checked={addFlagToggle} onChange={(e) => setAddFlagToggle(e.target.checked)} style={{ marginRight: 6 }}/>
+                Add a custom flag to all selected
+              </label>
+              {addFlagToggle && (
+                <div className="bsm-flag-form">
+                  <div className="cf-severity-row">
+                    <label className="cl-radio">
+                      <input type="radio" name="bsm-color" checked={flagColor === "yellow"} onChange={() => setFlagColor("yellow")}/>
+                      <span className="cl-circle yellow"/> Yellow (review)
+                    </label>
+                    <label className="cl-radio">
+                      <input type="radio" name="bsm-color" checked={flagColor === "red"} onChange={() => setFlagColor("red")}/>
+                      <span className="cl-circle red"/> Red (do not share)
+                    </label>
+                  </div>
+                  <input
+                    className="cl-input"
+                    placeholder="Optional label"
+                    value={flagLabel}
+                    onChange={(e) => setFlagLabel(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div className="bsm-foot">
-          <button className="cl-mini-btn primary" onClick={handleApply} disabled={!dirty}>Apply to {count}</button>
+          <button className="cl-mini-btn bsm-clear-all" onClick={handleClearAll}>Clear all status indicators</button>
+          <div style={{ flex: 1 }}/>
           <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
+          <button className="cl-mini-btn primary" onClick={handleApply} disabled={!dirty}>Apply to {count}</button>
         </div>
       </div>
     </>,
@@ -3750,26 +3790,39 @@ export default function App(){
   // Optimistically merges into local state, then PUTs to /api/assets.
   // Used by status flips, client_status changes, and mark-verified.
   const updateAssetInline=async(id: string, patch: Partial<Asset>, toastMsg?: string)=>{
-    setAssets(prev=>prev.map(a=>a.id===id?{...a,...patch}:a));
-    if(toastMsg){setToast(toastMsg);setTimeout(()=>setToast(null),1500);}
-    try{
-      const r=await fetch("/api/assets",{
-        method:"PUT",
-        headers:{"Content-Type":"application/json",...(await authHeaders())},
-        body:JSON.stringify({id,...patch}),
-      });
-      // Merge server response back into state — picks up any fields that
-      // the server stamped but the client didn't include in the patch
-      // (e.g. freshness_exception_set_by_email + set_at when admin sets a
-      // per-asset expiration). Without this, the audit info doesn't appear
-      // until a full assets reload.
-      if(r.ok){
-        try{
-          const updated=await r.json() as Asset;
-          setAssets(prev=>prev.map(a=>a.id===id?{...a,...updated}:a));
-        }catch{/* response body parse failed — fine, optimistic state is good enough */}
-      }
-    }catch(e){console.error("Inline update failed",e);}
+    // Propagate inline edits to multi-selection: when the user changes an
+    // inline status field on a row that's part of a selection, apply to all
+    // selected assets. Standalone clicks (no selection, or clicking a row
+    // not in selection) keep single-asset behavior. Custom flag edits are
+    // excluded — flags are per-asset arrays and replicating one asset's
+    // array to others would clobber their own flags.
+    const isPropagatable = !("customFlags" in patch);
+    const ids = (isPropagatable && selectedIds.size > 1 && selectedIds.has(id)) ? Array.from(selectedIds) : [id];
+    const isBulk = ids.length > 1;
+    setAssets(prev=>prev.map(a=>ids.includes(a.id)?{...a,...patch}:a));
+    if(toastMsg){
+      const msg = isBulk ? `${toastMsg} · applied to ${ids.length}` : toastMsg;
+      setToast(msg);
+      setTimeout(()=>setToast(null),1500);
+    }
+    // Sequentially write each — keeps things simple and matches bulk actions.
+    for(const targetId of ids){
+      try{
+        const r=await fetch("/api/assets",{
+          method:"PUT",
+          headers:{"Content-Type":"application/json",...(await authHeaders())},
+          body:JSON.stringify({id:targetId,...patch}),
+        });
+        // Merge server response back into state — picks up any fields that
+        // the server stamped but the client didn't include in the patch.
+        if(r.ok){
+          try{
+            const updated=await r.json() as Asset;
+            setAssets(prev=>prev.map(a=>a.id===targetId?{...a,...updated}:a));
+          }catch{/* response body parse failed — fine, optimistic state is good enough */}
+        }
+      }catch(e){console.error("Inline update failed",targetId,e);}
+    }
   };
 
   // Restore an archived asset back to active. Clears archived metadata so the
@@ -3994,6 +4047,23 @@ export default function App(){
     // Build the single-asset shape that updateAssetInline expects, plus
     // any client-side derived bits (e.g. archivedAt for publication=archived).
     const buildAssetPatch=(a: Asset): Partial<Asset> => {
+      // Clear-all action wipes every status indicator field back to default.
+      // Publication is intentionally untouched — admin can change it via
+      // the regular publication dropdown if desired.
+      if(patch.clearAll){
+        return {
+          approvalStatus:"unset",
+          approvalRecordedAt:null,
+          approvalNote:null,
+          clientStatus:"current",
+          clientStatusSource:"unset",
+          clientStatusUpdatedAt:null,
+          freshnessExceptionUntil:null,
+          freshnessExceptionSetByEmail:null,
+          freshnessExceptionSetAt:null,
+          customFlags:[],
+        };
+      }
       const p: Partial<Asset> = {};
       if(patch.publication){
         p.status=patch.publication;
@@ -4014,9 +4084,12 @@ export default function App(){
         p.clientStatusSource="manual";
         p.clientStatusUpdatedAt=nowIso;
       }
-      if(patch.freshnessExceptionUntil!==undefined){
-        p.freshnessExceptionUntil=patch.freshnessExceptionUntil;
-        if(patch.freshnessExceptionUntil===null){
+      // freshnessExpiration: ISO string (set or never-sentinel) → write date.
+      // null → clear per-asset rule. undefined → leave unchanged.
+      if(patch.freshnessExpiration!==undefined && patch.freshnessExpiration!=="leave"){
+        const val=patch.freshnessExpiration;
+        p.freshnessExceptionUntil=val;
+        if(val===null){
           p.freshnessExceptionSetByEmail=null;
           p.freshnessExceptionSetAt=null;
         }
