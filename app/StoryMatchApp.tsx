@@ -1005,11 +1005,13 @@ interface CardProps {
     level: ClearedLevel;
     reasons: ClearedReason[];
     libraryFreshnessRuleActive: boolean;
+    isInMultiSelection: boolean;
     onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
     onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
     onMarkVerified: (a: Asset) => void;
     onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
     onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
+    onResetStatusIndicators: (a: Asset) => void;
   };
 }
 
@@ -1103,8 +1105,10 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           reasons={cleared.reasons}
           onClose={() => setClearedOpen(false)}
           libraryFreshnessRuleActive={cleared.libraryFreshnessRuleActive}
+          isInMultiSelection={cleared.isInMultiSelection}
           onSetFreshnessException={cleared.onSetFreshnessException}
           onSetCustomFlags={cleared.onSetCustomFlags}
+          onResetStatusIndicators={cleared.onResetStatusIndicators}
           onSetClientStatus={cleared.onSetClientStatus}
           onSetApproval={cleared.onSetApproval}
           onMarkVerified={cleared.onMarkVerified}
@@ -1386,7 +1390,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
   };
 
   const handleClearAll = () => {
-    if (!confirm(`Clear all status indicators on ${count} ${count === 1 ? "asset" : "assets"}? This resets approval, client status, expiration, and custom flags to default. Publication is unchanged.`)) return;
+    if (!confirm(`Reset status indicators on ${count} ${count === 1 ? "asset" : "assets"}? This resets approval, client status, expiration, and custom flags to default. Publication is unchanged.`)) return;
     onApply({ clearAll: true });
   };
 
@@ -1448,7 +1452,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
                 onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}
               >
                 <option value="">Leave unchanged</option>
-                <option value="unset">Not recorded</option>
+                <option value="unset">Blank</option>
                 <option value="pending">Pending approval</option>
                 <option value="needs_edits">Needs edits</option>
                 <option value="approved">Approved</option>
@@ -1459,7 +1463,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
               <label>Still a client?</label>
               <select className="cl-select" value={client} onChange={(e) => setClient(e.target.value as "" | "current" | "former" | "unknown")}>
                 <option value="">Leave unchanged</option>
-                <option value="unknown">Unspecified</option>
+                <option value="unknown">Blank</option>
                 <option value="current">Yes</option>
                 <option value="former">No</option>
               </select>
@@ -1510,7 +1514,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
           </div>
           )}
           {indicatorExpanded && (
-            <button className="bsm-clear-all-btn" onClick={handleClearAll}>Clear all status indicators</button>
+            <button className="bsm-clear-all-btn" onClick={handleClearAll}>Reset status indicators</button>
           )}
         </div>
         <div className="bsm-foot">
@@ -1535,6 +1539,7 @@ interface ListViewProps {
   onMarkVerified: (a: Asset) => void;
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
+  onResetStatusIndicators: (a: Asset) => void;
   onDelete: (id: string) => void;
   onCopyShareLink: (a: Asset) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
@@ -1756,11 +1761,20 @@ interface ClearedPopoverProps {
   // between two distinct UX modes: standalone dropdown (rule off) vs.
   // exception-button-on-warning (rule on).
   libraryFreshnessRuleActive: boolean;
+  // True when this asset is part of an active multi-selection. Used to
+  // force-fire dropdown handlers on blur so picking the same value still
+  // propagates to the selection (native onChange doesn't fire on same-value
+  // picks, which broke "set 5 mixed assets to Blank if I click on a Blank one").
+  isInMultiSelection: boolean;
   // Set or clear the per-asset freshness exception. untilIso null = clear.
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   // Replace the asset's custom flags array. Caller stamps setBy/setAt
   // server-side; client passes the desired final array.
   onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
+  // Reset all status indicators (approval/client/freshness/custom flags) to
+  // default. Handles org-rule-aware freshness exception so reset doesn't
+  // immediately re-fire yellow.
+  onResetStatusIndicators: (a: Asset) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
@@ -1784,13 +1798,15 @@ interface ClearedCellProps {
   onToggle: () => void;
   onClose: () => void;
   libraryFreshnessRuleActive: boolean;
+  isInMultiSelection: boolean;
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
   onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
+  onResetStatusIndicators: (a: Asset) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
 }
-function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetCustomFlags, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
+function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
 
   // Visible inline text next to the dot — just the joined reasons (no
@@ -1836,8 +1852,10 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
           reasons={cleared.reasons}
           onClose={onClose}
           libraryFreshnessRuleActive={libraryFreshnessRuleActive}
+          isInMultiSelection={isInMultiSelection}
           onSetFreshnessException={onSetFreshnessException}
           onSetCustomFlags={onSetCustomFlags}
+          onResetStatusIndicators={onResetStatusIndicators}
           onSetClientStatus={onSetClientStatus}
           onSetApproval={onSetApproval}
           onMarkVerified={onMarkVerified}
@@ -1848,7 +1866,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
   );
 }
 
-function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetCustomFlags, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
+function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
   const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
@@ -1970,8 +1988,17 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           className={`cl-select cl-select-primary${(asset.approvalStatus || "unset") === "unset" ? " placeholder" : ""}`}
           value={asset.approvalStatus || "unset"}
           onChange={(e) => onSetApproval(asset, { status: e.target.value as ApprovalStatus })}
+          onBlur={(e) => {
+            // Multi-select fix: native onChange doesn't fire when admin
+            // picks the same value. On blur, force-apply the current value
+            // so the selection propagation kicks in via updateAssetInline.
+            // Only fires when this asset is part of an active multi-select.
+            if (isInMultiSelection) {
+              onSetApproval(asset, { status: e.target.value as ApprovalStatus });
+            }
+          }}
         >
-          <option value="unset">Not recorded</option>
+          <option value="unset">Blank</option>
           <option value="pending">Pending approval</option>
           <option value="needs_edits">Needs edits</option>
           <option value="approved">Approved</option>
@@ -2028,8 +2055,13 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
               className={`cl-select${value === "unknown" ? " placeholder" : ""}`}
               value={value as string}
               onChange={(e) => onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown")}
+              onBlur={(e) => {
+                if (isInMultiSelection) {
+                  onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown");
+                }
+              }}
             >
-              <option value="unknown">Unspecified</option>
+              <option value="unknown">Blank</option>
               <option value="current">Yes</option>
               <option value="former">No</option>
             </select>
@@ -2051,18 +2083,17 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
       </>
       )}
 
-      {/* Clear all — always visible at popover bottom (top-level, not behind
-          advanced disclosure). Resets every status indicator on this asset. */}
+      {/* Reset — always visible at popover bottom (top-level, not behind
+          advanced disclosure). Resets every status indicator on this asset
+          via the parent handler, which knows about org-rule state and
+          multi-select propagation so it actually works. */}
       <button
         className="cl-clear-all"
         onClick={() => {
-          if (!confirm("Clear all status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
-          onSetApproval(asset, { status: "unset" as ApprovalStatus, note: "" });
-          onSetClientStatus(asset, "unknown");
-          onSetCustomFlags(asset, []);
-          onSetFreshnessException(asset, null);
+          if (!confirm("Reset status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
+          onResetStatusIndicators(asset);
         }}
-      >Clear all status indicators</button>
+      >Reset status indicators</button>
     </div>,
     document.body
   );
@@ -2477,7 +2508,7 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -2536,6 +2567,15 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                   className="lv-pub-select"
                   value={pubStatus}
                   onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
+                  onBlur={(e) => {
+                    // Multi-select fix: same as the popover's selects.
+                    // When this asset is part of an active multi-select,
+                    // force-fire on blur so picking the same value still
+                    // propagates to the selection.
+                    if (selectedIds.size > 1 && selectedIds.has(a.id)) {
+                      onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived");
+                    }
+                  }}
                 >
                   <option value="published">Published</option>
                   <option value="draft">Draft</option>
@@ -2549,8 +2589,10 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 onToggle={() => setOpenClearedFor(open ? null : a.id)}
                 onClose={() => setOpenClearedFor(null)}
                 libraryFreshnessRuleActive={!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate)}
+                isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
                 onSetFreshnessException={onSetFreshnessException}
                 onSetCustomFlags={onSetCustomFlags}
+                onResetStatusIndicators={onResetStatusIndicators}
                 onSetClientStatus={onSetClientStatus}
                 onSetApproval={onSetApproval}
                 onMarkVerified={onMarkVerified}
@@ -3968,6 +4010,46 @@ export default function App(){
     await updateAssetInline(asset.id,update,patch.status?`Approval: ${patch.status}`:"Note saved");
   };
 
+  // Reset all status indicators on an asset (and propagate to selection
+  // when multi-select is active). Same semantics as the bulk modal's
+  // clearAll: when an org freshness rule is active, sets the never-flag
+  // sentinel so the asset doesn't immediately re-fire yellow.
+  const resetStatusIndicators=async(asset: Asset)=>{
+    const ids=(selectedIds.size>1 && selectedIds.has(asset.id)) ? Array.from(selectedIds) : [asset.id];
+    const isBulk=ids.length>1;
+    const hasOrgFreshnessRule=!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate);
+    const neverIso=(()=>{
+      const d=new Date();
+      d.setFullYear(d.getFullYear()+100);
+      return d.toISOString();
+    })();
+    const nowIso=new Date().toISOString();
+    const patch: Partial<Asset>={
+      approvalStatus:"unset",
+      approvalRecordedAt:null,
+      approvalNote:null,
+      clientStatus:"current",
+      clientStatusSource:"unset",
+      clientStatusUpdatedAt:null,
+      freshnessExceptionUntil:hasOrgFreshnessRule?neverIso:null,
+      freshnessExceptionSetByEmail:hasOrgFreshnessRule?(user?.email||null):null,
+      freshnessExceptionSetAt:hasOrgFreshnessRule?nowIso:null,
+      customFlags:[],
+    };
+    setAssets(prev=>prev.map(a=>ids.includes(a.id)?{...a,...patch}:a));
+    setToast(isBulk?`Reset on ${ids.length} assets`:"Status indicators reset");
+    setTimeout(()=>setToast(null),1800);
+    for(const id of ids){
+      try{
+        await fetch("/api/assets",{
+          method:"PUT",
+          headers:{"Content-Type":"application/json",...(await authHeaders())},
+          body:JSON.stringify({id,...patch}),
+        });
+      }catch(e){console.error("Reset failed for",id,e);}
+    }
+  };
+
   // Set or clear a per-asset freshness exception. The server stamps
   // set_by_email and set_at automatically from the auth context — we just
   // need to send the until value (null clears the exception).
@@ -4904,6 +4986,7 @@ export default function App(){
                   onMarkVerified={markVerified}
                   onSetFreshnessException={setFreshnessException}
                   onSetCustomFlags={setCustomFlags}
+                  onResetStatusIndicators={resetStatusIndicators}
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
                   orgSettings={orgSettings}
@@ -4940,11 +5023,13 @@ export default function App(){
                         level: c.level,
                         reasons: c.reasons,
                         libraryFreshnessRuleActive: !!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate),
+                        isInMultiSelection: selectedIds.size > 1 && selectedIds.has(a.id),
                         onSetClientStatus: setClientStatus,
                         onSetApproval: setApproval,
                         onMarkVerified: markVerified,
                         onSetFreshnessException: setFreshnessException,
                         onSetCustomFlags: setCustomFlags,
+                        onResetStatusIndicators: resetStatusIndicators,
                       };
                     })() : undefined;
                     return a.assetType==="Quote"
