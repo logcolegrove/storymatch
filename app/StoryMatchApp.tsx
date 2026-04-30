@@ -106,6 +106,19 @@ interface Asset {
   freshnessExceptionUntil?: string | null;
   freshnessExceptionSetByEmail?: string | null;
   freshnessExceptionSetAt?: string | null;
+  // Custom flags — admin-defined free-form review flags for things that
+  // don't fit approval/client/freshness (e.g. "comments must be disabled,"
+  // "logo update pending"). Each contributes to the cleared signal.
+  customFlags?: CustomFlag[];
+}
+
+interface CustomFlag {
+  id: string;            // client-generated uuid; primary key within the array
+  label: string;         // short title — surfaces inline next to severity dot
+  color: "yellow" | "red"; // severity. Green is intentionally absent — green flags would be noise.
+  note: string;          // long-form description / instructions
+  setByEmail: string;
+  setAt: string;
 }
 
 // Org-level configuration that drives Rules behavior. Loaded once at app
@@ -651,6 +664,9 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-pop-portal{z-index:200;opacity:1 !important;}
 .cl-pop-head{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);margin-bottom:8px;}
 .cl-section{padding:10px 0;border-top:1px solid var(--border);}
+/* First section (Approval) opens the popover — kill the leading separator
+   line so it doesn't read like a section divider with nothing above it. */
+.cl-section:first-of-type{border-top:none;padding-top:4px;}
 .cl-section:first-of-type{border-top:none;padding-top:4px;}
 .cl-section-head{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
 .cl-section-head .cl-circle{width:9px;height:9px;}
@@ -732,6 +748,22 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-advanced-toggle{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;background:none;border:none;padding:8px 0 6px;margin-top:4px;border-top:1px solid var(--border);color:var(--t3);font-family:var(--font);font-size:11px;font-weight:600;cursor:pointer;text-transform:uppercase;letter-spacing:.4px;}
 .cl-advanced-toggle:hover{color:var(--t1);}
 .cl-advanced-chevron{font-size:9px;}
+
+/* Custom flags section */
+.cf-empty{font-size:11px;color:var(--t4);font-style:italic;margin:6px 0 8px;}
+.cf-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-top:1px solid var(--border);}
+.cf-row:first-of-type{border-top:none;}
+.cf-row > .cl-circle{margin-top:3px;flex-shrink:0;}
+.cf-row-body{flex:1;min-width:0;}
+.cf-row-label{font-size:12px;font-weight:600;color:var(--t1);}
+.cf-row-note{font-size:11px;color:var(--t3);line-height:1.4;margin-top:2px;}
+.cf-row-actions{display:flex;gap:4px;flex-shrink:0;}
+.cf-form{margin-top:8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
+.cf-severity-row{display:flex;flex-direction:column;gap:4px;}
+.cf-severity-row .cl-radio{align-items:center;}
+.cf-severity-row .cl-circle{width:9px;height:9px;}
+.cf-form-actions{display:flex;gap:6px;}
+.cl-cf-add{margin-top:6px;}
 .cl-textarea{min-height:64px;resize:vertical;font-family:var(--font);}
 .cl-row-actions{display:flex;gap:6px;margin-top:6px;}
 .cl-mini-btn{font-family:var(--font);font-size:11px;padding:4px 9px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
@@ -929,6 +961,7 @@ interface CardProps {
     onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
     onMarkVerified: (a: Asset) => void;
     onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
+    onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
   };
 }
 
@@ -1023,6 +1056,7 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           onClose={() => setClearedOpen(false)}
           libraryFreshnessRuleActive={cleared.libraryFreshnessRuleActive}
           onSetFreshnessException={cleared.onSetFreshnessException}
+          onSetCustomFlags={cleared.onSetCustomFlags}
           onSetClientStatus={cleared.onSetClientStatus}
           onSetApproval={cleared.onSetApproval}
           onMarkVerified={cleared.onMarkVerified}
@@ -1225,6 +1259,7 @@ interface ListViewProps {
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
+  onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
   onDelete: (id: string) => void;
   onCopyShareLink: (a: Asset) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
@@ -1240,7 +1275,7 @@ interface ListViewProps {
 // because that's when the lifecycle data is meaningful enough to display.
 type ClearedLevel = "green" | "yellow" | "red" | "unset";
 interface ClearedReason {
-  signal: "approval" | "client" | "freshness";
+  signal: "approval" | "client" | "freshness" | "custom";
   level: "green" | "yellow" | "red";
   label: string;
   // Optional: just the threshold/violation portion of the message, used by
@@ -1365,6 +1400,19 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
     }
   }
 
+  // Custom flags — each contributes a reason at its own severity level.
+  // Empty array → no contribution. Worst-of-all-signals aggregate kicks in
+  // below so any custom flag at red drives the whole signal red.
+  const customFlags = Array.isArray(asset.customFlags) ? asset.customFlags : [];
+  for (const f of customFlags) {
+    if (!f) continue;
+    reasons.push({
+      signal: "custom",
+      level: f.color,
+      label: f.label || "Custom flag",
+    });
+  }
+
   // Show the dot when admin has engaged (approval/client) OR when freshness
   // is automatically flagged (over org threshold). Other signals' yellow
   // states ("approval not recorded", "client status unknown") are silenced
@@ -1373,7 +1421,8 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   // even before they've touched the other governance fields.
   const freshness = reasons.find(r => r.signal === "freshness");
   const freshnessFlagged = freshness?.level === "yellow" || freshness?.level === "red";
-  if (!isClearedEngaged(asset) && !freshnessFlagged) {
+  const hasCustomFlag = reasons.some(r => r.signal === "custom");
+  if (!isClearedEngaged(asset) && !freshnessFlagged && !hasCustomFlag) {
     return { level: "unset", reasons };
   }
 
@@ -1395,6 +1444,9 @@ interface ClearedPopoverProps {
   libraryFreshnessRuleActive: boolean;
   // Set or clear the per-asset freshness exception. untilIso null = clear.
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
+  // Replace the asset's custom flags array. Caller stamps setBy/setAt
+  // server-side; client passes the desired final array.
+  onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
@@ -1419,11 +1471,12 @@ interface ClearedCellProps {
   onClose: () => void;
   libraryFreshnessRuleActive: boolean;
   onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
+  onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
 }
-function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
+function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetCustomFlags, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
   return (
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
@@ -1454,6 +1507,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
           onClose={onClose}
           libraryFreshnessRuleActive={libraryFreshnessRuleActive}
           onSetFreshnessException={onSetFreshnessException}
+          onSetCustomFlags={onSetCustomFlags}
           onSetClientStatus={onSetClientStatus}
           onSetApproval={onSetApproval}
           onMarkVerified={onMarkVerified}
@@ -1464,19 +1518,16 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
   );
 }
 
-function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
+function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetCustomFlags, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
   // Coords use either `top` (popover sits below trigger) or `bottom` (popover
   // sits above trigger). We flip when there isn't enough room below the
   // trigger — fixes the "popover cut off at bottom of viewport" bug.
   const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
-  // Most admins just want to mark approval — collapse Still-a-client and
-  // Freshness behind an "Advanced" disclosure. Auto-expanded when there's
-  // existing data in either field so admins don't lose context.
-  const clientHasData = !!(asset.clientStatus && asset.clientStatus !== "unknown");
-  const freshnessHasData = !!asset.freshnessExceptionUntil;
-  const [showAdvanced, setShowAdvanced] = useState(clientHasData || freshnessHasData);
+  // Most admins just want to mark approval — Client + Freshness sit
+  // behind an "Advanced" disclosure that defaults collapsed every time.
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Position the popover relative to the anchor + reposition on scroll/resize.
   useEffect(() => {
@@ -1539,7 +1590,8 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
       }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="cl-pop-head">Status</div>
+      {/* Header removed — popover opens directly into the Approval section
+          since that's the primary thing admins come here to set. */}
 
       {/* Approval section — primary focus. Larger title + select to reflect
           that this is the main thing admins come here to set. */}
@@ -1616,6 +1668,10 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
         libraryRuleActive={libraryFreshnessRuleActive}
         onSetFreshnessException={onSetFreshnessException}
         onClose={onClose}
+      />
+      <CustomFlagsSection
+        asset={asset}
+        onSetCustomFlags={onSetCustomFlags}
       />
       </>
       )}
@@ -1897,7 +1953,140 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
+// ─── CUSTOM FLAGS SECTION ──────────────────────────────────────────────
+// Free-form admin flags for things that don't fit approval/client/freshness
+// (e.g. "comments must be disabled," "logo update pending"). Each flag has
+// a label, severity (yellow/red), free-form note, and audit fields.
+interface CustomFlagsSectionProps {
+  asset: Asset;
+  onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
+}
+function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps) {
+  const flags = Array.isArray(asset.customFlags) ? asset.customFlags : [];
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftLabel, setDraftLabel] = useState("");
+  const [draftColor, setDraftColor] = useState<"yellow" | "red">("yellow");
+  const [draftNote, setDraftNote] = useState("");
+
+  const startAdd = () => {
+    setDraftLabel("");
+    setDraftColor("yellow");
+    setDraftNote("");
+    setEditingId(null);
+    setAdding(true);
+  };
+  const startEdit = (f: CustomFlag) => {
+    setDraftLabel(f.label);
+    setDraftColor(f.color);
+    setDraftNote(f.note);
+    setEditingId(f.id);
+    setAdding(false);
+  };
+  const cancel = () => {
+    setAdding(false);
+    setEditingId(null);
+  };
+  const save = () => {
+    const label = draftLabel.trim();
+    if (!label) return;
+    const next: CustomFlag[] = [...flags];
+    if (editingId) {
+      const i = next.findIndex(f => f.id === editingId);
+      if (i >= 0) {
+        next[i] = { ...next[i], label, color: draftColor, note: draftNote.trim() };
+      }
+    } else {
+      next.push({
+        id: `cf-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label,
+        color: draftColor,
+        note: draftNote.trim(),
+        // setBy/setAt — server doesn't stamp these for the array; we set
+        // client-side. Imperfect (a malicious client could spoof) but this
+        // is admin-only governance UI, not a security boundary.
+        setByEmail: "",
+        setAt: new Date().toISOString(),
+      });
+    }
+    onSetCustomFlags(asset, next);
+    cancel();
+  };
+  const remove = (id: string) => {
+    onSetCustomFlags(asset, flags.filter(f => f.id !== id));
+  };
+
+  const showForm = adding || editingId !== null;
+
+  return (
+    <div className="cl-section cl-section-secondary">
+      <div className="cl-section-head">
+        <span className="cl-section-title">Custom flags</span>
+      </div>
+
+      {flags.length === 0 && !showForm && (
+        <div className="cf-empty">No custom flags on this asset.</div>
+      )}
+
+      {flags.map(f => (
+        <div key={f.id} className="cf-row">
+          <span className={`cl-circle ${f.color}`}/>
+          <div className="cf-row-body">
+            <div className="cf-row-label">{f.label}</div>
+            {f.note && <div className="cf-row-note">{f.note}</div>}
+          </div>
+          <div className="cf-row-actions">
+            <button className="cl-mini-btn" onClick={() => startEdit(f)}>Edit</button>
+            <button className="cl-mini-btn" onClick={() => remove(f.id)}>Remove</button>
+          </div>
+        </div>
+      ))}
+
+      {showForm && (
+        <div className="cf-form">
+          <input
+            className="cl-input"
+            placeholder="Short label (e.g. Comments must be disabled)"
+            value={draftLabel}
+            onChange={e => setDraftLabel(e.target.value)}
+            autoFocus
+          />
+          <div className="cf-severity-row">
+            <label className="cl-radio">
+              <input type="radio" name={`cf-${asset.id}`} checked={draftColor === "yellow"} onChange={() => setDraftColor("yellow")}/>
+              <span className={`cl-circle yellow`}/> Yellow (review)
+            </label>
+            <label className="cl-radio">
+              <input type="radio" name={`cf-${asset.id}`} checked={draftColor === "red"} onChange={() => setDraftColor("red")}/>
+              <span className={`cl-circle red`}/> Red (do not share)
+            </label>
+          </div>
+          <textarea
+            className="cl-textarea"
+            placeholder="Note / instructions (optional)"
+            value={draftNote}
+            onChange={e => setDraftNote(e.target.value)}
+            rows={3}
+          />
+          <div className="cf-form-actions">
+            <button
+              className="cl-mini-btn primary"
+              onClick={save}
+              disabled={!draftLabel.trim()}
+            >{editingId ? "Save" : "Add flag"}</button>
+            <button className="cl-mini-btn" onClick={cancel}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {!showForm && (
+        <button className="cl-mini-btn cl-cf-add" onClick={startAdd}>+ Add custom flag</button>
+      )}
+    </div>
+  );
+}
+
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -1959,6 +2148,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 onClose={() => setOpenClearedFor(null)}
                 libraryFreshnessRuleActive={!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate)}
                 onSetFreshnessException={onSetFreshnessException}
+                onSetCustomFlags={onSetCustomFlags}
                 onSetClientStatus={onSetClientStatus}
                 onSetApproval={onSetApproval}
                 onMarkVerified={onMarkVerified}
@@ -3384,6 +3574,19 @@ export default function App(){
     }, toast);
   };
 
+  // Replace the asset's custom flags array. Stamps setByEmail with the
+  // current user's email for any flags that were just added (id-based diff).
+  const setCustomFlags=async(asset: Asset, flags: CustomFlag[])=>{
+    const stampedFlags: CustomFlag[] = flags.map(f => {
+      // If flag has no setByEmail yet (just-added by this client), fill it.
+      if (!f.setByEmail && user?.email) {
+        return { ...f, setByEmail: user.email };
+      }
+      return f;
+    });
+    await updateAssetInline(asset.id, { customFlags: stampedFlags }, "Flags updated");
+  };
+
   // Change publication status (published / draft / archived) inline.
   const setPublicationStatus=async(asset: Asset, next: "published"|"draft"|"archived")=>{
     if(next==="archived"){
@@ -4185,6 +4388,7 @@ export default function App(){
                   onSetApproval={setApproval}
                   onMarkVerified={markVerified}
                   onSetFreshnessException={setFreshnessException}
+                  onSetCustomFlags={setCustomFlags}
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
                   orgSettings={orgSettings}
@@ -4225,6 +4429,7 @@ export default function App(){
                         onSetApproval: setApproval,
                         onMarkVerified: markVerified,
                         onSetFreshnessException: setFreshnessException,
+                        onSetCustomFlags: setCustomFlags,
                       };
                     })() : undefined;
                     return a.assetType==="Quote"

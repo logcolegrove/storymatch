@@ -77,6 +77,9 @@ type AssetDB = {
   freshness_exception_until: string | null;
   freshness_exception_set_by_email: string | null;
   freshness_exception_set_at: string | null;
+  // Per-asset custom flags — admin-defined arbitrary review flags.
+  // Each entry: { id, label, color, note, setByEmail, setAt }
+  custom_flags: unknown;
 };
 
 type AssetFE = {
@@ -122,6 +125,9 @@ type AssetFE = {
   freshnessExceptionUntil?: string | null;
   freshnessExceptionSetByEmail?: string | null;
   freshnessExceptionSetAt?: string | null;
+  // Custom flags — round-tripped as-is (clients send the full array on each
+  // edit). Each entry: { id, label, color, note, setByEmail, setAt }.
+  customFlags?: unknown;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -161,6 +167,7 @@ function dbToFe(r: AssetDB): AssetFE {
     freshnessExceptionUntil: r.freshness_exception_until,
     freshnessExceptionSetByEmail: r.freshness_exception_set_by_email,
     freshnessExceptionSetAt: r.freshness_exception_set_at,
+    customFlags: Array.isArray(r.custom_flags) ? r.custom_flags : [],
   };
 }
 
@@ -202,6 +209,10 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUser
   // come back with null published_at and "Publish date not recorded yet"
   // shows in the popover until a manual sync.
   if (a.publishedAt !== undefined) o.published_at = a.publishedAt;
+  // Custom flags — pass through whatever array the client sends. Server
+  // doesn't validate structure beyond it being an array (client-side
+  // shape enforcement is enough for this admin-only feature).
+  if (a.customFlags !== undefined) o.custom_flags = a.customFlags;
   // Per-asset freshness exception. When the FE writes a value (set or clear),
   // server stamps set_by_email + set_at from the auth context — clients
   // never set those directly, so we ignore any FE-supplied values.
