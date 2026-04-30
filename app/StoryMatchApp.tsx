@@ -2938,20 +2938,22 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
     setDraftDate(settings.freshnessWarnBeforeDate);
   }, [settings.freshnessWarnAfterMonths, settings.freshnessWarnBeforeDate]);
 
-  // Compute the target settings for whatever mode is selected.
+  // Compute the target settings for whatever mode is selected. Spread
+  // existing settings first so approval/publication-rule fields are
+  // preserved — only the freshness fields are being edited here.
   const targetSettings = ((): OrgSettings => {
     if (mode === "off") {
-      return { freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: null };
+      return { ...settings, freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: null };
     }
     if (mode === "preset") {
-      return { freshnessWarnAfterMonths: draftMonths ?? 24, freshnessWarnBeforeDate: null };
+      return { ...settings, freshnessWarnAfterMonths: draftMonths ?? 24, freshnessWarnBeforeDate: null };
     }
     if (mode === "custom-rolling") {
       const months = customRollingUnit === "years" ? customRollingNum * 12 : customRollingNum;
-      return { freshnessWarnAfterMonths: months, freshnessWarnBeforeDate: null };
+      return { ...settings, freshnessWarnAfterMonths: months, freshnessWarnBeforeDate: null };
     }
     // custom-date
-    return { freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: draftDate };
+    return { ...settings, freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: draftDate };
   })();
 
   const dirty =
