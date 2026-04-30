@@ -807,6 +807,20 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bulk-close{background:none;border:none;color:#8888a0;cursor:pointer;padding:6px 8px;margin-left:4px;font-size:14px;border-radius:6px;}
 .bulk-close:hover{background:rgba(255,255,255,.1);color:#fff;}
 
+/* Bulk status modal — opened by "Set status…" in the bulk action bar.
+   Lets admins edit any subset of publication / approval / client /
+   expiration / custom flag across all selected assets in one motion. */
+.bsm-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;animation:aepFade .15s ease-out;}
+.bsm-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,.25);z-index:201;width:480px;max-width:calc(100vw - 32px);max-height:calc(100vh - 64px);display:flex;flex-direction:column;font-family:var(--font);}
+.bsm-head{padding:18px 20px 12px;border-bottom:1px solid var(--border);}
+.bsm-title{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);}
+.bsm-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
+.bsm-body{flex:1;overflow-y:auto;padding:14px 20px;display:flex;flex-direction:column;gap:14px;}
+.bsm-fld{display:flex;flex-direction:column;gap:5px;}
+.bsm-fld > label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;display:flex;align-items:center;}
+.bsm-flag-form{margin-top:6px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
+.bsm-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;}
+
 /* ── 3-DOT MENU ── */
 .dots-btn{background:none;border:none;color:var(--t3);cursor:pointer;padding:5px 7px;border-radius:5px;display:grid;place-items:center;}
 .dots-btn:hover{background:var(--bg2);color:var(--t1);}
@@ -1226,6 +1240,21 @@ function DotsMenu({ items }: { items: MenuItem[] }) {
 }
 
 // ─── BULK ACTION BAR (floating, appears when any rows are selected) ──────────
+// "Set status…" opens a modal containing all the status indicator dropdowns
+// + publication dropdown so admins can edit any subset of fields across
+// the whole selection in one motion. Each field defaults to "Leave
+// unchanged" — only edited fields get applied to the selected assets.
+interface BulkStatusPatch {
+  publication?: "published" | "draft" | "archived";
+  approval?: ApprovalStatus;
+  client?: "current" | "former" | "unknown";
+  // Freshness expiration: undefined = leave unchanged. null = clear.
+  // String = ISO date to set.
+  freshnessExceptionUntil?: string | null;
+  // New custom flag to APPEND to every selected asset (additive, not replace).
+  addFlag?: { color: "yellow" | "red"; label: string };
+}
+
 interface BulkBarProps {
   count: number;
   onPublish: () => void;
@@ -1234,20 +1263,170 @@ interface BulkBarProps {
   onMarkVerified: () => void;
   onDelete: () => void;
   onClear: () => void;
+  onApplyStatus: (patch: BulkStatusPatch) => void | Promise<void>;
 }
-function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear }: BulkBarProps) {
+function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear, onApplyStatus }: BulkBarProps) {
+  const [statusOpen, setStatusOpen] = useState(false);
   return (
-    <div className="bulk-bar">
-      <span className="bulk-count">{count} selected</span>
-      <button className="bulk-btn" onClick={onPublish}>Publish</button>
-      <button className="bulk-btn" onClick={onDraft}>Move to draft</button>
-      <button className="bulk-btn" onClick={onArchive}>Archive</button>
-      {/* Mark verified retired — freshness is now driven by Vimeo publish
-          date + the Rules → Freshness threshold. onMarkVerified left in
-          props for parent compatibility; harmless if never invoked. */}
-      <button className="bulk-btn danger" onClick={onDelete}>Delete</button>
-      <button className="bulk-close" onClick={onClear} title="Clear selection">✕</button>
-    </div>
+    <>
+      <div className="bulk-bar">
+        <span className="bulk-count">{count} selected</span>
+        <button className="bulk-btn" onClick={onPublish}>Publish</button>
+        <button className="bulk-btn" onClick={onDraft}>Move to draft</button>
+        <button className="bulk-btn" onClick={onArchive}>Archive</button>
+        <button className="bulk-btn" onClick={() => setStatusOpen(true)}>Set status…</button>
+        {/* Mark verified retired — freshness is now driven by Vimeo publish
+            date + the Rules → Freshness threshold. onMarkVerified left in
+            props for parent compatibility; harmless if never invoked. */}
+        <button className="bulk-btn danger" onClick={onDelete}>Delete</button>
+        <button className="bulk-close" onClick={onClear} title="Clear selection">✕</button>
+      </div>
+      {statusOpen && (
+        <BulkStatusModal
+          count={count}
+          onClose={() => setStatusOpen(false)}
+          onApply={async (patch) => {
+            await onApplyStatus(patch);
+            setStatusOpen(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// ─── BULK STATUS MODAL ────────────────────────────────────────────────────
+// One modal that lets admins edit publication + status indicator fields
+// across N selected assets at once. Each field has a "Leave unchanged"
+// option so admins only apply what they actually want to change.
+interface BulkStatusModalProps {
+  count: number;
+  onClose: () => void;
+  onApply: (patch: BulkStatusPatch) => void | Promise<void>;
+}
+function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
+  // Each top-level field: "" means leave unchanged. Specific value = apply.
+  const [pub, setPub] = useState<"" | "published" | "draft" | "archived">("");
+  const [approval, setApproval] = useState<"" | ApprovalStatus>("");
+  const [client, setClient] = useState<"" | "current" | "former" | "unknown">("");
+  // Expiration: "leave" / "clear" / "set"
+  const [expMode, setExpMode] = useState<"leave" | "clear" | "set">("leave");
+  const [expDate, setExpDate] = useState<string>(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toISOString().split("T")[0];
+  });
+  // Custom flag to add (additive). "" label = don't add.
+  const [flagColor, setFlagColor] = useState<"yellow" | "red">("yellow");
+  const [flagLabel, setFlagLabel] = useState<string>("");
+  const [addFlagToggle, setAddFlagToggle] = useState(false);
+
+  const handleApply = () => {
+    const patch: BulkStatusPatch = {};
+    if (pub) patch.publication = pub;
+    if (approval) patch.approval = approval as ApprovalStatus;
+    if (client) patch.client = client as "current" | "former" | "unknown";
+    if (expMode === "clear") patch.freshnessExceptionUntil = null;
+    else if (expMode === "set") patch.freshnessExceptionUntil = new Date(expDate).toISOString();
+    if (addFlagToggle) patch.addFlag = { color: flagColor, label: flagLabel.trim() };
+    if (Object.keys(patch).length === 0) {
+      onClose();
+      return;
+    }
+    onApply(patch);
+  };
+
+  const dirty = !!pub || !!approval || !!client || expMode !== "leave" || addFlagToggle;
+
+  return createPortal(
+    <>
+      <div className="bsm-backdrop" onClick={onClose}/>
+      <div className="bsm-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bsm-head">
+          <div className="bsm-title">Set status</div>
+          <div className="bsm-sub">Apply to {count} selected {count === 1 ? "asset" : "assets"}. Fields left as &quot;Leave unchanged&quot; aren&apos;t touched.</div>
+        </div>
+        <div className="bsm-body">
+          <div className="bsm-fld">
+            <label>Publication</label>
+            <select className="cl-select" value={pub} onChange={(e) => setPub(e.target.value as "" | "published" | "draft" | "archived")}>
+              <option value="">Leave unchanged</option>
+              <option value="published">Published</option>
+              <option value="draft">Draft</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+          <div className="bsm-fld">
+            <label>Approval status</label>
+            <select className="cl-select" value={approval} onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}>
+              <option value="">Leave unchanged</option>
+              <option value="unset">Not recorded</option>
+              <option value="pending">Pending approval</option>
+              <option value="needs_edits">Needs edits</option>
+              <option value="approved">Approved</option>
+              <option value="denied">Denied</option>
+            </select>
+          </div>
+          <div className="bsm-fld">
+            <label>Still a client?</label>
+            <select className="cl-select" value={client} onChange={(e) => setClient(e.target.value as "" | "current" | "former" | "unknown")}>
+              <option value="">Leave unchanged</option>
+              <option value="unknown">Unspecified</option>
+              <option value="current">Yes</option>
+              <option value="former">No</option>
+            </select>
+          </div>
+          <div className="bsm-fld">
+            <label>Expiration</label>
+            <select className="cl-select" value={expMode} onChange={(e) => setExpMode(e.target.value as "leave" | "clear" | "set")}>
+              <option value="leave">Leave unchanged</option>
+              <option value="clear">Clear (no expiration)</option>
+              <option value="set">Set expiration date…</option>
+            </select>
+            {expMode === "set" && (
+              <input
+                className="cl-exception-date"
+                type="date"
+                value={expDate}
+                onChange={(e) => setExpDate(e.target.value)}
+                style={{ marginTop: 6 }}
+              />
+            )}
+          </div>
+          <div className="bsm-fld">
+            <label>
+              <input type="checkbox" checked={addFlagToggle} onChange={(e) => setAddFlagToggle(e.target.checked)} style={{ marginRight: 6 }}/>
+              Add a custom flag to all selected
+            </label>
+            {addFlagToggle && (
+              <div className="bsm-flag-form">
+                <div className="cf-severity-row">
+                  <label className="cl-radio">
+                    <input type="radio" name="bsm-color" checked={flagColor === "yellow"} onChange={() => setFlagColor("yellow")}/>
+                    <span className="cl-circle yellow"/> Yellow (review)
+                  </label>
+                  <label className="cl-radio">
+                    <input type="radio" name="bsm-color" checked={flagColor === "red"} onChange={() => setFlagColor("red")}/>
+                    <span className="cl-circle red"/> Red (do not share)
+                  </label>
+                </div>
+                <input
+                  className="cl-input"
+                  placeholder="Optional label"
+                  value={flagLabel}
+                  onChange={(e) => setFlagLabel(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="bsm-foot">
+          <button className="cl-mini-btn primary" onClick={handleApply} disabled={!dirty}>Apply to {count}</button>
+          <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </>,
+    document.body
   );
 }
 
@@ -3804,6 +3983,83 @@ export default function App(){
     }
     clearSelection();
   };
+  // Bulk-apply a status patch from the BulkStatusModal. Each field in the
+  // patch is optional; we only touch the fields the admin set in the modal.
+  // Sequential PUTs to keep the writes simple and avoid hammering Supabase
+  // when admins select 50+ rows.
+  const bulkApplyStatus=async(patch: BulkStatusPatch)=>{
+    const ids=Array.from(selectedIds);
+    if(ids.length===0)return;
+    const nowIso=new Date().toISOString();
+    // Build the single-asset shape that updateAssetInline expects, plus
+    // any client-side derived bits (e.g. archivedAt for publication=archived).
+    const buildAssetPatch=(a: Asset): Partial<Asset> => {
+      const p: Partial<Asset> = {};
+      if(patch.publication){
+        p.status=patch.publication;
+        if(patch.publication==="archived"){
+          p.archivedAt=nowIso;
+          p.archivedReason="Bulk archive";
+        } else {
+          p.archivedAt=null;
+          p.archivedReason=null;
+        }
+      }
+      if(patch.approval){
+        p.approvalStatus=patch.approval;
+        p.approvalRecordedAt=nowIso;
+      }
+      if(patch.client){
+        p.clientStatus=patch.client;
+        p.clientStatusSource="manual";
+        p.clientStatusUpdatedAt=nowIso;
+      }
+      if(patch.freshnessExceptionUntil!==undefined){
+        p.freshnessExceptionUntil=patch.freshnessExceptionUntil;
+        if(patch.freshnessExceptionUntil===null){
+          p.freshnessExceptionSetByEmail=null;
+          p.freshnessExceptionSetAt=null;
+        }
+      }
+      if(patch.addFlag){
+        const existing=Array.isArray(a.customFlags)?a.customFlags:[];
+        const next: CustomFlag[]=[
+          ...existing,
+          {
+            id:`cf-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+            label:patch.addFlag.label,
+            color:patch.addFlag.color,
+            note:"",
+            setByEmail:user?.email||"",
+            setAt:nowIso,
+          },
+        ];
+        p.customFlags=next;
+      }
+      return p;
+    };
+    // Optimistic state update
+    setAssets(prev=>prev.map(a=>ids.includes(a.id)?{...a,...buildAssetPatch(a)}:a));
+    setToast(`Updating ${ids.length} ${ids.length===1?"asset":"assets"}…`);
+    let okCount=0;
+    for(const id of ids){
+      const asset=assets.find(a=>a.id===id);
+      if(!asset)continue;
+      const p=buildAssetPatch(asset);
+      try{
+        const r=await fetch("/api/assets",{
+          method:"PUT",
+          headers:{"Content-Type":"application/json",...(await authHeaders())},
+          body:JSON.stringify({id,...p}),
+        });
+        if(r.ok)okCount++;
+      }catch(e){console.error("Bulk apply failed for",id,e);}
+    }
+    setToast(`Updated ${okCount} ${okCount===1?"asset":"assets"}`);
+    setTimeout(()=>setToast(null),2000);
+    clearSelection();
+  };
+
   const bulkMarkVerified=async()=>{
     const ids=Array.from(selectedIds);
     const nowIso=new Date().toISOString();
@@ -4519,6 +4775,7 @@ export default function App(){
             onMarkVerified={bulkMarkVerified}
             onDelete={bulkDelete}
             onClear={clearSelection}
+            onApplyStatus={bulkApplyStatus}
           />
         )}
         <AssetEditPanel
