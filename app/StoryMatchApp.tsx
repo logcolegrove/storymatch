@@ -829,8 +829,12 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bsm-fld > label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;display:flex;align-items:center;}
 .bsm-flag-form{margin-top:6px;padding:8px 10px;background:#fff;border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
 .bsm-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;}
-.bsm-clear-all{color:var(--t3);}
+.bsm-clear-all{color:var(--t3);margin-top:4px;width:100%;}
 .bsm-clear-all:hover{color:var(--red);border-color:var(--red);}
+/* Same style for the per-asset popover's clear-all link, just below the
+   approval dropdown so admins can fully reset a single asset's indicators. */
+.cl-clear-all{color:var(--t3);margin-top:6px;width:100%;}
+.cl-clear-all:hover{color:var(--red);border-color:var(--red);}
 
 /* ── 3-DOT MENU ── */
 .dots-btn{background:none;border:none;color:var(--t3);cursor:pointer;padding:5px 7px;border-radius:5px;display:grid;place-items:center;}
@@ -1440,6 +1444,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
                 <option value="approved">Approved</option>
                 <option value="denied">Denied</option>
               </select>
+              <button className="cl-mini-btn bsm-clear-all" onClick={handleClearAll}>Clear all status indicators</button>
             </div>
             <div className="bsm-fld">
               <label>Still a client?</label>
@@ -1497,8 +1502,6 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
           )}
         </div>
         <div className="bsm-foot">
-          <button className="cl-mini-btn bsm-clear-all" onClick={handleClearAll}>Clear all status indicators</button>
-          <div style={{ flex: 1 }}/>
           <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
           <button className="cl-mini-btn primary" onClick={handleApply} disabled={!dirty}>Apply to {count}</button>
         </div>
@@ -1540,6 +1543,11 @@ type ClearedLevel = "green" | "yellow" | "red" | "unset";
 //   • green  → "Green flag: cleared for use"
 //   • yellow → "Flagged for review: <reasons>"
 //   • red    → "Red flag: <reasons>"
+//
+// When approval is the positive "Approved" state but there are still yellow/
+// red flags from other signals, prefix the reason text with "Approved but"
+// so admins understand the asset is approved AND has a separate concern,
+// instead of being confused by a yellow/red dot after picking Approved.
 function clearedTooltip(level: ClearedLevel, reasons: ClearedReason[]): string {
   if (level === "unset") return "Click to set status";
   if (level === "green") return "Green flag: cleared for use";
@@ -1550,8 +1558,11 @@ function clearedTooltip(level: ClearedLevel, reasons: ClearedReason[]): string {
   if (items.length === 1) joined = items[0];
   else if (items.length === 2) joined = `${items[0]} and ${items[1]}`;
   else if (items.length > 2) joined = `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-  if (level === "yellow") return joined ? `Flagged for review: ${joined}` : "Flagged for review";
-  return joined ? `Red flag: ${joined}` : "Red flag";
+  // Approved-but prefix
+  const isApproved = reasons.some(r => r.signal === "approval" && r.level === "green" && !r.hideDot);
+  const reasonText = joined ? (isApproved ? `Approved but ${joined.charAt(0).toLowerCase() + joined.slice(1)}` : joined) : "";
+  if (level === "yellow") return reasonText ? `Flagged for review: ${reasonText}` : "Flagged for review";
+  return reasonText ? `Red flag: ${reasonText}` : "Red flag";
 }
 
 interface ClearedReason {
@@ -1772,13 +1783,19 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
 
   // Visible inline text next to the dot — just the joined reasons (no
   // "Flagged for review:" prefix, since the dot color already conveys severity).
+  // Prefixes with "Approved but…" when approval is positive so admins
+  // understand the asset is approved AND has a separate concern.
   const flaggedReasons = cleared.reasons
     .filter(r => r.level === cleared.level && (r.level === "yellow" || r.level === "red"))
     .map(r => r.shortLabel || r.label);
-  const flaggedText = flaggedReasons.length === 0 ? ""
+  const isApproved = cleared.reasons.some(r => r.signal === "approval" && r.level === "green" && !r.hideDot);
+  const joined = flaggedReasons.length === 0 ? ""
     : flaggedReasons.length === 1 ? flaggedReasons[0]
     : flaggedReasons.length === 2 ? `${flaggedReasons[0]} and ${flaggedReasons[1]}`
     : `${flaggedReasons.slice(0, -1).join(", ")}, and ${flaggedReasons[flaggedReasons.length - 1]}`;
+  const flaggedText = joined && isApproved
+    ? `Approved but ${joined.charAt(0).toLowerCase() + joined.slice(1)}`
+    : joined;
 
   const title = clearedTooltip(cleared.level, cleared.reasons);
 
@@ -1943,6 +1960,18 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           <option value="approved">Approved</option>
           <option value="denied">Denied</option>
         </select>
+        <button
+          className="cl-mini-btn cl-clear-all"
+          onClick={() => {
+            if (!confirm("Clear all status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
+            // Use the same clearAll-style reset, applied to the single asset.
+            // Server stamps timestamps as needed via /api/assets PUT.
+            onSetApproval(asset, { status: "unset" as ApprovalStatus, note: "" });
+            onSetClientStatus(asset, "unknown");
+            onSetCustomFlags(asset, []);
+            onSetFreshnessException(asset, null);
+          }}
+        >Clear all status indicators</button>
         <textarea
           className="cl-textarea"
           placeholder="Paste the email thread, or write a note about how approval was obtained…"
@@ -3912,7 +3941,10 @@ export default function App(){
     const update: Partial<Asset> = {};
     if(patch.status!==undefined){
       update.approvalStatus=patch.status;
-      update.approvalRecordedAt=new Date().toISOString();
+      // Reverting to "Not recorded" should clear the timestamp too — otherwise
+      // the popover shows "recorded 5m ago" next to a status that says
+      // not-recorded, which reads contradictory.
+      update.approvalRecordedAt=patch.status==="unset"?null:new Date().toISOString();
     }
     if(patch.note!==undefined) update.approvalNote=patch.note;
     await updateAssetInline(asset.id,update,patch.status?`Approval: ${patch.status}`:"Note saved");
@@ -4109,7 +4141,17 @@ export default function App(){
       // Clear-all action wipes every status indicator field back to default.
       // Publication is intentionally untouched — admin can change it via
       // the regular publication dropdown if desired.
+      // Freshness: when an org rule is active, "clear" must override it
+      // (set never-flag sentinel) so admins don't see lingering yellow
+      // "Content expired" flags after clearing. Without an org rule, null
+      // works because there's nothing to override.
       if(patch.clearAll){
+        const hasOrgFreshnessRule = !!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate);
+        const neverIso = (() => {
+          const d = new Date();
+          d.setFullYear(d.getFullYear() + 100);
+          return d.toISOString();
+        })();
         return {
           approvalStatus:"unset",
           approvalRecordedAt:null,
@@ -4117,9 +4159,9 @@ export default function App(){
           clientStatus:"current",
           clientStatusSource:"unset",
           clientStatusUpdatedAt:null,
-          freshnessExceptionUntil:null,
-          freshnessExceptionSetByEmail:null,
-          freshnessExceptionSetAt:null,
+          freshnessExceptionUntil:hasOrgFreshnessRule?neverIso:null,
+          freshnessExceptionSetByEmail:hasOrgFreshnessRule?(user?.email||null):null,
+          freshnessExceptionSetAt:hasOrgFreshnessRule?nowIso:null,
           customFlags:[],
         };
       }
@@ -4136,7 +4178,8 @@ export default function App(){
       }
       if(patch.approval){
         p.approvalStatus=patch.approval;
-        p.approvalRecordedAt=nowIso;
+        // Reverting to Not recorded clears the timestamp; otherwise stamp now.
+        p.approvalRecordedAt=patch.approval==="unset"?null:nowIso;
       }
       if(patch.client){
         p.clientStatus=patch.client;
