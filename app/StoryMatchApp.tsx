@@ -731,13 +731,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    options by default). */
 .cl-select.placeholder{color:var(--t4);}
 .cl-select.placeholder option,.cl-select option,.lv-pub-select option,.rules-select option,.aep-sel option{color:var(--t1);}
-/* Primary/secondary section visual hierarchy in the popover.
-   Approval = primary (the main thing admins come here to set).
-   Client + Freshness = secondary (lighter weight, smaller). */
-.cl-section-primary .cl-section-title{font-size:13.5px;font-weight:700;}
+/* Section title styling — same weight/size across all sections so the
+   popover reads as a list of equally-weighted concerns. The visual
+   hierarchy comes from approval being expanded by default + having a
+   slightly larger select; secondary sections still use the smaller select. */
+.cl-section-title{font-size:13.5px;font-weight:700;color:var(--t1);}
 .cl-section-primary .cl-select-primary{font-size:13px;padding:8px 10px;}
 .cl-section-secondary{padding-top:10px;}
-.cl-section-secondary .cl-section-title{font-size:11.5px;font-weight:600;color:var(--t2);}
 .cl-section-secondary .cl-select{font-size:11.5px;padding:5px 7px;}
 .cl-section-secondary .cl-section{padding-top:0;}
 /* Hollow circle for "unset" cleared state — clearer "clickable" affordance
@@ -757,6 +757,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cf-row-body{flex:1;min-width:0;}
 .cf-row-label{font-size:12px;font-weight:600;color:var(--t1);}
 .cf-row-note{font-size:11px;color:var(--t3);line-height:1.4;margin-top:2px;}
+.cf-row-meta{font-size:10.5px;color:var(--t4);margin-top:3px;}
 .cf-row-actions{display:flex;gap:4px;flex-shrink:0;}
 .cf-form{margin-top:8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
 .cf-severity-row{display:flex;flex-direction:column;gap:4px;}
@@ -1598,7 +1599,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
       <div className="cl-section cl-section-primary">
         <div className="cl-section-head">
           <span className={`cl-circle ${reasonFor("approval").level}`}/>
-          <span className="cl-section-title">Approval</span>
+          <span className="cl-section-title">Approval status</span>
           {asset.approvalRecordedAt && (
             <span className="cl-section-meta">recorded {timeAgoShort(asset.approvalRecordedAt)}</span>
           )}
@@ -1647,8 +1648,11 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
         <div className="cl-section-head">
           <span className={`cl-circle ${reasonFor("client").level}`}/>
           <span className="cl-section-title">Still a client?</span>
-          {asset.clientStatusSource && asset.clientStatusSource !== "unset" && (
-            <span className="cl-section-meta">via {asset.clientStatusSource}</span>
+          {asset.clientStatusUpdatedAt && asset.clientStatusSource && asset.clientStatusSource !== "unset" && (
+            <span className="cl-section-meta">
+              recorded {asset.clientStatusSource === "manual" ? "manually" : `via ${asset.clientStatusSource}`}
+              {" "}{timeAgoShort(asset.clientStatusUpdatedAt)}
+            </span>
           )}
         </div>
         <select
@@ -1851,6 +1855,9 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
       <div className="cl-section-head">
         {!hideDot && <span className={`cl-circle ${dotLevel}`}/>}
         <span className="cl-section-title">Freshness</span>
+        {asset.freshnessExceptionSetAt && (
+          <span className="cl-section-meta">recorded {timeAgoShort(asset.freshnessExceptionSetAt)}</span>
+        )}
       </div>
 
       {/* Publish date sits at the top */}
@@ -1988,8 +1995,9 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
     setEditingId(null);
   };
   const save = () => {
+    // Label is now optional — admins can flag with just severity + note,
+    // or even just severity. Severity is the only required input.
     const label = draftLabel.trim();
-    if (!label) return;
     const next: CustomFlag[] = [...flags];
     if (editingId) {
       const i = next.findIndex(f => f.id === editingId);
@@ -2002,9 +2010,6 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
         label,
         color: draftColor,
         note: draftNote.trim(),
-        // setBy/setAt — server doesn't stamp these for the array; we set
-        // client-side. Imperfect (a malicious client could spoof) but this
-        // is admin-only governance UI, not a security boundary.
         setByEmail: "",
         setAt: new Date().toISOString(),
       });
@@ -2032,8 +2037,14 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
         <div key={f.id} className="cf-row">
           <span className={`cl-circle ${f.color}`}/>
           <div className="cf-row-body">
-            <div className="cf-row-label">{f.label}</div>
+            {f.label && <div className="cf-row-label">{f.label}</div>}
             {f.note && <div className="cf-row-note">{f.note}</div>}
+            {f.setAt && (
+              <div className="cf-row-meta">
+                recorded {f.setByEmail ? <>by <strong>{f.setByEmail}</strong> </> : ""}
+                {timeAgoShort(f.setAt)}
+              </div>
+            )}
           </div>
           <div className="cf-row-actions">
             <button className="cl-mini-btn" onClick={() => startEdit(f)}>Edit</button>
@@ -2046,7 +2057,7 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
         <div className="cf-form">
           <input
             className="cl-input"
-            placeholder="Short label (e.g. Comments must be disabled)"
+            placeholder="Optional label (e.g. Comments must be disabled)"
             value={draftLabel}
             onChange={e => setDraftLabel(e.target.value)}
             autoFocus
@@ -2072,7 +2083,6 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
             <button
               className="cl-mini-btn primary"
               onClick={save}
-              disabled={!draftLabel.trim()}
             >{editingId ? "Save" : "Add flag"}</button>
             <button className="cl-mini-btn" onClick={cancel}>Cancel</button>
           </div>
