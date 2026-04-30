@@ -829,12 +829,28 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bsm-fld > label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;display:flex;align-items:center;}
 .bsm-flag-form{margin-top:6px;padding:8px 10px;background:#fff;border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
 .bsm-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;}
-.bsm-clear-all{color:var(--t3);margin-top:4px;width:100%;}
-.bsm-clear-all:hover{color:var(--red);border-color:var(--red);}
-/* Same style for the per-asset popover's clear-all link, just below the
-   approval dropdown so admins can fully reset a single asset's indicators. */
-.cl-clear-all{color:var(--t3);margin-top:6px;width:100%;}
-.cl-clear-all:hover{color:var(--red);border-color:var(--red);}
+/* Red Clear-all button — visible in both the bulk modal (below status
+   fields, above Cancel/Apply) and the per-asset popover (always visible
+   at the bottom, top-level). Uses red color + outlined border to read as
+   a destructive action that admin should think twice about. */
+.bsm-clear-all-btn,.cl-clear-all{
+  width:100%;
+  padding:8px 14px;
+  border-radius:6px;
+  border:1px solid var(--red);
+  background:#fff;
+  color:var(--red);
+  font-family:var(--font);
+  font-size:12px;
+  font-weight:600;
+  cursor:pointer;
+  margin-top:8px;
+  transition:all .12s;
+}
+.bsm-clear-all-btn:hover,.cl-clear-all:hover{
+  background:var(--red);
+  color:#fff;
+}
 
 /* ── 3-DOT MENU ── */
 .dots-btn{background:none;border:none;color:var(--t3);cursor:pointer;padding:5px 7px;border-radius:5px;display:grid;place-items:center;}
@@ -1407,18 +1423,12 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
                 const wasCollapsed = !indicatorExpanded;
                 setIndicatorExpanded(true);
                 // Pre-select Approved on first expansion (most common bulk
-                // action) so admin only needs to click Apply. Auto-open the
-                // dropdown options to surface the choice.
+                // action) so admin only needs to click Apply. Picker
+                // intentionally NOT auto-opened — felt overwhelming in the
+                // modal context. Admin opens the dropdown manually if
+                // they want a different value.
                 if (wasCollapsed && approval === "") {
                   setApproval("approved");
-                  setTimeout(() => {
-                    const sel = approvalSelectRef.current;
-                    if (sel && typeof sel.showPicker === "function") {
-                      try { sel.showPicker(); } catch { /* showPicker not supported / blocked */ }
-                    } else {
-                      sel?.focus();
-                    }
-                  }, 50);
                 }
               }}
             >
@@ -1444,7 +1454,6 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
                 <option value="approved">Approved</option>
                 <option value="denied">Denied</option>
               </select>
-              <button className="cl-mini-btn bsm-clear-all" onClick={handleClearAll}>Clear all status indicators</button>
             </div>
             <div className="bsm-fld">
               <label>Still a client?</label>
@@ -1499,6 +1508,9 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
               )}
             </div>
           </div>
+          )}
+          {indicatorExpanded && (
+            <button className="bsm-clear-all-btn" onClick={handleClearAll}>Clear all status indicators</button>
           )}
         </div>
         <div className="bsm-foot">
@@ -1840,14 +1852,19 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
   const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
-  // When the popover opens for an asset whose approval is "unset", auto-open
-  // the approval dropdown options so admin can pick Approved (the most
-  // common action) in one click. Browser security limits this — showPicker
-  // only works in response to a user gesture, and the popover open is
-  // triggered by a user click so it usually qualifies.
+  // Auto-open the approval dropdown ONLY when the asset is genuinely fresh
+  // — nothing set, no flags fired by org rules. If anything is set or
+  // flagged, opening the picker on top of an already-flagged asset reads
+  // as buggy ("why is this opening a picker on a yellow asset?"). When in
+  // doubt, leave it closed.
   const approvalUnset = !asset.approvalStatus || asset.approvalStatus === "unset";
+  const clientUnset = !asset.clientStatusSource || asset.clientStatusSource === "unset";
+  const freshnessExceptionUnset = !asset.freshnessExceptionUntil;
+  const noCustomFlags = !Array.isArray(asset.customFlags) || asset.customFlags.length === 0;
+  const noFlagsFiring = !reasons.some(r => r.level === "yellow" || r.level === "red");
+  const trulyFresh = approvalUnset && clientUnset && freshnessExceptionUnset && noCustomFlags && noFlagsFiring;
   useEffect(() => {
-    if (!approvalUnset) return;
+    if (!trulyFresh) return;
     const t = setTimeout(() => {
       const sel = approvalSelectRef.current;
       if (!sel) return;
@@ -1960,18 +1977,6 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           <option value="approved">Approved</option>
           <option value="denied">Denied</option>
         </select>
-        <button
-          className="cl-mini-btn cl-clear-all"
-          onClick={() => {
-            if (!confirm("Clear all status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
-            // Use the same clearAll-style reset, applied to the single asset.
-            // Server stamps timestamps as needed via /api/assets PUT.
-            onSetApproval(asset, { status: "unset" as ApprovalStatus, note: "" });
-            onSetClientStatus(asset, "unknown");
-            onSetCustomFlags(asset, []);
-            onSetFreshnessException(asset, null);
-          }}
-        >Clear all status indicators</button>
         <textarea
           className="cl-textarea"
           placeholder="Paste the email thread, or write a note about how approval was obtained…"
@@ -2045,6 +2050,19 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
       />
       </>
       )}
+
+      {/* Clear all — always visible at popover bottom (top-level, not behind
+          advanced disclosure). Resets every status indicator on this asset. */}
+      <button
+        className="cl-clear-all"
+        onClick={() => {
+          if (!confirm("Clear all status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
+          onSetApproval(asset, { status: "unset" as ApprovalStatus, note: "" });
+          onSetClientStatus(asset, "unknown");
+          onSetCustomFlags(asset, []);
+          onSetFreshnessException(asset, null);
+        }}
+      >Clear all status indicators</button>
     </div>,
     document.body
   );
