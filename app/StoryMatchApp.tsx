@@ -603,8 +603,16 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 
 /* ── LIST VIEW ── */
 .lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;}
-.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 130px 130px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;}
-.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 130px 130px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;}
+/* Six columns become five: thumb | title | vertical | merged-status | actions.
+   The merged-status column groups Cleared (now first) and Publication into a
+   single visual unit so admins read them as one connected status block. */
+.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 260px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;}
+.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 260px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;}
+/* Merged status cell — Cleared on the left (primary, content-sized),
+   Publication select on the right (fills remaining space). The single
+   "Status" column header sits above both, so they read as one unit. */
+.lv-status{display:flex;align-items:center;gap:10px;}
+.lv-status > div:last-child{flex:1;min-width:0;}
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
 .lv-row.archived,.lv-row.draft{opacity:.65;}
@@ -693,6 +701,24 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-rules-link{display:inline-block;margin-top:8px;font-size:11px;color:var(--accent);text-decoration:none;font-weight:600;}
 .cl-rules-link:hover{text-decoration:underline;}
 .cl-input,.cl-select,.cl-textarea{font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);width:100%;margin-top:5px;box-sizing:border-box;}
+/* Custom chevron applied uniformly to all admin selects across the app
+   (cleared popover, list view publication, rules panel, asset edit panel)
+   so the dropdown affordance is visually consistent everywhere. */
+.cl-select,.lv-pub-select,.rules-select,.aep-sel{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1 1 5 5 9 1'/></svg>");background-repeat:no-repeat;background-position:right 9px center;padding-right:26px;}
+/* Lighter color when select is showing its default placeholder option */
+.cl-select.placeholder{color:var(--t4);}
+/* Primary/secondary section visual hierarchy in the popover.
+   Approval = primary (the main thing admins come here to set).
+   Client + Freshness = secondary (lighter weight, smaller). */
+.cl-section-primary .cl-section-title{font-size:13.5px;font-weight:700;}
+.cl-section-primary .cl-select-primary{font-size:13px;padding:8px 10px;}
+.cl-section-secondary{padding-top:10px;}
+.cl-section-secondary .cl-section-title{font-size:11.5px;font-weight:600;color:var(--t2);}
+.cl-section-secondary .cl-select{font-size:11.5px;padding:5px 7px;}
+.cl-section-secondary .cl-section{padding-top:0;}
+/* Hollow circle for "unset" cleared state — clearer "clickable" affordance
+   than the previous em-dash. */
+.cl-circle-empty{background:transparent !important;border:1.5px solid var(--border2);}
 .cl-textarea{min-height:64px;resize:vertical;font-family:var(--font);}
 .cl-row-actions{display:flex;gap:6px;margin-top:6px;}
 .cl-mini-btn{font-family:var(--font);font-size:11px;padding:4px 9px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
@@ -1241,11 +1267,12 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   else if (approval === "needs_edits") reasons.push({ signal: "approval", level: "yellow", label: "Needs edits" });
   else reasons.push({ signal: "approval", level: "yellow", label: "Approval not recorded" });
 
-  // Client relationship
-  const cs = (asset.clientStatus || "current") as ClientStatus;
+  // Client relationship — defaults to "unknown" (Unspecified). Admin must
+  // pick Yes (current) or No (former) to clear the yellow signal.
+  const cs = (asset.clientStatus || "unknown") as ClientStatus;
   if (cs === "current") reasons.push({ signal: "client", level: "green", label: "Current client" });
   else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "Former client" });
-  else reasons.push({ signal: "client", level: "yellow", label: "Client status unknown" });
+  else reasons.push({ signal: "client", level: "yellow", label: "Client status unspecified" });
 
   // Freshness — driven by Vimeo publish date + org-level Rule.
   // Two mutually-exclusive rule modes:
@@ -1394,7 +1421,12 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
         title={cleared.level === "unset" ? "Click to set approval & client status" : "Cleared for use: approval, client status, freshness"}
       >
         {cleared.level === "unset" ? (
-          <span className="cl-set-hint">—</span>
+          <>
+            {/* Hollow circle signals "clickable but not yet set" — clearer
+                affordance than the previous em-dash. */}
+            <span className="cl-circle cl-circle-empty"/>
+            <span className="cl-set-hint">Set status</span>
+          </>
         ) : (
           <>
             <span className={`cl-circle ${cleared.level}`}/>
@@ -1490,8 +1522,9 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
     >
       <div className="cl-pop-head">Cleared for use</div>
 
-      {/* Approval section */}
-      <div className="cl-section">
+      {/* Approval section — primary focus. Larger title + select to reflect
+          that this is the main thing admins come here to set. */}
+      <div className="cl-section cl-section-primary">
         <div className="cl-section-head">
           <span className={`cl-circle ${reasonFor("approval").level}`}/>
           <span className="cl-section-title">Approval</span>
@@ -1500,7 +1533,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           )}
         </div>
         <select
-          className="cl-select"
+          className={`cl-select cl-select-primary${(asset.approvalStatus || "unset") === "unset" ? " placeholder" : ""}`}
           value={asset.approvalStatus || "unset"}
           onChange={(e) => onSetApproval(asset, { status: e.target.value as ApprovalStatus })}
         >
@@ -1524,8 +1557,8 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
         )}
       </div>
 
-      {/* Client status section */}
-      <div className="cl-section">
+      {/* Client status section — secondary */}
+      <div className="cl-section cl-section-secondary">
         <div className="cl-section-head">
           <span className={`cl-circle ${reasonFor("client").level}`}/>
           <span className="cl-section-title">Still a client?</span>
@@ -1534,13 +1567,13 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           )}
         </div>
         <select
-          className="cl-select"
-          value={(asset.clientStatus || "current") as string}
+          className={`cl-select${(asset.clientStatus || "unknown") === "unknown" ? " placeholder" : ""}`}
+          value={(asset.clientStatus || "unknown") as string}
           onChange={(e) => onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown")}
         >
+          <option value="unknown">Unspecified</option>
           <option value="current">Yes</option>
           <option value="former">No</option>
-          <option value="unknown">Unknown</option>
         </select>
       </div>
 
@@ -1723,7 +1756,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
   );
 
   return (
-    <div className="cl-section">
+    <div className="cl-section cl-section-secondary">
       <div className="cl-section-head">
         {!hideDot && <span className={`cl-circle ${dotLevel}`}/>}
         <span className="cl-section-title">Freshness</span>
@@ -1843,8 +1876,8 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         <div></div>
         <div>Title</div>
         <div>Vertical</div>
-        <div>Publication</div>
-        <div title="Cleared for use: approval, client status, freshness">Cleared</div>
+        {/* Single Status column groups Cleared (left, primary) + Publication (right) */}
+        <div title="Cleared status + publication">Status</div>
         <div style={{ textAlign: "right" }}>Actions</div>
       </div>
       {assets.map((a) => {
@@ -1881,29 +1914,32 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
             </div>
             <div className="lv-vert">{a.vertical || "—"}</div>
-            <div onClick={(e) => e.stopPropagation()}>
-              <select
-                className="lv-pub-select"
-                value={pubStatus}
-                onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
-              >
-                <option value="published">Published</option>
-                <option value="draft">Draft</option>
-                <option value="archived">Archived</option>
-              </select>
+            {/* Merged Status cell: Cleared (left, primary) + Publication (right) */}
+            <div className="lv-status">
+              <ClearedCell
+                asset={a}
+                cleared={cleared}
+                open={open}
+                onToggle={() => setOpenClearedFor(open ? null : a.id)}
+                onClose={() => setOpenClearedFor(null)}
+                libraryFreshnessRuleActive={!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate)}
+                onSetFreshnessException={onSetFreshnessException}
+                onSetClientStatus={onSetClientStatus}
+                onSetApproval={onSetApproval}
+                onMarkVerified={onMarkVerified}
+              />
+              <div onClick={(e) => e.stopPropagation()}>
+                <select
+                  className="lv-pub-select"
+                  value={pubStatus}
+                  onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
+                >
+                  <option value="published">Published</option>
+                  <option value="draft">Draft</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
             </div>
-            <ClearedCell
-              asset={a}
-              cleared={cleared}
-              open={open}
-              onToggle={() => setOpenClearedFor(open ? null : a.id)}
-              onClose={() => setOpenClearedFor(null)}
-              libraryFreshnessRuleActive={!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate)}
-              onSetFreshnessException={onSetFreshnessException}
-              onSetClientStatus={onSetClientStatus}
-              onSetApproval={onSetApproval}
-              onMarkVerified={onMarkVerified}
-            />
             <div className="lv-actions">
               <DotsMenu items={[
                 { label: "Open", onClick: () => onClick(a) },
