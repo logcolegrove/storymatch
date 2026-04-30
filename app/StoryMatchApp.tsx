@@ -621,15 +621,12 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    single visual unit so admins read them as one connected status block. */
 .lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 260px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;}
 .lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 260px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;}
-/* Merged status cell — Cleared on the left (primary, content-sized),
-   Publication select on the right (fills remaining space). The single
-   "Status" column header sits above the Publication dropdown specifically
-   (shifted right via :nth-child below) since that's the visual anchor. */
+/* Merged status cell — Publication on the left (fills remaining space),
+   Cleared dot/label on the right. The single "Status" column header sits
+   above the Publication dropdown since that's the primary visual anchor. */
 .lv-status{display:flex;align-items:center;gap:10px;}
-.lv-status > div:last-child{flex:1;min-width:0;}
-/* Shift the Status header text rightward so it sits centered over the
-   Publication dropdown. The cleared cell + gap takes ~95px on the left. */
-.lv-head > div:nth-child(4){padding-left:105px;}
+.lv-status > div:first-child{flex:1;min-width:0;}
+.lv-head > div:nth-child(4){padding-left:0;}
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
 .lv-row.archived,.lv-row.draft{opacity:.65;}
@@ -775,7 +772,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Empty Cleared state — no admin engagement yet */
 .cl-trigger.unset{color:var(--t4);}
 .cl-trigger.unset:hover{color:var(--t2);}
-.cl-trigger.unset .cl-set-hint{font-size:11px;}
+.cl-trigger-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;}
 
 /* ── MULTI-SELECT (checkboxes + bulk action bar) ── */
 .lv-row{padding-left:38px;}
@@ -1279,6 +1276,9 @@ interface ClearedReason {
   signal: "approval" | "client" | "freshness" | "custom";
   level: "green" | "yellow" | "red";
   label: string;
+  // Optional: short version of the label suitable for the list view's
+  // tooltip / inline text. Falls back to label if absent.
+  shortLabel?: string;
   // Optional: just the threshold/violation portion of the message, used by
   // the popover to render a short warning under the main info line. Only
   // set on freshness yellow today; could expand to other signals later.
@@ -1308,20 +1308,22 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   // "unset" so the row shows no dot.
   const reasons: ClearedReason[] = [];
 
-  // Approval
+  // Approval — default ("unset") contributes no dot and no aggregate impact
+  // (treated as green so it doesn't drag the cleared signal yellow). When
+  // admin picks any actual status, the appropriate dot color shows.
   const approval = (asset.approvalStatus || "unset") as ApprovalStatus;
-  if (approval === "approved") reasons.push({ signal: "approval", level: "green", label: "Approval received" });
-  else if (approval === "denied") reasons.push({ signal: "approval", level: "red", label: "Approval denied" });
-  else if (approval === "pending") reasons.push({ signal: "approval", level: "yellow", label: "Pending approval" });
-  else if (approval === "needs_edits") reasons.push({ signal: "approval", level: "yellow", label: "Needs edits" });
-  else reasons.push({ signal: "approval", level: "yellow", label: "Approval not recorded" });
+  if (approval === "approved") reasons.push({ signal: "approval", level: "green", label: "Approval received", shortLabel: "Approved" });
+  else if (approval === "denied") reasons.push({ signal: "approval", level: "red", label: "Approval denied", shortLabel: "Approval denied" });
+  else if (approval === "pending") reasons.push({ signal: "approval", level: "yellow", label: "Pending approval", shortLabel: "Pending approval" });
+  else if (approval === "needs_edits") reasons.push({ signal: "approval", level: "yellow", label: "Needs edits", shortLabel: "Needs edits" });
+  else reasons.push({ signal: "approval", level: "green", label: "Approval not recorded", hideDot: true });
 
-  // Client relationship — defaults to "unknown" (Unspecified). Admin must
-  // pick Yes (current) or No (former) to clear the yellow signal.
+  // Client relationship — defaults to "unknown" (Unspecified). The default
+  // contributes no dot and no aggregate impact. Admin picks Yes/No to engage.
   const cs = (asset.clientStatus || "unknown") as ClientStatus;
-  if (cs === "current") reasons.push({ signal: "client", level: "green", label: "Current client" });
-  else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "Former client" });
-  else reasons.push({ signal: "client", level: "yellow", label: "Client status unspecified" });
+  if (cs === "current") reasons.push({ signal: "client", level: "green", label: "Current client", shortLabel: "Active client" });
+  else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "No longer a client", shortLabel: "No longer a client" });
+  else reasons.push({ signal: "client", level: "green", label: "Client status unspecified", hideDot: true });
 
   // Freshness — driven by Vimeo publish date + org-level Rule.
   // Two mutually-exclusive rule modes:
@@ -1391,6 +1393,7 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
         signal: "freshness",
         level: "yellow",
         label: `${ageLabel} — ${thresholdLabel}`,
+        shortLabel: "Content expired",
         flagDetail: `Flagged: ${thresholdLabel}`,
         effectiveExpiration,
       });
@@ -1407,10 +1410,12 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   const customFlags = Array.isArray(asset.customFlags) ? asset.customFlags : [];
   for (const f of customFlags) {
     if (!f) continue;
+    const text = f.label || "Custom flag";
     reasons.push({
       signal: "custom",
       level: f.color,
-      label: f.label || "Custom flag",
+      label: text,
+      shortLabel: text,
     });
   }
 
@@ -1479,25 +1484,42 @@ interface ClearedCellProps {
 }
 function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetCustomFlags, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
+
+  // Combine all yellow/red reason short labels with natural-language join
+  // ("A and B" / "A, B, and C") for display and hover tooltip.
+  const flaggedReasons = cleared.reasons
+    .filter(r => r.level === "yellow" || r.level === "red")
+    .map(r => r.shortLabel || r.label);
+  const joinReasons = (items: string[]): string => {
+    if (items.length === 0) return "";
+    if (items.length === 1) return items[0];
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+  };
+  const flaggedText = joinReasons(flaggedReasons);
+
+  // Hover/title text per level
+  let title: string;
+  if (cleared.level === "unset") title = "Click to set status";
+  else if (cleared.level === "green") title = "Cleared for use";
+  else title = flaggedText || (cleared.level === "yellow" ? "Review" : "Issues");
+
   return (
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
       <div
         ref={triggerRef}
         className={`cl-trigger${open ? " open" : ""}${cleared.level === "unset" ? " unset" : ""}`}
         onClick={onToggle}
-        title={cleared.level === "unset" ? "Click to set approval & client status" : "Cleared for use: approval, client status, freshness"}
+        title={title}
       >
         {cleared.level === "unset" ? (
-          <>
-            {/* Hollow circle signals "clickable but not yet set" — clearer
-                affordance than the previous em-dash. */}
-            <span className="cl-circle cl-circle-empty"/>
-            <span className="cl-set-hint">Set status</span>
-          </>
+          <span className="cl-circle cl-circle-empty"/>
+        ) : cleared.level === "green" ? (
+          <span className="cl-circle green"/>
         ) : (
           <>
             <span className={`cl-circle ${cleared.level}`}/>
-            <span>{cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"}</span>
+            <span className="cl-trigger-text">{flaggedText}</span>
           </>
         )}
       </div>
@@ -1598,7 +1620,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           that this is the main thing admins come here to set. */}
       <div className="cl-section cl-section-primary">
         <div className="cl-section-head">
-          <span className={`cl-circle ${reasonFor("approval").level}`}/>
+          {!reasonFor("approval").hideDot && <span className={`cl-circle ${reasonFor("approval").level}`}/>}
           <span className="cl-section-title">Approval status</span>
           {asset.approvalRecordedAt && (
             <span className="cl-section-meta">recorded {timeAgoShort(asset.approvalRecordedAt)}</span>
@@ -1646,7 +1668,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
       {/* Client status section — secondary */}
       <div className="cl-section cl-section-secondary">
         <div className="cl-section-head">
-          <span className={`cl-circle ${reasonFor("client").level}`}/>
+          {!reasonFor("client").hideDot && <span className={`cl-circle ${reasonFor("client").level}`}/>}
           <span className="cl-section-title">Still a client?</span>
           {asset.clientStatusUpdatedAt && asset.clientStatusSource && asset.clientStatusSource !== "unset" && (
             <span className="cl-section-meta">
@@ -1974,19 +1996,19 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState("");
   const [draftColor, setDraftColor] = useState<"yellow" | "red">("yellow");
-  const [draftNote, setDraftNote] = useState("");
+  // Note field removed per Logan's spec — label replaces it. We keep the
+  // `note` column in the data shape for backward compat with any flags
+  // already saved with notes, but new flags always set note to "".
 
   const startAdd = () => {
     setDraftLabel("");
     setDraftColor("yellow");
-    setDraftNote("");
     setEditingId(null);
     setAdding(true);
   };
   const startEdit = (f: CustomFlag) => {
     setDraftLabel(f.label);
     setDraftColor(f.color);
-    setDraftNote(f.note);
     setEditingId(f.id);
     setAdding(false);
   };
@@ -2002,14 +2024,16 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
     if (editingId) {
       const i = next.findIndex(f => f.id === editingId);
       if (i >= 0) {
-        next[i] = { ...next[i], label, color: draftColor, note: draftNote.trim() };
+        // Edit preserves any pre-existing note (backward compat for flags
+        // created before the note field was removed).
+        next[i] = { ...next[i], label, color: draftColor };
       }
     } else {
       next.push({
         id: `cf-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         label,
         color: draftColor,
-        note: draftNote.trim(),
+        note: "",
         setByEmail: "",
         setAt: new Date().toISOString(),
       });
@@ -2055,13 +2079,8 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
 
       {showForm && (
         <div className="cf-form">
-          <input
-            className="cl-input"
-            placeholder="Optional label (e.g. Comments must be disabled)"
-            value={draftLabel}
-            onChange={e => setDraftLabel(e.target.value)}
-            autoFocus
-          />
+          {/* Severity first — required input. Label below is optional and
+              replaces the old note field; one text box, not two. */}
           <div className="cf-severity-row">
             <label className="cl-radio">
               <input type="radio" name={`cf-${asset.id}`} checked={draftColor === "yellow"} onChange={() => setDraftColor("yellow")}/>
@@ -2072,12 +2091,12 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
               <span className={`cl-circle red`}/> Red (do not share)
             </label>
           </div>
-          <textarea
-            className="cl-textarea"
-            placeholder="Note / instructions (optional)"
-            value={draftNote}
-            onChange={e => setDraftNote(e.target.value)}
-            rows={3}
+          <input
+            className="cl-input"
+            placeholder="Optional label"
+            value={draftLabel}
+            onChange={e => setDraftLabel(e.target.value)}
+            autoFocus
           />
           <div className="cf-form-actions">
             <button
@@ -2148,8 +2167,19 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
             </div>
             <div className="lv-vert">{a.vertical || "—"}</div>
-            {/* Merged Status cell: Cleared (left, primary) + Publication (right) */}
+            {/* Merged Status cell: Publication (left) + Cleared (right) */}
             <div className="lv-status">
+              <div onClick={(e) => e.stopPropagation()}>
+                <select
+                  className="lv-pub-select"
+                  value={pubStatus}
+                  onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
+                >
+                  <option value="published">Published</option>
+                  <option value="draft">Draft</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
               <ClearedCell
                 asset={a}
                 cleared={cleared}
@@ -2163,17 +2193,6 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 onSetApproval={onSetApproval}
                 onMarkVerified={onMarkVerified}
               />
-              <div onClick={(e) => e.stopPropagation()}>
-                <select
-                  className="lv-pub-select"
-                  value={pubStatus}
-                  onChange={(e) => onSetPublicationStatus(a, e.target.value as "published" | "draft" | "archived")}
-                >
-                  <option value="published">Published</option>
-                  <option value="draft">Draft</option>
-                  <option value="archived">Archived</option>
-                </select>
-              </div>
             </div>
             <div className="lv-actions">
               <DotsMenu items={[
