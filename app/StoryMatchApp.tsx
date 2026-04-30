@@ -615,17 +615,22 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lib-count{font-family:var(--font);font-size:12.5px;color:var(--t3);padding-left:14px;border-left:1px solid var(--border);}
 
 /* ── LIST VIEW ── */
-.lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;}
-/* Six columns become five: thumb | title | vertical | merged-status | actions.
-   The merged-status column groups Cleared (now first) and Publication into a
-   single visual unit so admins read them as one connected status block. */
-.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 260px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;}
-.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) 1fr 260px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;}
-/* Merged status cell — Publication on the left (fills remaining space),
-   Cleared dot/label on the right. The single "Status" column header sits
-   above the Publication dropdown since that's the primary visual anchor. */
-.lv-status{display:flex;align-items:center;gap:10px;}
-.lv-status > div:first-child{flex:1;min-width:0;}
+/* Allow horizontal scroll instead of squishing rows when the viewport gets
+   narrow. Rows have a min-width below so columns stay readable. */
+.lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;overflow-x:auto;}
+/* Five columns: thumb | title | vertical | merged-status | actions.
+   The merged-status column groups Publication + Cleared into one block.
+   min-width on both head + row prevents horizontal squish — when the
+   container is too narrow, the parent .lv scrolls instead of crushing. */
+.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) minmax(120px,1fr) 240px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:880px;}
+.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) minmax(120px,1fr) 240px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:880px;}
+/* Merged status cell — Publication on the left (content-sized, only as
+   wide as its longest option), Cleared dot/text on the right (takes
+   remaining space). Both content-sized prevents inconsistent dropdown
+   widths between rows. */
+.lv-status{display:flex;align-items:center;gap:12px;}
+.lv-status > div:first-child{flex:0 0 auto;}
+.lv-status > .cl-cell{flex:1;min-width:0;}
 .lv-head > div:nth-child(4){padding-left:0;}
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
@@ -637,7 +642,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.lv-pub-select{font-family:var(--font);font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);cursor:pointer;width:100%;}
+.lv-pub-select{font-family:var(--font);font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);cursor:pointer;width:auto;}
 .lv-pub-select:hover{background:var(--bg2);}
 .lv-actions{display:flex;gap:5px;justify-content:flex-end;}
 .lv-act-btn{font-family:var(--font);font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
@@ -1031,7 +1036,7 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
                 type="button"
                 className={`vdot vdot-btn cl-${cleared.level}`}
                 onClick={(e) => { e.stopPropagation(); setClearedOpen(o => !o); }}
-                title={`Cleared status: ${cleared.level === "green" ? "Cleared" : cleared.level === "yellow" ? "Review" : "Issues"} — click for details`}
+                title={clearedTooltip(cleared.level, cleared.reasons)}
               />
             )}
             {asset.company||"—"}
@@ -1272,6 +1277,26 @@ interface ListViewProps {
 // only appears once an admin records approval or actively sets client status,
 // because that's when the lifecycle data is meaningful enough to display.
 type ClearedLevel = "green" | "yellow" | "red" | "unset";
+// Shared helper: build the hover/title message for the Cleared signal so
+// list view and grid view show the same wording.
+//   • unset  → "Click to set status"
+//   • green  → "Green flag: cleared for use"
+//   • yellow → "Flagged for review: <reasons>"
+//   • red    → "Red flag: <reasons>"
+function clearedTooltip(level: ClearedLevel, reasons: ClearedReason[]): string {
+  if (level === "unset") return "Click to set status";
+  if (level === "green") return "Green flag: cleared for use";
+  const items = reasons
+    .filter(r => r.level === level)
+    .map(r => r.shortLabel || r.label);
+  let joined = "";
+  if (items.length === 1) joined = items[0];
+  else if (items.length === 2) joined = `${items[0]} and ${items[1]}`;
+  else if (items.length > 2) joined = `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+  if (level === "yellow") return joined ? `Flagged for review: ${joined}` : "Flagged for review";
+  return joined ? `Red flag: ${joined}` : "Red flag";
+}
+
 interface ClearedReason {
   signal: "approval" | "client" | "freshness" | "custom";
   level: "green" | "yellow" | "red";
@@ -1485,24 +1510,17 @@ interface ClearedCellProps {
 function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetCustomFlags, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
 
-  // Combine all yellow/red reason short labels with natural-language join
-  // ("A and B" / "A, B, and C") for display and hover tooltip.
+  // Visible inline text next to the dot — just the joined reasons (no
+  // "Flagged for review:" prefix, since the dot color already conveys severity).
   const flaggedReasons = cleared.reasons
-    .filter(r => r.level === "yellow" || r.level === "red")
+    .filter(r => r.level === cleared.level && (r.level === "yellow" || r.level === "red"))
     .map(r => r.shortLabel || r.label);
-  const joinReasons = (items: string[]): string => {
-    if (items.length === 0) return "";
-    if (items.length === 1) return items[0];
-    if (items.length === 2) return `${items[0]} and ${items[1]}`;
-    return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-  };
-  const flaggedText = joinReasons(flaggedReasons);
+  const flaggedText = flaggedReasons.length === 0 ? ""
+    : flaggedReasons.length === 1 ? flaggedReasons[0]
+    : flaggedReasons.length === 2 ? `${flaggedReasons[0]} and ${flaggedReasons[1]}`
+    : `${flaggedReasons.slice(0, -1).join(", ")}, and ${flaggedReasons[flaggedReasons.length - 1]}`;
 
-  // Hover/title text per level
-  let title: string;
-  if (cleared.level === "unset") title = "Click to set status";
-  else if (cleared.level === "green") title = "Cleared for use";
-  else title = flaggedText || (cleared.level === "yellow" ? "Review" : "Issues");
+  const title = clearedTooltip(cleared.level, cleared.reasons);
 
   return (
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
