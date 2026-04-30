@@ -127,9 +127,20 @@ interface CustomFlag {
 //   • freshnessWarnAfterMonths — rolling, "flag if older than X months"
 //   • freshnessWarnBeforeDate  — fixed cutoff (YYYY-MM-DD), "flag if before X"
 // At most one is non-null at any time (server enforces).
+interface PublicationRule {
+  action: "none" | "draft" | "archive";
+  auto_revert: boolean;
+}
 interface OrgSettings {
   freshnessWarnAfterMonths: number | null;
   freshnessWarnBeforeDate: string | null;
+  // Approval-required gate — when true, only approval=approved assets
+  // can be in published state.
+  approvalRequired: boolean;
+  // Default approval status for NEW imports (existing assets unchanged).
+  defaultApprovalStatus: string;
+  // Trigger → action map for publication state automation.
+  publicationRules: Record<string, PublicationRule>;
 }
 
 interface Source {
@@ -3051,9 +3062,160 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
             >Cancel</button>
           </div>
         )}
+
+        {/* Expiration trigger → action mapping. When asset becomes flagged
+            as expired, the chosen action fires automatically on next sync
+            (manual or daily cron, depending on auto-sync setting). */}
+        {mode !== "off" && (
+          <PublicationRuleControl
+            label="When an asset is flagged as expired"
+            ruleKey="expiration"
+            settings={settings}
+            onSave={onSave}
+          />
+        )}
       </div>
 
-      {/* Future rules render here */}
+      {/* ─── Approval section ─── */}
+      <div className="rules-section">
+        <div className="rules-section-head">
+          <div className="rules-section-title">Approval</div>
+          <div className="rules-section-help">
+            Configure how approval status drives publication. Defaults apply
+            to new imports; existing assets are unchanged.
+          </div>
+        </div>
+
+        <ApprovalRequiredToggle settings={settings} onSave={onSave}/>
+        <DefaultApprovalSelect settings={settings} onSave={onSave}/>
+
+        <PublicationRuleControl
+          label="When approval is set to Needs edits"
+          ruleKey="approval_needs_edits"
+          settings={settings}
+          onSave={onSave}
+        />
+        <PublicationRuleControl
+          label="When approval is set to Denied"
+          ruleKey="approval_denied"
+          settings={settings}
+          onSave={onSave}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Sub-components for individual Rules panel controls ────────────────
+
+function ApprovalRequiredToggle({ settings, onSave }: { settings: OrgSettings; onSave: (next: OrgSettings) => Promise<void> | void }) {
+  const [draft, setDraft] = useState(settings.approvalRequired);
+  useEffect(() => { setDraft(settings.approvalRequired); }, [settings.approvalRequired]);
+  const dirty = draft !== settings.approvalRequired;
+  return (
+    <div className="rules-row" style={{ marginTop: 14 }}>
+      <label className="rules-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="checkbox"
+          checked={draft}
+          onChange={(e) => setDraft(e.target.checked)}
+        />
+        Approval required to publish
+      </label>
+      <div className="rules-mode-help">
+        When on, an asset can only be in <strong>Published</strong> state if its
+        approval status is <strong>Approved</strong>. Anything else is auto-drafted.
+      </div>
+      {dirty && (
+        <div className="rules-actions">
+          <button className="rules-save" onClick={() => onSave({ ...settings, approvalRequired: draft })}>Save</button>
+          <button className="rules-cancel" onClick={() => setDraft(settings.approvalRequired)}>Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DefaultApprovalSelect({ settings, onSave }: { settings: OrgSettings; onSave: (next: OrgSettings) => Promise<void> | void }) {
+  const [draft, setDraft] = useState(settings.defaultApprovalStatus);
+  useEffect(() => { setDraft(settings.defaultApprovalStatus); }, [settings.defaultApprovalStatus]);
+  const dirty = draft !== settings.defaultApprovalStatus;
+  return (
+    <div className="rules-row" style={{ marginTop: 14 }}>
+      <label className="rules-label">Default approval for new imports</label>
+      <select
+        className="rules-select"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+      >
+        <option value="unset">Blank</option>
+        <option value="pending">Pending approval</option>
+        <option value="needs_edits">Needs edits</option>
+        <option value="approved">Approved</option>
+        <option value="denied">Denied</option>
+      </select>
+      <div className="rules-mode-help">
+        Applied to new assets at import time. Existing assets are not changed.
+      </div>
+      {dirty && (
+        <div className="rules-actions">
+          <button className="rules-save" onClick={() => onSave({ ...settings, defaultApprovalStatus: draft })}>Save</button>
+          <button className="rules-cancel" onClick={() => setDraft(settings.defaultApprovalStatus)}>Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Per-trigger action control. The trigger key (e.g. "expiration",
+// "approval_denied") is fixed; admin picks the action and auto-revert.
+function PublicationRuleControl({ label, ruleKey, settings, onSave }: {
+  label: string;
+  ruleKey: string;
+  settings: OrgSettings;
+  onSave: (next: OrgSettings) => Promise<void> | void;
+}) {
+  const current = settings.publicationRules[ruleKey] || { action: "none", auto_revert: true };
+  const [action, setAction] = useState(current.action);
+  const [autoRevert, setAutoRevert] = useState(current.auto_revert);
+  useEffect(() => {
+    const c = settings.publicationRules[ruleKey] || { action: "none", auto_revert: true };
+    setAction(c.action);
+    setAutoRevert(c.auto_revert);
+  }, [settings.publicationRules, ruleKey]);
+  const dirty = action !== current.action || autoRevert !== current.auto_revert;
+  const save = () => {
+    const nextRules = { ...settings.publicationRules, [ruleKey]: { action, auto_revert: autoRevert } };
+    onSave({ ...settings, publicationRules: nextRules });
+  };
+  return (
+    <div className="rules-row" style={{ marginTop: 14 }}>
+      <label className="rules-label">{label}</label>
+      <select
+        className="rules-select"
+        value={action}
+        onChange={(e) => setAction(e.target.value as "none" | "draft" | "archive")}
+      >
+        <option value="none">No action</option>
+        <option value="draft">Move to draft</option>
+        <option value="archive">Move to archive</option>
+      </select>
+      {action !== "none" && (
+        <label className="rules-mode-help" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={autoRevert}
+            onChange={(e) => setAutoRevert(e.target.checked)}
+          />
+          Auto-revert to Published when the condition no longer applies
+        </label>
+      )}
+      {dirty && (
+        <div className="rules-actions">
+          <button className="rules-save" onClick={save}>Save</button>
+          <button className="rules-cancel" onClick={() => { setAction(current.action); setAutoRevert(current.auto_revert); }}>Cancel</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -3841,7 +4003,13 @@ export default function App(){
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
   // Org-level Rules. Loaded on mount; refreshed when admin saves in Rules panel.
-  const[orgSettings,setOrgSettings]=useState<OrgSettings>({freshnessWarnAfterMonths:null,freshnessWarnBeforeDate:null});
+  const[orgSettings,setOrgSettings]=useState<OrgSettings>({
+    freshnessWarnAfterMonths:null,
+    freshnessWarnBeforeDate:null,
+    approvalRequired:false,
+    defaultApprovalStatus:"unset",
+    publicationRules:{},
+  });
 
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);

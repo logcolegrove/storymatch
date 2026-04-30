@@ -13,6 +13,7 @@
 //   4. Updates source's last_sync metadata
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { applyPublicationRules, getOrgRulesContext, getDefaultApprovalStatus } from "./publication-rules";
 
 // ── Types matching the FE SyncReport ────────────────────────────────────
 // Every item carries `detectedAt` — the ISO timestamp when this entry was
@@ -362,6 +363,10 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
 
   // ── 1. New imports ──
   const nowDate = new Date().toISOString().split("T")[0];
+  // Org may have set a default approval status (e.g. "approved" for orgs
+  // that pre-bless their content). Look it up once so all new assets get
+  // the same default.
+  const defaultApprovalStatus = await getDefaultApprovalStatus(orgId);
   const insertedAssets: { id: string; headline: string }[] = [];
   for (const v of videos) {
     if (existingByUrl.has(v.url)) continue;
@@ -388,6 +393,9 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       thumbnail: v.thumbnail || "",
       // Vimeo's actual publish date — drives the freshness Rule.
       published_at: v.publishedAt || null,
+      // Org-default approval status (typically "unset" but admins can
+      // configure to "approved" if they pre-bless all content by policy).
+      approval_status: defaultApprovalStatus,
       // Snapshot Vimeo's current values so future syncs can tell whether the
       // admin has edited a field locally vs. just hasn't touched it.
       last_synced_title: v.title || "",
@@ -581,6 +589,37 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
     const { error } = await supabaseAdmin.from("assets").update(u.updates).eq("id", u.assetId).eq("org_id", orgId);
     if (error) {
       console.error("[runSourceSync] auto-update failed", { assetId: u.assetId, error: error.message, hint: error.hint, updates: Object.keys(u.updates) });
+    }
+  }
+
+  // ── 3.5. Apply publication rules (expiration trigger fires on sync) ──
+  // After auto-updates are written, re-scan every asset attached to this
+  // source and apply org-level publication rules. This is where the
+  // expiration → draft/archive rule kicks in: when an asset crosses the
+  // org freshness threshold mid-sync, its publication state flips
+  // automatically. Auto-revert on the way back too (if asset gets an
+  // exception that takes it out of the expired state).
+  const orgRules = await getOrgRulesContext(orgId);
+  if (orgRules) {
+    const { data: ruleScan } = await supabaseAdmin
+      .from("assets")
+      .select("id, status, approval_status, published_at, freshness_exception_until, auto_status_by_rule")
+      .in("id", existingAssetIds);
+    if (ruleScan) {
+      for (const a of ruleScan) {
+        try {
+          await applyPublicationRules({
+            id: a.id as string,
+            status: a.status as string,
+            approval_status: (a.approval_status as string | null),
+            published_at: (a.published_at as string | null),
+            freshness_exception_until: (a.freshness_exception_until as string | null),
+            auto_status_by_rule: (a.auto_status_by_rule as string | null),
+          }, orgRules);
+        } catch (e) {
+          console.error("[runSourceSync] publication rule failed", { assetId: a.id, error: (e as Error).message });
+        }
+      }
     }
   }
 

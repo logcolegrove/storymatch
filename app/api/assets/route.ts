@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { applyPublicationRules, getOrgRulesContext, type AssetRuleInput } from "@/lib/publication-rules";
 
 // ───────────────────────────────────────────────────────────
 // Helper: get the current user + their org from the auth header
@@ -80,6 +81,10 @@ type AssetDB = {
   // Per-asset custom flags — admin-defined arbitrary review flags.
   // Each entry: { id, label, color, note, setByEmail, setAt }
   custom_flags: unknown;
+  // Stamp tracking which org rule (if any) auto-set the current status.
+  // Cleared on manual edits. Used by the rule engine to know when to
+  // auto-restore a rule-drafted asset back to published.
+  auto_status_by_rule: string | null;
 };
 
 type AssetFE = {
@@ -183,7 +188,13 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUser
   if (a.outcome !== undefined) o.outcome = a.outcome;
   if (a.assetType !== undefined) o.asset_type = a.assetType;
   if (a.videoUrl !== undefined) o.video_url = a.videoUrl;
-  if (a.status !== undefined) o.status = a.status;
+  if (a.status !== undefined) {
+    o.status = a.status;
+    // Any manual publication change clears the rule-stamp so future
+    // auto-restore doesn't clobber the admin's intent. The rule engine
+    // re-stamps if it fires again after this update.
+    o.auto_status_by_rule = null;
+  }
   if (a.dateCreated !== undefined) o.date_created = a.dateCreated;
   if (a.headline !== undefined) o.headline = a.headline;
   if (a.pullQuote !== undefined) o.pull_quote = a.pullQuote;
@@ -303,6 +314,31 @@ export async function PUT(req: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Fire publication rules — re-evaluates the asset against the org's
+  // configured trigger→action rules and may flip publication state. If
+  // the rule changes anything, refetch to return the post-rule state to
+  // the FE. No-op when no rules apply or already in correct state.
+  const orgCtx = await getOrgRulesContext(ctx.orgId);
+  if (orgCtx && data) {
+    const ruleInput: AssetRuleInput = {
+      id: (data as AssetDB).id,
+      status: (data as AssetDB).status,
+      approval_status: (data as AssetDB).approval_status,
+      published_at: (data as AssetDB).published_at,
+      freshness_exception_until: (data as AssetDB).freshness_exception_until,
+      auto_status_by_rule: (data as AssetDB).auto_status_by_rule,
+    };
+    const result = await applyPublicationRules(ruleInput, orgCtx);
+    if (result.changed) {
+      const { data: final } = await supabaseAdmin
+        .from("assets")
+        .select("*")
+        .eq("id", body.id)
+        .single();
+      if (final) return NextResponse.json(dbToFe(final as AssetDB));
+    }
+  }
   return NextResponse.json(dbToFe(data as AssetDB));
 }
 

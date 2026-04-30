@@ -33,11 +33,25 @@ async function getCurrentUserOrg(req: NextRequest) {
 
 // Camel-case shape returned to the FE. Keep this stable; future Rules add
 // new optional fields here but never remove old ones.
+//
+// publicationRules is a JSONB blob keyed by trigger:
+//   "expiration"           — fires when asset becomes flagged by org expiration rule
+//   "approval_needs_edits" — fires when admin sets approval to needs_edits
+//   "approval_denied"      — fires when admin sets approval to denied
+// Each value: { action: "none" | "draft" | "archive", auto_revert: boolean }
+type PublicationRule = { action: "none" | "draft" | "archive"; auto_revert: boolean };
 type OrgSettingsFE = {
   freshnessWarnAfterMonths: number | null;
-  // ISO date string (YYYY-MM-DD) — fixed-cutoff mode. Mutually exclusive
-  // with freshnessWarnAfterMonths; when one is set the other is null.
   freshnessWarnBeforeDate: string | null;
+  // Approval-required mode: when true, an asset can only be in "published"
+  // if approval_status === "approved". Anything else → forced to draft.
+  approvalRequired: boolean;
+  // Default approval status applied to NEW imports only (existing assets
+  // are unchanged). e.g. an org that pre-approves everything by policy
+  // can set this to "approved" so imports come in cleared.
+  defaultApprovalStatus: string;
+  // Publication rules — trigger → action mappings.
+  publicationRules: Record<string, PublicationRule>;
 };
 
 export async function GET(req: NextRequest) {
@@ -45,13 +59,16 @@ export async function GET(req: NextRequest) {
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { data, error } = await supabaseAdmin
     .from("organizations")
-    .select("freshness_warn_after_months, freshness_warn_before_date")
+    .select("freshness_warn_after_months, freshness_warn_before_date, approval_required, default_approval_status, publication_rules")
     .eq("id", ctx.orgId)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const settings: OrgSettingsFE = {
     freshnessWarnAfterMonths: (data?.freshness_warn_after_months as number | null) ?? null,
     freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
+    approvalRequired: !!data?.approval_required,
+    defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
+    publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
   };
   return NextResponse.json(settings);
 }
@@ -86,7 +103,14 @@ export async function PUT(req: NextRequest) {
   // Build updates object. Enforce mutual exclusion: when admin sets months,
   // clear the date; when admin sets date, clear months. Lets the FE send
   // either field freely without worrying about the other.
-  const updates: { freshness_warn_after_months?: number | null; freshness_warn_before_date?: string | null } = {};
+  type DbUpdates = {
+    freshness_warn_after_months?: number | null;
+    freshness_warn_before_date?: string | null;
+    approval_required?: boolean;
+    default_approval_status?: string;
+    publication_rules?: Record<string, PublicationRule>;
+  };
+  const updates: DbUpdates = {};
   if (body.freshnessWarnAfterMonths !== undefined) {
     updates.freshness_warn_after_months = body.freshnessWarnAfterMonths;
     if (body.freshnessWarnAfterMonths !== null) {
@@ -99,6 +123,25 @@ export async function PUT(req: NextRequest) {
       updates.freshness_warn_after_months = null;
     }
   }
+  if (body.approvalRequired !== undefined) {
+    if (typeof body.approvalRequired !== "boolean") {
+      return NextResponse.json({ error: "approvalRequired must be boolean" }, { status: 400 });
+    }
+    updates.approval_required = body.approvalRequired;
+  }
+  if (body.defaultApprovalStatus !== undefined) {
+    const allowed = ["unset", "pending", "needs_edits", "approved", "denied"];
+    if (typeof body.defaultApprovalStatus !== "string" || !allowed.includes(body.defaultApprovalStatus)) {
+      return NextResponse.json({ error: "defaultApprovalStatus invalid" }, { status: 400 });
+    }
+    updates.default_approval_status = body.defaultApprovalStatus;
+  }
+  if (body.publicationRules !== undefined) {
+    if (typeof body.publicationRules !== "object" || body.publicationRules === null) {
+      return NextResponse.json({ error: "publicationRules must be an object" }, { status: 400 });
+    }
+    updates.publication_rules = body.publicationRules;
+  }
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
@@ -107,12 +150,15 @@ export async function PUT(req: NextRequest) {
     .from("organizations")
     .update(updates)
     .eq("id", ctx.orgId)
-    .select("freshness_warn_after_months, freshness_warn_before_date")
+    .select("freshness_warn_after_months, freshness_warn_before_date, approval_required, default_approval_status, publication_rules")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const settings: OrgSettingsFE = {
     freshnessWarnAfterMonths: (data?.freshness_warn_after_months as number | null) ?? null,
     freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
+    approvalRequired: !!data?.approval_required,
+    defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
+    publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
   };
   return NextResponse.json(settings);
 }
