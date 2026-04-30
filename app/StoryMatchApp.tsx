@@ -816,11 +816,14 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bsm-title{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);}
 .bsm-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
 .bsm-body{flex:1;overflow-y:auto;padding:14px 20px;display:flex;flex-direction:column;gap:14px;}
-/* Top row mirrors the list view: Publication dropdown on the left, status
-   indicator label on the right. */
-.bsm-row-top{display:flex;align-items:flex-end;gap:14px;}
-.bsm-fld-pub{flex:0 0 auto;}
-.bsm-status-label{display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;padding-bottom:8px;}
+/* Top row mirrors the list view: Publication dropdown on the left, the
+   "Approval indicator" trigger on the right. Initial modal view shows
+   only this row — clicking the trigger expands the status fields below. */
+.bsm-row-top{display:flex;align-items:center;gap:14px;}
+.bsm-pub-select{width:auto;flex:0 0 auto;}
+.bsm-indicator-trigger{display:flex;align-items:center;gap:8px;background:none;border:none;padding:6px 10px;border-radius:6px;font-family:var(--font);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;cursor:pointer;transition:all .12s;}
+.bsm-indicator-trigger:hover{background:var(--bg2);color:var(--t1);}
+.bsm-indicator-trigger.open{color:var(--t1);}
 .bsm-status-fields{display:flex;flex-direction:column;gap:14px;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;}
 .bsm-fld{display:flex;flex-direction:column;gap:5px;}
 .bsm-fld > label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;display:flex;align-items:center;}
@@ -1320,6 +1323,11 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
   // Each top-level field: "" means leave unchanged. Specific value = apply.
   const [pub, setPub] = useState<"" | "published" | "draft" | "archived">("");
   const [approval, setApproval] = useState<"" | ApprovalStatus>("");
+  // Status indicator fields are hidden behind "Approval indicator" trigger
+  // until admin clicks it. Most bulk operations are publication-only, so
+  // the modal opens minimal and reveals more on demand.
+  const [indicatorExpanded, setIndicatorExpanded] = useState(false);
+  const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
   const [client, setClient] = useState<"" | "current" | "former" | "unknown">("");
   // Expiration: "leave" / "never" / "set"
   // "never" → far-future sentinel that overrides any org rule (admins
@@ -1373,29 +1381,58 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
           <div className="bsm-sub">Apply to {count} selected {count === 1 ? "asset" : "assets"}. Fields left as &quot;Leave unchanged&quot; aren&apos;t touched.</div>
         </div>
         <div className="bsm-body">
-          {/* Top row mirrors the list view: Publication on the left, status
-              indicator label on the right. The status indicator section
-              expands below with all editable cleared-signal fields. */}
+          {/* Initial view: just publication dropdown (no header) and a
+              clickable "Approval indicator" trigger that reveals the
+              status indicator fields when clicked. Mirrors the list
+              view's status column visually. */}
           <div className="bsm-row-top">
-            <div className="bsm-fld bsm-fld-pub">
-              <label>Publication</label>
-              <select className="cl-select" value={pub} onChange={(e) => setPub(e.target.value as "" | "published" | "draft" | "archived")}>
-                <option value="">Leave unchanged</option>
-                <option value="published">Published</option>
-                <option value="draft">Draft</option>
-                <option value="archived">Archived</option>
-              </select>
-            </div>
-            <div className="bsm-status-label">
+            <select
+              className="cl-select bsm-pub-select"
+              value={pub}
+              onChange={(e) => setPub(e.target.value as "" | "published" | "draft" | "archived")}
+            >
+              <option value="">Leave unchanged</option>
+              <option value="published">Published</option>
+              <option value="draft">Draft</option>
+              <option value="archived">Archived</option>
+            </select>
+            <button
+              type="button"
+              className={`bsm-indicator-trigger${indicatorExpanded ? " open" : ""}`}
+              onClick={() => {
+                const wasCollapsed = !indicatorExpanded;
+                setIndicatorExpanded(true);
+                // Pre-select Approved on first expansion (most common bulk
+                // action) so admin only needs to click Apply. Auto-open the
+                // dropdown options to surface the choice.
+                if (wasCollapsed && approval === "") {
+                  setApproval("approved");
+                  setTimeout(() => {
+                    const sel = approvalSelectRef.current;
+                    if (sel && typeof sel.showPicker === "function") {
+                      try { sel.showPicker(); } catch { /* showPicker not supported / blocked */ }
+                    } else {
+                      sel?.focus();
+                    }
+                  }, 50);
+                }
+              }}
+            >
               <span className="cl-circle cl-circle-empty"/>
-              <span>Set status indicator</span>
-            </div>
+              <span>Approval indicator</span>
+            </button>
           </div>
 
+          {indicatorExpanded && (
           <div className="bsm-status-fields">
             <div className="bsm-fld">
               <label>Approval status</label>
-              <select className="cl-select" value={approval} onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}>
+              <select
+                ref={approvalSelectRef}
+                className="cl-select"
+                value={approval}
+                onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}
+              >
                 <option value="">Leave unchanged</option>
                 <option value="unset">Not recorded</option>
                 <option value="pending">Pending approval</option>
@@ -1457,6 +1494,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
               )}
             </div>
           </div>
+          )}
         </div>
         <div className="bsm-foot">
           <button className="cl-mini-btn bsm-clear-all" onClick={handleClearAll}>Clear all status indicators</button>
@@ -1784,6 +1822,26 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
 function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, onSetFreshnessException, onSetCustomFlags, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
   const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
   const popRef = React.useRef<HTMLDivElement>(null);
+  const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
+  // When the popover opens for an asset whose approval is "unset", auto-open
+  // the approval dropdown options so admin can pick Approved (the most
+  // common action) in one click. Browser security limits this — showPicker
+  // only works in response to a user gesture, and the popover open is
+  // triggered by a user click so it usually qualifies.
+  const approvalUnset = !asset.approvalStatus || asset.approvalStatus === "unset";
+  useEffect(() => {
+    if (!approvalUnset) return;
+    const t = setTimeout(() => {
+      const sel = approvalSelectRef.current;
+      if (!sel) return;
+      try {
+        if (typeof sel.showPicker === "function") sel.showPicker();
+        else sel.focus();
+      } catch {/* picker blocked / not supported */}
+    }, 80);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Coords use either `top` (popover sits below trigger) or `bottom` (popover
   // sits above trigger). We flip when there isn't enough room below the
   // trigger — fixes the "popover cut off at bottom of viewport" bug.
@@ -1874,6 +1932,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           )}
         </div>
         <select
+          ref={approvalSelectRef}
           className={`cl-select cl-select-primary${(asset.approvalStatus || "unset") === "unset" ? " placeholder" : ""}`}
           value={asset.approvalStatus || "unset"}
           onChange={(e) => onSetApproval(asset, { status: e.target.value as ApprovalStatus })}
