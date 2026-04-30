@@ -58,7 +58,7 @@ type AssetType = "Video Testimonial" | "Written Case Study" | "Quote";
 type AssetStatus = "published" | "archived" | "draft";
 type ClientStatus = "current" | "former" | "unknown";
 type ClientStatusSource = "manual" | "crm" | "system" | "unset";
-type ApprovalStatus = "approved" | "pending" | "denied" | "unset";
+type ApprovalStatus = "approved" | "pending" | "needs_edits" | "denied" | "unset";
 
 interface Asset {
   id: string;
@@ -1237,7 +1237,8 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   const approval = (asset.approvalStatus || "unset") as ApprovalStatus;
   if (approval === "approved") reasons.push({ signal: "approval", level: "green", label: "Approval received" });
   else if (approval === "denied") reasons.push({ signal: "approval", level: "red", label: "Approval denied" });
-  else if (approval === "pending") reasons.push({ signal: "approval", level: "yellow", label: "Approval pending" });
+  else if (approval === "pending") reasons.push({ signal: "approval", level: "yellow", label: "Pending approval" });
+  else if (approval === "needs_edits") reasons.push({ signal: "approval", level: "yellow", label: "Needs edits" });
   else reasons.push({ signal: "approval", level: "yellow", label: "Approval not recorded" });
 
   // Client relationship
@@ -1504,7 +1505,8 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           onChange={(e) => onSetApproval(asset, { status: e.target.value as ApprovalStatus })}
         >
           <option value="unset">Not recorded</option>
-          <option value="pending">Pending</option>
+          <option value="pending">Pending approval</option>
+          <option value="needs_edits">Needs edits</option>
           <option value="approved">Approved</option>
           <option value="denied">Denied</option>
         </select>
@@ -1526,7 +1528,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
       <div className="cl-section">
         <div className="cl-section-head">
           <span className={`cl-circle ${reasonFor("client").level}`}/>
-          <span className="cl-section-title">Client relationship</span>
+          <span className="cl-section-title">Still a client?</span>
           {asset.clientStatusSource && asset.clientStatusSource !== "unset" && (
             <span className="cl-section-meta">via {asset.clientStatusSource}</span>
           )}
@@ -1536,8 +1538,8 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, o
           value={(asset.clientStatus || "current") as string}
           onChange={(e) => onSetClientStatus(asset, e.target.value as "current" | "former" | "unknown")}
         >
-          <option value="current">Current client</option>
-          <option value="former">Former client</option>
+          <option value="current">Yes</option>
+          <option value="former">No</option>
           <option value="unknown">Unknown</option>
         </select>
       </div>
@@ -1822,7 +1824,7 @@ function FreshnessSection({ asset, freshnessReason, libraryRuleActive, onSetFres
         href="#/rules"
         onClick={(e) => { e.preventDefault(); onClose(); window.location.hash = "/rules"; }}
         className="cl-rules-link"
-      >Configure expiration rules →</a>
+      >Configure org-wide expiration rules →</a>
     </div>
   );
 }
