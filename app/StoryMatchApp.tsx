@@ -115,11 +115,23 @@ interface Asset {
 interface CustomFlag {
   id: string;            // client-generated uuid; primary key within the array
   label: string;         // short title — surfaces inline next to severity dot
-  color: "yellow" | "red"; // severity. Green is intentionally absent — green flags would be noise.
+  // Color: preset name ("yellow" | "red" | "green") OR a hex string ("#ff6b9b").
+  // Yellow/red drag the cleared signal. Green is informational/positive and
+  // does not affect the cleared signal. Hex colors are also informational.
+  color: string;
   note: string;          // long-form description / instructions
   setByEmail: string;
   setAt: string;
 }
+
+// Helper: is this color value a hex string vs a preset name?
+function isHexColor(c: string): boolean {
+  return /^#[0-9A-Fa-f]{3,8}$/.test(c);
+}
+
+// Tags whose presence on a flag drag the cleared signal toward yellow/red.
+// Green and custom (hex) colors are informational only.
+const FLAG_LEVEL_PRESETS = new Set(["yellow", "red"]);
 
 // Org-level configuration that drives Rules behavior. Loaded once at app
 // boot via /api/org/settings and refreshed when admin saves changes in the
@@ -644,9 +656,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    widths between rows. */
 /* Visibility cell — just the publication dropdown, content-sized. */
 .lv-visibility{display:flex;align-items:center;}
-/* Status cell — the cleared indicator trigger. Lets the popover anchor
-   from the cell so it stays positioned correctly. */
-.lv-statuscell{display:flex;align-items:center;min-width:0;}
+/* Status cell — cleared indicator trigger, plus any custom-status chips
+   stacked below. flex-wrap lets the chips fall to a second line when the
+   cell is narrow. */
+.lv-statuscell{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;}
 .lv-head > div:nth-child(4){padding-left:0;}
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
@@ -678,19 +691,38 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Cleared popover — anchored next to a row's cleared-indicator trigger.
    Visually mirrors the BulkStatusModal: flat stack of selects with no
    per-row labels, just placeholder text in each select. */
-.cl-pop{position:absolute;top:calc(100% + 6px);left:0;width:340px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14);padding:0;z-index:60;cursor:default;display:flex;flex-direction:column;}
+.cl-pop{position:absolute;top:calc(100% + 6px);left:0;width:340px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14);padding:14px;z-index:60;cursor:default;display:flex;flex-direction:column;gap:10px;box-sizing:border-box;}
 .cl-pop-portal{z-index:200;opacity:1 !important;}
-.cl-pop-body{padding:14px 14px 6px;display:flex;flex-direction:column;gap:10px;}
-.cl-pop > .cl-clear-all{margin:6px 14px 14px;}
-/* Custom flag chips — compact display of existing per-asset flags, with
-   inline remove. Sits above the "Add a custom flag" toggle. */
+/* Body just stacks its kids — padding is owned by .cl-pop now so the
+   bottom button doesn't need its own margin (which previously made it
+   overflow the right edge). */
+.cl-pop-body{display:flex;flex-direction:column;gap:10px;}
+/* Custom flag chips — compact display of existing per-asset flags with
+   inline remove. Backgrounds use very low-opacity tints so the chip stays
+   subtle and the dot does the signaling. Inline color (for hex flags)
+   gets applied via style attr in JSX. */
+/* Approval notes textarea — sits directly under the Approval select in the
+   popover when an approval status is set. Min height keeps the field
+   visible enough to invite a paragraph; resizable for longer threads. */
+.cl-approval-note{min-height:64px;resize:vertical;font-size:12px;line-height:1.4;margin-top:0;}
 .cl-flag-chips{display:flex;flex-wrap:wrap;gap:6px;}
-.cl-flag-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 8px;border-radius:999px;border:1px solid var(--border);background:#fff;font-size:11.5px;color:var(--t1);}
-.cl-flag-chip.yellow{background:var(--amberL);border-color:#fcd34d;}
-.cl-flag-chip.red{background:#fef2f2;border-color:#fca5a5;}
+/* Dense variant — used in row/card contexts where space is tight. */
+.cl-flag-chips.dense{gap:4px;}
+.cl-flag-chips.dense .cl-flag-chip{padding:2px 7px;font-size:10.5px;border-radius:4px;}
+.cl-flag-chips.dense .cl-flag-chip-label{max-width:120px;}
+.cl-flag-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 8px;border-radius:999px;border:1px solid var(--border);background:#f9fafb;font-size:11.5px;color:var(--t1);max-width:100%;}
+.cl-flag-chip.yellow{background:#fef9e7;border-color:#fde68a;}
+.cl-flag-chip.red{background:#fdf2f2;border-color:#f5d5d5;}
+.cl-flag-chip.green{background:#f0fdf4;border-color:#bbf7d0;}
 .cl-flag-chip-label{max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .cl-flag-chip-x{background:none;border:none;cursor:pointer;color:var(--t3);font-size:14px;line-height:1;padding:0 4px;}
 .cl-flag-chip-x:hover{color:var(--red);}
+/* Soften the bare red dot too — was using full-saturation var(--red),
+   which feels alarming for what's often informational. */
+.cl-circle.red{background:#dc6970;}
+/* Custom-color dot rendered via inline style.color — keeps the same
+   sizing/shape as preset circles. */
+.cl-circle.custom{background:transparent;}
 .cl-freshness-line{font-size:12px;color:var(--t1);margin-top:6px;}
 .cl-freshness-rel{color:var(--t3);font-weight:400;}
 .cl-freshness-note{font-size:11px;color:var(--t3);margin-top:6px;font-style:italic;}
@@ -779,9 +811,19 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cf-row-meta{font-size:10.5px;color:var(--t4);margin-top:3px;}
 .cf-row-actions{display:flex;gap:4px;flex-shrink:0;}
 .cf-form{margin-top:8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
-.cf-severity-row{display:flex;flex-direction:column;gap:4px;}
-.cf-severity-row .cl-radio{align-items:center;}
+.cf-severity-row{display:flex;flex-direction:row;flex-wrap:wrap;gap:8px 14px;align-items:center;}
+.cf-severity-row .cl-radio{align-items:center;font-size:11.5px;}
 .cf-severity-row .cl-circle{width:9px;height:9px;}
+/* Subtle native color input next to "Other" — small swatch instead of the
+   default chunky color box. Hides browser chrome (border/padding) so it
+   reads as a tiny chip. */
+.cl-color-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;width:18px;height:18px;border:1px solid var(--border);border-radius:4px;padding:0;background:none;cursor:pointer;margin-left:4px;overflow:hidden;}
+.cl-color-input::-webkit-color-swatch-wrapper{padding:0;}
+.cl-color-input::-webkit-color-swatch{border:none;border-radius:3px;}
+.cl-color-input::-moz-color-swatch{border:none;border-radius:3px;}
+/* Custom-color circle used in chips/dots where the color comes from a
+   hex value. Sized identically to preset circles. */
+.cl-circle.custom{background:transparent;border:1px solid currentColor;}
 .cf-form-actions{display:flex;gap:6px;}
 .cl-cf-add{margin-top:6px;}
 .cl-textarea{min-height:64px;resize:vertical;font-family:var(--font);}
@@ -907,6 +949,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .qcard-content{position:relative;z-index:1;padding:36px 32px 28px;display:flex;flex-direction:column;justify-content:flex-end;flex:1;}
 .qcard-quote-text{font-family:var(--serif);font-size:20px;font-style:italic;line-height:1.6;color:#fff;margin-bottom:28px;flex:1;display:flex;align-items:flex-end;letter-spacing:-.2px;}
 .qcard-divider{width:32px;height:2px;background:rgba(255,255,255,.3);margin-bottom:16px;}
+/* Flag chip strip on quote cards — appears between the quote and the
+   divider. White-tinted backgrounds since the card itself is gradient-color. */
+.qcard-chips{margin-bottom:16px;}
+.qcard-chips .cl-flag-chip{background:rgba(255,255,255,.85);border-color:rgba(255,255,255,.95);color:#1f2937;}
 .qcard-attr{display:flex;justify-content:space-between;align-items:flex-end;}
 .qcard-who .qcard-name{font-size:14px;font-weight:700;color:#fff;}
 .qcard-who .qcard-co{font-size:12px;color:rgba(255,255,255,.6);margin-top:3px;}
@@ -1094,6 +1140,12 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       </div>
       <div className="card-body">
         <div className="card-headline" title={asset.headline||"Untitled"}>{asset.headline||"Untitled"}</div>
+        {/* Custom-status chips — visible at the card level for admins so they
+            can scan organization tags without opening each card. Sales/public
+            views won't have customFlags rendered (they pass admin=false). */}
+        {Array.isArray(asset.customFlags) && asset.customFlags.length > 0 && (
+          <FlagChips flags={asset.customFlags as CustomFlag[]} dense/>
+        )}
         <div className="card-co">
           <span className="card-co-name">
             {/* Dot reflects Cleared signal for admins (matches list view).
@@ -1185,6 +1237,11 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       <div className="qcard-bg" style={{["--qgrad" as string]:grad} as React.CSSProperties}/>
       <div className="qcard-content">
         <div className="qcard-quote-text">"{asset.pullQuote}"</div>
+        {Array.isArray(asset.customFlags) && asset.customFlags.length > 0 && (
+          <div className="qcard-chips">
+            <FlagChips flags={asset.customFlags as CustomFlag[]} dense/>
+          </div>
+        )}
         <div className="qcard-divider"/>
         <div className="qcard-attr">
           <div className="qcard-who"><div className="qcard-name">{asset.clientName}</div><div className="qcard-co">{asset.company}</div></div>
@@ -1313,9 +1370,104 @@ interface BulkStatusPatch {
   //   null          = remove per-asset rule (asset falls back to org rule).
   freshnessExpiration?: "never" | "leave" | string | null;
   // New custom flag to APPEND to every selected asset (additive, not replace).
-  addFlag?: { color: "yellow" | "red"; label: string };
+  addFlag?: { color: string; label: string };
   // Clear-all action: resets all status indicator fields to default state.
   clearAll?: boolean;
+}
+
+// Compact, read-only chip strip showing every custom flag on an asset.
+// Used in list rows and on grid cards so admins can spot per-asset
+// organization tags at-a-glance without having to open the popover.
+// Uses inline style.color/borderColor for hex flags so we don't need a
+// CSS class per color. No remove affordance here — that lives in the
+// popover.
+function FlagChips({ flags, dense }: { flags: CustomFlag[]; dense?: boolean }) {
+  if (!flags || flags.length === 0) return null;
+  return (
+    <div className={`cl-flag-chips${dense ? " dense" : ""}`}>
+      {flags.map(f => {
+        const isHex = isHexColor(f.color);
+        const presetClass = !isHex ? f.color : "custom";
+        const styleProps: React.CSSProperties = isHex
+          ? { background: `${f.color}1a`, borderColor: `${f.color}66`, color: f.color }
+          : {};
+        return (
+          <span
+            key={f.id}
+            className={`cl-flag-chip ${presetClass}`}
+            style={styleProps}
+            title={f.label || (presetClass === "red" ? "Red flag" : presetClass === "yellow" ? "Yellow flag" : presetClass === "green" ? "Green flag" : "Custom flag")}
+          >
+            <span
+              className={`cl-circle ${presetClass}`}
+              style={isHex ? { background: f.color, borderColor: f.color } : undefined}
+            />
+            {f.label && <span className="cl-flag-chip-label">{f.label}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// Shared color picker for "Add custom status" forms in both the popover
+// and the bulk modal. Three presets (yellow/red/green) + an "Other…" radio
+// that reveals a native color input. Storing the actual picked color in
+// state means the consumer doesn't have to track preset-vs-hex separately.
+interface FlagColorPickerProps {
+  value: string;            // current color — preset name or hex
+  onChange: (v: string) => void;
+  // Unique name used on the radios so multiple instances on the page don't
+  // conflict (modal + popover can both be open conceptually).
+  name: string;
+}
+function FlagColorPicker({ value, onChange, name }: FlagColorPickerProps) {
+  // Determine which radio is active. "Other" is active when value isn't
+  // one of the presets (assumed to be a hex string).
+  const isHex = isHexColor(value);
+  const activePreset = !isHex ? value : "other";
+  // Track the most recent custom color the user set, so flipping back to
+  // "Other" without re-picking still shows their last choice.
+  const [hexDraft, setHexDraft] = useState<string>(isHex ? value : "#0ea5e9");
+  return (
+    <div className="cf-severity-row">
+      <label className="cl-radio">
+        <input type="radio" name={name} checked={activePreset === "yellow"} onChange={() => onChange("yellow")}/>
+        <span className="cl-circle yellow"/> Yellow
+      </label>
+      <label className="cl-radio">
+        <input type="radio" name={name} checked={activePreset === "red"} onChange={() => onChange("red")}/>
+        <span className="cl-circle red"/> Red
+      </label>
+      <label className="cl-radio">
+        <input type="radio" name={name} checked={activePreset === "green"} onChange={() => onChange("green")}/>
+        <span className="cl-circle green"/> Green
+      </label>
+      <label className="cl-radio">
+        <input
+          type="radio"
+          name={name}
+          checked={activePreset === "other"}
+          onChange={() => onChange(hexDraft)}
+        />
+        <span
+          className="cl-circle custom"
+          style={{ background: hexDraft, borderColor: hexDraft }}
+        />
+        Other
+        <input
+          type="color"
+          className="cl-color-input"
+          value={hexDraft}
+          onChange={(e) => {
+            setHexDraft(e.target.value);
+            onChange(e.target.value);
+          }}
+          aria-label="Pick a custom color"
+        />
+      </label>
+    </div>
+  );
 }
 
 interface BulkBarProps {
@@ -1449,8 +1601,9 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
     d.setFullYear(d.getFullYear() + 1);
     return d.toISOString().split("T")[0];
   });
-  // Custom flag to add (additive). "" label = don't add.
-  const [flagColor, setFlagColor] = useState<"yellow" | "red">("yellow");
+  // Custom flag to add (additive). "" label = don't add. Color is one of
+  // the three presets OR a custom hex string when "Other…" is picked.
+  const [flagColor, setFlagColor] = useState<string>("yellow");
   const [flagLabel, setFlagLabel] = useState<string>("");
   const [addFlagToggle, setAddFlagToggle] = useState(false);
 
@@ -1546,20 +1699,11 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
                   checked={addFlagToggle}
                   onChange={(e) => setAddFlagToggle(e.target.checked)}
                 />
-                Add a custom flag
+                Add custom status
               </label>
               {addFlagToggle && (
                 <div className="bsm-flag-form">
-                  <div className="cf-severity-row">
-                    <label className="cl-radio">
-                      <input type="radio" name="bsm-color" checked={flagColor === "yellow"} onChange={() => setFlagColor("yellow")}/>
-                      <span className="cl-circle yellow"/> Yellow
-                    </label>
-                    <label className="cl-radio">
-                      <input type="radio" name="bsm-color" checked={flagColor === "red"} onChange={() => setFlagColor("red")}/>
-                      <span className="cl-circle red"/> Red
-                    </label>
-                  </div>
+                  <FlagColorPicker name="bsm-color" value={flagColor} onChange={setFlagColor}/>
                   <input
                     className="cl-input"
                     placeholder="Optional label"
@@ -1570,7 +1714,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
               )}
             </div>
           </div>
-          <button className="bsm-clear-all-btn" onClick={handleClearAll}>Reset all to default</button>
+          <button className="bsm-clear-all-btn" onClick={handleClearAll}>Reset</button>
         </div>
         <div className="bsm-foot">
           <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
@@ -1834,16 +1978,19 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
     }
   }
 
-  // Custom flags — each contributes a reason at its own severity level.
-  // Empty array → no contribution. Worst-of-all-signals aggregate kicks in
-  // below so any custom flag at red drives the whole signal red.
+  // Custom flags — only yellow/red presets contribute to the cleared
+  // aggregate. Green and custom-color (hex) flags are informational and
+  // don't drag the cleared signal — they show as chips on the row but
+  // leave the dot color alone. This lets admins use custom-color flags
+  // freely as personal organization tags without nagging users.
   const customFlags = Array.isArray(asset.customFlags) ? asset.customFlags : [];
   for (const f of customFlags) {
     if (!f) continue;
+    if (!FLAG_LEVEL_PRESETS.has(f.color)) continue;
     const text = f.label || "Custom flag";
     reasons.push({
       signal: "custom",
-      level: f.color,
+      level: f.color as "yellow" | "red",
       label: text,
       shortLabel: text,
     });
@@ -2066,6 +2213,19 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
     return () => { clearTimeout(timer); document.removeEventListener("mousedown", onDoc); };
   }, [onClose, anchor]);
 
+  // Approval-note draft state. The textarea only renders when approval has
+  // a real value (anything but "unset") — admins use this to paste in the
+  // email thread or describe how approval was obtained. Save button appears
+  // only when the draft differs from the persisted value.
+  const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
+  // Reset draft when the asset's saved note changes (multi-asset selection
+  // can swap the popover target out from under us).
+  useEffect(() => {
+    setNoteDraft(asset.approvalNote || "");
+  }, [asset.approvalNote]);
+  const showApprovalNote = !!asset.approvalStatus && asset.approvalStatus !== "unset";
+  const noteDirty = noteDraft !== (asset.approvalNote || "");
+
   // Freshness popover state — three modes mirror the bulk modal: leave
   // (no change), never (sentinel far-future), or set (custom date).
   const NEVER_THRESHOLD_YEARS = 50;
@@ -2105,7 +2265,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
   // small form, then add. Existing flags render as compact chips above so
   // admins can see and remove them.
   const [addFlagOpen, setAddFlagOpen] = useState(false);
-  const [flagColor, setFlagColor] = useState<"yellow" | "red">("yellow");
+  const [flagColor, setFlagColor] = useState<string>("yellow");
   const [flagLabel, setFlagLabel] = useState("");
   const flags: CustomFlag[] = Array.isArray(asset.customFlags) ? asset.customFlags as CustomFlag[] : [];
   const handleAddFlag = () => {
@@ -2157,6 +2317,33 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
           <option value="denied">Denied</option>
           <option value="needs_edits">Needs edits</option>
         </select>
+
+        {/* Approval notes — appears only once an approval status is picked.
+            Lets admin document how approval was obtained (paste an email
+            thread, etc.). Save button only appears when there are unsaved
+            edits. */}
+        {showApprovalNote && (
+          <>
+            <textarea
+              className="cl-textarea cl-approval-note"
+              placeholder="Notes about this approval — paste the email thread, describe how it was obtained, etc."
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+            />
+            {noteDirty && (
+              <div className="cl-row-actions">
+                <button
+                  className="cl-mini-btn primary"
+                  onClick={() => onSetApproval(asset, { note: noteDraft })}
+                >Save note</button>
+                <button
+                  className="cl-mini-btn"
+                  onClick={() => setNoteDraft(asset.approvalNote || "")}
+                >Cancel</button>
+              </div>
+            )}
+          </>
+        )}
 
         {(() => {
           const manuallySet = asset.clientStatusSource === "manual" || asset.clientStatusSource === "crm";
@@ -2216,20 +2403,11 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
             checked={addFlagOpen}
             onChange={(e) => setAddFlagOpen(e.target.checked)}
           />
-          Add a custom flag
+          Add custom status
         </label>
         {addFlagOpen && (
           <div className="bsm-flag-form">
-            <div className="cf-severity-row">
-              <label className="cl-radio">
-                <input type="radio" name="cl-pop-color" checked={flagColor === "yellow"} onChange={() => setFlagColor("yellow")}/>
-                <span className="cl-circle yellow"/> Yellow
-              </label>
-              <label className="cl-radio">
-                <input type="radio" name="cl-pop-color" checked={flagColor === "red"} onChange={() => setFlagColor("red")}/>
-                <span className="cl-circle red"/> Red
-              </label>
-            </div>
+            <FlagColorPicker name="cl-pop-color" value={flagColor} onChange={setFlagColor}/>
             <input
               className="cl-input"
               placeholder="Optional label"
@@ -2250,7 +2428,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
           if (!confirm("Reset status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
           onResetStatusIndicators(asset);
         }}
-      >Reset all to default</button>
+      >Reset</button>
     </div>,
     document.body
   );
@@ -2545,7 +2723,7 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState("");
-  const [draftColor, setDraftColor] = useState<"yellow" | "red">("yellow");
+  const [draftColor, setDraftColor] = useState<string>("yellow");
   // Note field removed per Logan's spec — label replaces it. We keep the
   // `note` column in the data shape for backward compat with any flags
   // already saved with notes, but new flags always set note to "".
@@ -2631,16 +2809,7 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
         <div className="cf-form">
           {/* Severity first — required input. Label below is optional and
               replaces the old note field; one text box, not two. */}
-          <div className="cf-severity-row">
-            <label className="cl-radio">
-              <input type="radio" name={`cf-${asset.id}`} checked={draftColor === "yellow"} onChange={() => setDraftColor("yellow")}/>
-              <span className={`cl-circle yellow`}/> Yellow (review)
-            </label>
-            <label className="cl-radio">
-              <input type="radio" name={`cf-${asset.id}`} checked={draftColor === "red"} onChange={() => setDraftColor("red")}/>
-              <span className={`cl-circle red`}/> Red (do not share)
-            </label>
-          </div>
+          <FlagColorPicker name={`cf-${asset.id}`} value={draftColor} onChange={setDraftColor}/>
           <input
             className="cl-input"
             placeholder="Optional label"
@@ -2659,7 +2828,7 @@ function CustomFlagsSection({ asset, onSetCustomFlags }: CustomFlagsSectionProps
       )}
 
       {!showForm && (
-        <button className="cl-mini-btn cl-cf-add" onClick={startAdd}>+ Add custom flag</button>
+        <button className="cl-mini-btn cl-cf-add" onClick={startAdd}>+ Add custom status</button>
       )}
     </div>
   );
@@ -2761,7 +2930,8 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
               />
             </div>
-            {/* Status column — cleared indicators (approval + flags + freshness). */}
+            {/* Status column — cleared indicators (approval + flags + freshness),
+                followed by any custom-status chips for at-a-glance scanning. */}
             <div className="lv-statuscell">
               <ClearedCell
                 asset={a}
@@ -2778,6 +2948,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 onSetApproval={onSetApproval}
                 onMarkVerified={onMarkVerified}
               />
+              <FlagChips flags={(a.customFlags as CustomFlag[]) || []} dense/>
             </div>
             <div className="lv-actions">
               <DotsMenu items={[
