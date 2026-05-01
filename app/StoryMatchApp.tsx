@@ -895,9 +895,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bsm-choice-text{display:flex;flex-direction:column;gap:2px;}
 .bsm-choice-label{font-size:13px;font-weight:600;color:var(--t1);}
 .bsm-choice-help{font-size:11.5px;color:var(--t3);line-height:1.35;}
-/* Visibility-override modal — supplemental help paragraph above the
-   override button. Quiet color, comfortable line height. */
-.vom-help{font-size:12px;color:var(--t2);line-height:1.5;}
+/* Visibility-override modal — list of every blocking rule + how the
+   override neutralizes each one. Renders as a stack so multiple rules
+   stay legible. */
+.vom-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px;}
+.vom-list-item{padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:7px;}
+.vom-list-what{font-size:12.5px;color:var(--t1);}
+.vom-list-fix{margin-top:4px;font-size:11.5px;color:var(--t3);}
 /* Reset button — neutral grey. Reset isn't dangerous in the way a delete
    is (it just clears flags / approval status / etc., all of which can be
    re-applied), so a destructive-red treatment was overkill. Used in both
@@ -1598,66 +1602,74 @@ function BulkVisibilityModal({ count, onClose, onApply }: BulkVisibilityModalPro
 }
 
 // ─── VISIBILITY OVERRIDE MODAL ────────────────────────────────────────────
-// Shown when admin tries to set an asset to Public but a rule would
-// immediately reverse the change (e.g., expiration → Make private,
-// approval_denied → Make private). Without this, admin watches their
-// click silently re-flip and assumes it's broken. We intercept, explain
-// which rule is in the way, and offer a one-click override targeted at
-// the trigger that's firing (e.g., set a freshness exception for the
-// expiration rule).
+// Shown when admin tries to set an asset to Public but one or more rules
+// would immediately reverse the change (e.g., expiration → Make private,
+// approval_denied → Make private). Without this, admin watches their click
+// silently re-flip and assumes it's broken. We intercept, explain which
+// rules are in the way, and offer a single Override button that clears
+// EVERY firing rule's trigger atomically. Single-rule and multi-rule cases
+// share one button so admin never has to override-then-override-again.
 interface VisibilityOverrideModalProps {
   asset: Asset;
-  ruleKey: string;
-  intendedAction: "draft" | "archive";
+  ruleKeys: string[];           // every rule currently firing on this asset
   onClose: () => void;
-  // Override = neutralize the rule's trigger so the admin's intended Public
-  // change actually sticks. Implementation depends on which rule:
-  //   • expiration → set freshness exception to "never"
-  //   • approval_denied → set approval to approved
-  // Caller wires the handler. We just give them the rule key + asset.
-  onOverride: () => void;
+  onOverride: () => void;       // applies all overrides atomically
 }
-function VisibilityOverrideModal({ asset, ruleKey, intendedAction, onClose, onOverride }: VisibilityOverrideModalProps) {
-  // Human-readable description of the rule + what overriding it means.
-  // Each rule type gets its own copy because the override mechanism is
-  // different (exception vs. approval change).
-  let ruleLabel: string;
-  let blockedExplanation: string;
-  let overrideLabel: string;
-  let overrideHelp: string;
-  if (ruleKey === "expiration") {
-    ruleLabel = "freshness rule";
-    blockedExplanation = `This story is flagged as expired (older than the freshness threshold), and your org's freshness rule moves expired stories to ${intendedAction === "archive" ? "Archive" : "Private"}.`;
-    overrideLabel = "Override expiration";
-    overrideHelp = "Mark this asset as never-expiring. Removes it from the rule going forward.";
-  } else if (ruleKey === "approval_denied") {
-    ruleLabel = "approval-denied rule";
-    blockedExplanation = `This story's approval is set to Denied, and your org's rule moves Denied stories to ${intendedAction === "archive" ? "Archive" : "Private"}.`;
-    overrideLabel = "Set approval to Approved";
-    overrideHelp = "Changes the approval status, which clears the rule.";
-  } else {
-    ruleLabel = "an org rule";
-    blockedExplanation = `An org rule (${ruleKey}) is keeping this asset in ${intendedAction === "archive" ? "Archive" : "Private"}.`;
-    overrideLabel = "Override";
-    overrideHelp = "Apply the override to clear the rule's trigger.";
+// Per-rule description of what's blocking + what overriding does. Used to
+// build the modal copy regardless of how many rules are firing.
+function describeBlockingRule(ruleKey: string): { what: string; fix: string } {
+  switch (ruleKey) {
+    case "expiration":
+      return {
+        what: "This story is flagged as expired (older than your freshness threshold).",
+        fix: "Mark this asset as never-expiring.",
+      };
+    case "approval_denied":
+      return {
+        what: "This story's approval is set to Denied.",
+        fix: "Set approval back to Approved.",
+      };
+    default:
+      return {
+        what: `An org rule (${ruleKey}) is keeping this asset out of Public.`,
+        fix: "Clear the rule's trigger.",
+      };
   }
+}
+function VisibilityOverrideModal({ asset, ruleKeys, onClose, onOverride }: VisibilityOverrideModalProps) {
   void asset;
+  const blockers = ruleKeys.map(describeBlockingRule);
+  const isMulti = ruleKeys.length > 1;
+  const overrideLabel = isMulti ? "Override all" : "Override";
   return createPortal(
     <>
       <div className="bsm-backdrop" onClick={onClose}/>
       <div className="bsm-modal" onClick={(e) => e.stopPropagation()}>
         <div className="bsm-head">
-          <div className="bsm-title">Visibility blocked by rule</div>
-          <div className="bsm-sub">{blockedExplanation}</div>
+          <div className="bsm-title">
+            {isMulti ? "Visibility blocked by rules" : "Visibility blocked by rule"}
+          </div>
+          <div className="bsm-sub">
+            {isMulti
+              ? `${ruleKeys.length} org rules are keeping this story out of Public.`
+              : blockers[0]?.what || "An org rule is keeping this story out of Public."}
+          </div>
         </div>
         <div className="bsm-body">
-          <div className="vom-help">
-            You can override the {ruleLabel} on this story. {overrideHelp}
-          </div>
+          <ul className="vom-list">
+            {blockers.map((b, i) => (
+              <li key={ruleKeys[i]} className="vom-list-item">
+                <div className="vom-list-what">{b.what}</div>
+                <div className="vom-list-fix">→ {b.fix}</div>
+              </li>
+            ))}
+          </ul>
         </div>
         <div className="bsm-foot">
           <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
-          <button className="cl-mini-btn primary" onClick={onOverride}>{overrideLabel}…</button>
+          <button className="cl-mini-btn primary" onClick={onOverride}>
+            {overrideLabel} &amp; make Public
+          </button>
         </div>
       </div>
     </>,
@@ -1986,22 +1998,25 @@ function isAssetExpiredFE(asset: Asset, org: OrgSettings): boolean {
   return false;
 }
 
-// Returns the rule key (e.g. "expiration", "approval_denied") that would
-// fire on this asset right now, or null if no rule applies. Used to
-// preemptively warn the admin before they try to set Public on an asset
-// that the rule engine would immediately re-flip.
-function findActiveRuleFE(asset: Asset, org: OrgSettings): string | null {
+// Returns every rule key that would fire on this asset right now.
+// Server-side findActiveRule short-circuits on the first match because it
+// only needs to know which rule to apply, but the FE needs the full set
+// to override every blocking trigger atomically. Without this, admin
+// overrides one rule, the next one re-flips the asset, admin has to
+// override again — a confusing loop.
+function findActiveRulesFE(asset: Asset, org: OrgSettings): string[] {
+  const out: string[] = [];
   const approval = asset.approvalStatus || "unset";
   const approvalKey = `approval_${approval}`;
   if (FE_ALLOWED_APPROVAL_RULE_KEYS.has(approvalKey)) {
     const rule = org.publicationRules[approvalKey];
-    if (rule && rule.action !== "none") return approvalKey;
+    if (rule && rule.action !== "none") out.push(approvalKey);
   }
   const expRule = org.publicationRules["expiration"];
   if (expRule && expRule.action !== "none" && isAssetExpiredFE(asset, org)) {
-    return "expiration";
+    out.push("expiration");
   }
-  return null;
+  return out;
 }
 
 function isClearedEngaged(asset: Asset): boolean {
@@ -4454,9 +4469,10 @@ export default function App(){
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
   // Visibility-override target — set when admin tries to mark something
-  // Public but a rule would re-flip it. Modal explains the rule and
-  // offers a one-click override targeted at whichever trigger is firing.
-  const [visOverride, setVisOverride] = useState<{ asset: Asset; ruleKey: string; intendedAction: "draft" | "archive" } | null>(null);
+  // Public but one or more rules would re-flip it. Modal explains every
+  // blocker and offers a single Override button that clears all triggers
+  // atomically (so admin doesn't need to override repeatedly).
+  const [visOverride, setVisOverride] = useState<{ asset: Asset; ruleKeys: string[] } | null>(null);
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
   // Org-level Rules. Loaded on mount; refreshed when admin saves in Rules panel.
   const[orgSettings,setOrgSettings]=useState<OrgSettings>({
@@ -4683,16 +4699,13 @@ export default function App(){
 
   // Change publication status (published / draft / archived) inline.
   const setPublicationStatus=async(asset: Asset, next: "published"|"draft"|"archived")=>{
-    // Intercept Public when a rule would immediately re-flip it. Without
-    // this, admin watches their click silently get reversed and assumes
-    // the UI is broken. Rules only fire on Public assets, so this guard
-    // is unnecessary for Private/Archive transitions.
+    // Intercept Public when one or more rules would immediately re-flip
+    // the change. Rules only fire on Public assets, so this guard is
+    // unnecessary for Private/Archive transitions.
     if (next === "published") {
-      const ruleKey = findActiveRuleFE(asset, orgSettings);
-      if (ruleKey) {
-        const action = orgSettings.publicationRules[ruleKey]?.action;
-        const intendedAction: "draft" | "archive" = action === "archive" ? "archive" : "draft";
-        setVisOverride({ asset, ruleKey, intendedAction });
+      const ruleKeys = findActiveRulesFE(asset, orgSettings);
+      if (ruleKeys.length > 0) {
+        setVisOverride({ asset, ruleKeys });
         return; // Modal owns the next step — admin can override or cancel.
       }
     }
@@ -4713,53 +4726,38 @@ export default function App(){
     }
   };
 
-  // Override handler — neutralizes whichever rule was about to fire on the
-  // override-target asset, then completes the original "make Public" intent.
-  // The override mechanism is rule-specific:
-  //   • expiration → set freshness exception to a far-future "never" sentinel
-  //   • approval_denied → set approval back to approved
-  // Both clear the rule's trigger so the subsequent publication update sticks.
+  // Override handler — neutralizes EVERY rule that's currently firing on
+  // the override-target asset, then completes the original "make Public"
+  // intent in one atomic update. Per-rule fix:
+  //   • expiration       → set freshness exception to a "never" sentinel
+  //   • approval_denied  → set approval back to approved
+  // Sending all fixes in a single PUT means the server's rule engine sees
+  // the post-override state on its next pass and finds nothing to fire.
   const overrideAndPublish = async () => {
     if (!visOverride) return;
-    const { asset, ruleKey } = visOverride;
-    try {
-      if (ruleKey === "expiration") {
+    const { asset, ruleKeys } = visOverride;
+    const patch: Partial<Asset> = {
+      status: "published",
+      archivedAt: null,
+      archivedReason: null,
+    };
+    for (const key of ruleKeys) {
+      if (key === "expiration") {
         const neverIso = (() => {
           const d = new Date();
           d.setFullYear(d.getFullYear() + 100);
           return d.toISOString();
         })();
-        await updateAssetInline(
-          asset.id,
-          {
-            freshnessExceptionUntil: neverIso,
-            status: "published",
-            archivedAt: null,
-            archivedReason: null,
-          },
-          "Override applied",
-        );
-      } else if (ruleKey === "approval_denied") {
-        await updateAssetInline(
-          asset.id,
-          {
-            approvalStatus: "approved",
-            approvalRecordedAt: new Date().toISOString(),
-            status: "published",
-            archivedAt: null,
-            archivedReason: null,
-          },
-          "Override applied",
-        );
-      } else {
-        // Unknown rule — fall through to a plain publish; server-side
-        // rule may still re-flip, but at least we attempted.
-        await updateAssetInline(
-          asset.id,
-          { status: "published", archivedAt: null, archivedReason: null },
-          "Made public",
-        );
+        patch.freshnessExceptionUntil = neverIso;
+      } else if (key === "approval_denied") {
+        patch.approvalStatus = "approved";
+        patch.approvalRecordedAt = new Date().toISOString();
       }
+      // Unknown rule keys: no per-rule fix; we'll still attempt the publish
+      // and rely on the server to log if its engine re-flips.
+    }
+    try {
+      await updateAssetInline(asset.id, patch, "Override applied");
     } catch (e) {
       console.error("override failed", e);
     }
@@ -5732,8 +5730,7 @@ export default function App(){
         {visOverride && (
           <VisibilityOverrideModal
             asset={visOverride.asset}
-            ruleKey={visOverride.ruleKey}
-            intendedAction={visOverride.intendedAction}
+            ruleKeys={visOverride.ruleKeys}
             onClose={() => setVisOverride(null)}
             onOverride={overrideAndPublish}
           />

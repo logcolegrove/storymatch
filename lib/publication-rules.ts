@@ -131,8 +131,16 @@ export async function applyPublicationRules(
       // drafted/archived assets alone; the admin owns them now.
       return { changed: false };
     }
-    // Only act on "published" assets — don't auto-flip drafts/archives.
-    if (asset.status !== "published") return { changed: false };
+    // Allow the rule to fire when:
+    //   • Asset is currently Public — normal entry into a rule-driven state.
+    //   • Asset's current state was set by THIS same rule (auto_status_by_rule
+    //     matches) — lets action changes escalate (draft→archive) or
+    //     de-escalate (archive→draft) without admin intervention.
+    // Block when asset is in a non-Public state that the admin set manually
+    // (auto_status_by_rule is null after manual edits) — admin's intent wins.
+    if (asset.status !== "published" && asset.auto_status_by_rule !== triggered) {
+      return { changed: false };
+    }
     // Build the update. For archive, also stamp archived_at and a reason
     // so the FE's archive UI (badge, restore button, etc.) lights up the
     // same way as a manual archive.
