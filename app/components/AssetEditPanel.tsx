@@ -117,7 +117,7 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
             <div className="aep-fld"><label>Size</label><input className="aep-in" value={form.companySize} onChange={e => set("companySize", e.target.value)}/></div>
           </div>
           <div className="aep-row">
-            <div className="aep-fld"><label>Status</label><select className="aep-sel" value={form.status} onChange={e => set("status", e.target.value)}><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></select></div>
+            <div className="aep-fld"><label>Visibility</label><select className="aep-sel" value={form.status} onChange={e => set("status", e.target.value)}><option value="published">Public</option><option value="draft">Private</option><option value="archived">Archive</option></select></div>
             <div className="aep-fld"><label>Challenge</label><input className="aep-in" value={form.challenge} onChange={e => set("challenge", e.target.value)}/></div>
           </div>
           <div className="aep-fld"><label>Outcome</label><input className="aep-in" value={form.outcome} onChange={e => set("outcome", e.target.value)}/></div>

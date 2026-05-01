@@ -66,13 +66,24 @@ function isExpired(asset: AssetRuleInput, org: OrgRulesContext): boolean {
 //   2. expiration (if asset is expired)
 //   3. approval_required (if approval !== approved)
 // Returns null when nothing applies.
+// Approval-status keys we still honor as publication rules. Other approval
+// values (e.g. "needs_edits", "pending", "unset") will not auto-flip
+// visibility even if they have orphaned data in publication_rules.
+const ALLOWED_APPROVAL_RULE_KEYS = new Set([
+  "approval_denied",
+]);
+
 function findActiveRule(asset: AssetRuleInput, org: OrgRulesContext): string | null {
   const approval = asset.approval_status || "unset";
 
-  // Specific approval rules
+  // Specific approval rules — only honor allow-listed keys. This lets us
+  // remove rules from the UI (e.g. "needs_edits") without orphaned DB data
+  // continuing to fire.
   const approvalRuleKey = `approval_${approval}`;
-  const approvalRule = org.publication_rules[approvalRuleKey];
-  if (approvalRule && approvalRule.action !== "none") return approvalRuleKey;
+  if (ALLOWED_APPROVAL_RULE_KEYS.has(approvalRuleKey)) {
+    const approvalRule = org.publication_rules[approvalRuleKey];
+    if (approvalRule && approvalRule.action !== "none") return approvalRuleKey;
+  }
 
   // Expiration
   const expirationRule = org.publication_rules["expiration"];

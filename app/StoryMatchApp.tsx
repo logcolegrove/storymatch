@@ -633,15 +633,20 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    The merged-status column groups Publication + Cleared into one block.
    min-width on both head + row prevents horizontal squish — when the
    container is too narrow, the parent .lv scrolls instead of crushing. */
-.lv-head{display:grid;grid-template-columns:72px minmax(220px,2fr) minmax(120px,1fr) 240px 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:880px;}
-.lv-row{display:grid;grid-template-columns:72px minmax(220px,2fr) minmax(120px,1fr) 240px 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:880px;}
+/* Six grid tracks: thumb | title | vertical | visibility | status | actions.
+   Visibility is content-sized (just the dropdown), Status takes the remaining
+   space so the cleared trigger has room to breathe. */
+.lv-head{display:grid;grid-template-columns:72px minmax(200px,2fr) minmax(110px,1fr) 110px minmax(150px,1fr) 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:920px;}
+.lv-row{display:grid;grid-template-columns:72px minmax(200px,2fr) minmax(110px,1fr) 110px minmax(150px,1fr) 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:920px;}
 /* Merged status cell — Publication on the left (content-sized, only as
    wide as its longest option), Cleared dot/text on the right (takes
    remaining space). Both content-sized prevents inconsistent dropdown
    widths between rows. */
-.lv-status{display:flex;align-items:center;gap:12px;}
-.lv-status > div:first-child{flex:0 0 auto;}
-.lv-status > .cl-cell{flex:1;min-width:0;}
+/* Visibility cell — just the publication dropdown, content-sized. */
+.lv-visibility{display:flex;align-items:center;}
+/* Status cell — the cleared indicator trigger. Lets the popover anchor
+   from the cell so it stays positioned correctly. */
+.lv-statuscell{display:flex;align-items:center;min-width:0;}
 .lv-head > div:nth-child(4){padding-left:0;}
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
@@ -1067,8 +1072,8 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           </svg>
         </button>
       )}
-      {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
-      {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
+      {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archive</div>}
+      {isDraft&&<div className="status-badge draft" title="Private — not visible to sales reps or in StoryMatch search">Private</div>}
       {isArchived&&onRestore&&!menuItems&&(
         <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
       )}
@@ -1163,8 +1168,8 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           </svg>
         </button>
       )}
-      {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archived</div>}
-      {isDraft&&<div className="status-badge draft" title="Draft — not visible to sales reps or in StoryMatch search">Draft</div>}
+      {isArchived&&<div className="status-badge archived" title={asset.archivedReason||""}>Archive</div>}
+      {isDraft&&<div className="status-badge draft" title="Private — not visible to sales reps or in StoryMatch search">Private</div>}
       {isArchived&&onRestore&&!menuItems&&(
         <button className="archived-restore" onClick={e=>{e.stopPropagation();onRestore(asset);}}>↶ Restore</button>
       )}
@@ -1321,8 +1326,8 @@ function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelet
     <>
       <div className="bulk-bar">
         <span className="bulk-count">{count} selected</span>
-        <button className="bulk-btn" onClick={onPublish}>Publish</button>
-        <button className="bulk-btn" onClick={onDraft}>Move to draft</button>
+        <button className="bulk-btn" onClick={onPublish}>Make public</button>
+        <button className="bulk-btn" onClick={onDraft}>Make private</button>
         <button className="bulk-btn" onClick={onArchive}>Archive</button>
         <button className="bulk-btn" onClick={() => setStatusOpen(true)}>Set status…</button>
         {/* Mark verified retired — freshness is now driven by Vimeo publish
@@ -1427,9 +1432,9 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
               onChange={(e) => setPub(e.target.value as "" | "published" | "draft" | "archived")}
             >
               <option value="">Leave unchanged</option>
-              <option value="published">Published</option>
-              <option value="draft">Draft</option>
-              <option value="archived">Archived</option>
+              <option value="published">Public</option>
+              <option value="draft">Private</option>
+              <option value="archived">Archive</option>
             </select>
             <button
               type="button"
@@ -1696,8 +1701,8 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   // admin picks any actual status, the appropriate dot color shows.
   const approval = (asset.approvalStatus || "unset") as ApprovalStatus;
   if (approval === "approved") reasons.push({ signal: "approval", level: "green", label: "Approval received", shortLabel: "Approved" });
-  else if (approval === "denied") reasons.push({ signal: "approval", level: "red", label: "Approval denied", shortLabel: "Approval denied" });
-  else if (approval === "pending") reasons.push({ signal: "approval", level: "yellow", label: "Pending approval", shortLabel: "Pending approval" });
+  else if (approval === "denied") reasons.push({ signal: "approval", level: "red", label: "Approval denied", shortLabel: "Denied" });
+  else if (approval === "pending") reasons.push({ signal: "approval", level: "yellow", label: "Pending approval", shortLabel: "Pending" });
   else if (approval === "needs_edits") reasons.push({ signal: "approval", level: "yellow", label: "Needs edits", shortLabel: "Needs edits" });
   else reasons.push({ signal: "approval", level: "green", label: "Approval not recorded", hideDot: true });
 
@@ -1708,7 +1713,7 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
   const clientManuallySet = asset.clientStatusSource === "manual" || asset.clientStatusSource === "crm";
   const cs = (clientManuallySet ? (asset.clientStatus || "unknown") : "unknown") as ClientStatus;
   if (cs === "current") reasons.push({ signal: "client", level: "green", label: "Current client", shortLabel: "Active client" });
-  else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "No longer a client", shortLabel: "No longer a client" });
+  else if (cs === "former") reasons.push({ signal: "client", level: "yellow", label: "No longer a client", shortLabel: "Former client" });
   else reasons.push({ signal: "client", level: "green", label: "Client status unspecified", hideDot: true });
 
   // Freshness — driven by Vimeo publish date + org-level Rule.
@@ -1779,7 +1784,7 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
         signal: "freshness",
         level: "yellow",
         label: `${ageLabel} — ${thresholdLabel}`,
-        shortLabel: "Content expired",
+        shortLabel: "Expired",
         flagDetail: `Flagged: ${thresholdLabel}`,
         effectiveExpiration,
       });
@@ -1911,7 +1916,10 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
         {cleared.level === "unset" ? (
           <span className="cl-circle cl-circle-empty"/>
         ) : cleared.level === "green" ? (
-          <span className="cl-circle green"/>
+          <>
+            <span className="cl-circle green"/>
+            <span className="cl-trigger-text">Cleared</span>
+          </>
         ) : (
           <>
             <span className={`cl-circle ${cleared.level}`}/>
@@ -2603,9 +2611,9 @@ function PublicationSelectCell({
         value={pubStatus}
         {...handlers}
       >
-        <option value="published">Published</option>
-        <option value="draft">Draft</option>
-        <option value="archived">Archived</option>
+        <option value="published">Public</option>
+        <option value="draft">Private</option>
+        <option value="archived">Archive</option>
       </select>
     </div>
   );
@@ -2625,8 +2633,10 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         <div></div>
         <div>Title</div>
         <div>Vertical</div>
-        {/* Single Status column groups Cleared (left, primary) + Publication (right) */}
-        <div title="Cleared status + publication">Status</div>
+        {/* Visibility = the publication dropdown column (Public / Private / Archive). */}
+        <div>Visibility</div>
+        {/* Status = the cleared indicators column (approval + flags + freshness). */}
+        <div>Status</div>
         <div style={{ textAlign: "right" }}>Actions</div>
       </div>
       {assets.map((a) => {
@@ -2663,14 +2673,17 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
             </div>
             <div className="lv-vert">{a.vertical || "—"}</div>
-            {/* Merged Status cell: Publication (left) + Cleared (right) */}
-            <div className="lv-status">
+            {/* Visibility column — publication dropdown (Public/Private/Archive). */}
+            <div className="lv-visibility">
               <PublicationSelectCell
                 asset={a}
                 pubStatus={pubStatus}
                 onSetPublicationStatus={onSetPublicationStatus}
                 isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
               />
+            </div>
+            {/* Status column — cleared indicators (approval + flags + freshness). */}
+            <div className="lv-statuscell">
               <ClearedCell
                 asset={a}
                 cleared={cleared}
@@ -3170,12 +3183,6 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
         <DefaultApprovalSelect settings={settings} onSave={onSave}/>
 
         <PublicationRuleControl
-          label="When approval is set to Needs edits"
-          ruleKey="approval_needs_edits"
-          settings={settings}
-          onSave={onSave}
-        />
-        <PublicationRuleControl
           label="When approval is set to Denied"
           ruleKey="approval_denied"
           settings={settings}
@@ -3200,11 +3207,11 @@ function ApprovalRequiredToggle({ settings, onSave }: { settings: OrgSettings; o
           checked={draft}
           onChange={(e) => setDraft(e.target.checked)}
         />
-        Approval required to publish
+        Approval required to be Public
       </label>
       <div className="rules-mode-help">
-        When on, an asset can only be in <strong>Published</strong> state if its
-        approval status is <strong>Approved</strong>. Anything else is auto-drafted.
+        When on, an asset can only be in <strong>Public</strong> visibility if its
+        approval status is <strong>Approved</strong>. Anything else is moved to Private.
       </div>
       {dirty && (
         <div className="rules-actions">
@@ -3277,8 +3284,8 @@ function PublicationRuleControl({ label, ruleKey, settings, onSave }: {
         onChange={(e) => setAction(e.target.value as "none" | "draft" | "archive")}
       >
         <option value="none">No action</option>
-        <option value="draft">Move to draft</option>
-        <option value="archive">Move to archive</option>
+        <option value="draft">Make private</option>
+        <option value="archive">Archive</option>
       </select>
       {action !== "none" && (
         <label className="rules-mode-help" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
@@ -3287,7 +3294,7 @@ function PublicationRuleControl({ label, ruleKey, settings, onSave }: {
             checked={autoRevert}
             onChange={(e) => setAutoRevert(e.target.checked)}
           />
-          Auto-revert to Published when the condition no longer applies
+          Auto-revert to Public when the condition no longer applies
         </label>
       )}
       {dirty && (
@@ -4321,7 +4328,7 @@ export default function App(){
         status:next,
         archivedAt:null,
         archivedReason:null,
-      },next==="published"?"Published":"Moved to draft");
+      },next==="published"?"Made public":"Made private");
     }
   };
 
@@ -4947,6 +4954,21 @@ export default function App(){
                       if (!r.ok) throw new Error("Save failed");
                       setToast("Rule saved");
                       setTimeout(() => setToast(null), 1500);
+                      // The settings PUT scans all org assets and may have flipped
+                      // their status (e.g. expiration rule → draft). Without a
+                      // refetch, the FE shows stale statuses until something else
+                      // triggers a reload. Run silently — failure is non-fatal,
+                      // assets just refresh on next page load.
+                      try {
+                        const headers = await authHeaders();
+                        const ar = await fetch("/api/assets", { headers });
+                        if (ar.ok) {
+                          const data = await ar.json() as Asset[];
+                          setAssets(data);
+                        }
+                      } catch (e) {
+                        console.warn("Asset refetch after rules save failed", e);
+                      }
                     } catch (e) {
                       console.error("Save org settings failed", e);
                       setToast("Couldn't save rule");
