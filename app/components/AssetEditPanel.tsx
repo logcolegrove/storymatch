@@ -172,6 +172,60 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     return () => window.removeEventListener("keydown", onKey);
   }, [asset, onClose]);
 
+  // Compute the destination index given the pointer's current Y. Iterates
+  // non-dragged items and finds the slot whose midpoint the pointer is
+  // above. Defined as a function so the pointer-event effect (declared
+  // here for hook-order safety, before the early return) can call it.
+  const computeInsertIdxForDrag = (state: DragState): number => {
+    const others = state.rects
+      .map((r, i) => ({ i, mid: r.top + r.height / 2 }))
+      .filter(o => o.i !== state.fromIdx);
+    let slot = others.length;
+    for (let k = 0; k < others.length; k++) {
+      if (state.pointerY < others[k].mid) {
+        slot = k;
+        break;
+      }
+    }
+    return slot;
+  };
+
+  // Wire window pointermove/up listeners while dragging. MUST be declared
+  // before any conditional return — React's rule-of-hooks requires a
+  // fixed hook count per render, so this hook can't sit below the
+  // `if (!asset) return null` guard below.
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const cur = dragRef.current;
+      if (!cur) return;
+      setDrag({ ...cur, pointerY: e.clientY, pointerX: e.clientX });
+    };
+    const onUp = () => {
+      const current = dragRef.current;
+      setDrag(null);
+      if (!current) return;
+      const target = computeInsertIdxForDrag(current);
+      if (target !== current.fromIdx) {
+        setQuotes(curr => {
+          const next = [...curr];
+          const [moved] = next.splice(current.fromIdx, 1);
+          next.splice(target, 0, moved);
+          return next;
+        });
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag?.fromIdx]);
+
   if (!asset) return null;
 
   // ── Save / delete ──────────────────────────────────────────────────
@@ -215,29 +269,7 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     setQuotes(prev => prev.filter((_, idx) => idx !== i));
   };
 
-  // ── Pointer-driven reorder ────────────────────────────────────────
-  // Compute the destination index given the pointer's current Y and the
-  // captured original rects. Iterates non-dragged items in document
-  // order and finds the slot whose midpoint the pointer is above.
-  const computeInsertIdx = (state: DragState): number => {
-    const others = state.rects
-      .map((r, i) => ({ i, mid: r.top + r.height / 2 }))
-      .filter(o => o.i !== state.fromIdx);
-    let slot = others.length; // default: drop at end
-    for (let k = 0; k < others.length; k++) {
-      if (state.pointerY < others[k].mid) {
-        slot = k;
-        break;
-      }
-    }
-    // Translate slot back into absolute index of the new array. If we
-    // dropped before item i in the "others" list, the absolute index in
-    // the post-drop list is just `slot` since "others" is the new list
-    // sans dragged.
-    return slot;
-  };
-
-  const insertIdx = drag ? computeInsertIdx(drag) : null;
+  const insertIdx = drag ? computeInsertIdxForDrag(drag) : null;
 
   const onPointerDownHandle = (i: number) => (e: React.PointerEvent) => {
     // Only start drag on primary button; don't preventDefault so text
@@ -264,41 +296,6 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
       width: fromRect.width,
     });
   };
-
-  // Wire window pointermove/up listeners while dragging. We attach once
-  // when drag begins and tear down on stop. Handlers read dragRef.current
-  // for the latest state and call setDrag/setQuotes outside any updater.
-  useEffect(() => {
-    if (!drag) return;
-    const onMove = (e: PointerEvent) => {
-      const cur = dragRef.current;
-      if (!cur) return;
-      setDrag({ ...cur, pointerY: e.clientY, pointerX: e.clientX });
-    };
-    const onUp = () => {
-      const current = dragRef.current;
-      setDrag(null);
-      if (!current) return;
-      const target = computeInsertIdx(current);
-      if (target !== current.fromIdx) {
-        setQuotes(curr => {
-          const next = [...curr];
-          const [moved] = next.splice(current.fromIdx, 1);
-          next.splice(target, 0, moved);
-          return next;
-        });
-      }
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drag?.fromIdx]);
 
   // Compute per-item Y offset to visually shift other items out of the
   // dragged item's way. Other items between the original and target
