@@ -675,21 +675,22 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-circle.green{background:var(--green);}
 .cl-circle.yellow{background:var(--amber);}
 .cl-circle.red{background:var(--red);}
-.cl-pop{position:absolute;top:calc(100% + 6px);left:0;width:340px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14);padding:14px;z-index:60;cursor:default;}
-/* Portal variant — escapes the row's opacity:.65 grey-out for archived/draft
-   rows. position+top+left come from inline style; this rule just ensures
-   z-index sits above any other floating UI. */
+/* Cleared popover — anchored next to a row's cleared-indicator trigger.
+   Visually mirrors the BulkStatusModal: flat stack of selects with no
+   per-row labels, just placeholder text in each select. */
+.cl-pop{position:absolute;top:calc(100% + 6px);left:0;width:340px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14);padding:0;z-index:60;cursor:default;display:flex;flex-direction:column;}
 .cl-pop-portal{z-index:200;opacity:1 !important;}
-.cl-pop-head{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);margin-bottom:8px;}
-.cl-section{padding:10px 0;border-top:1px solid var(--border);}
-/* First section (Approval) opens the popover — kill the leading separator
-   line so it doesn't read like a section divider with nothing above it. */
-.cl-section:first-of-type{border-top:none;padding-top:4px;}
-.cl-section:first-of-type{border-top:none;padding-top:4px;}
-.cl-section-head{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
-.cl-section-head .cl-circle{width:9px;height:9px;}
-.cl-section-title{font-size:12.5px;font-weight:600;color:var(--t1);flex:1;}
-.cl-section-meta{font-size:11px;color:var(--t3);}
+.cl-pop-body{padding:14px 14px 6px;display:flex;flex-direction:column;gap:10px;}
+.cl-pop > .cl-clear-all{margin:6px 14px 14px;}
+/* Custom flag chips — compact display of existing per-asset flags, with
+   inline remove. Sits above the "Add a custom flag" toggle. */
+.cl-flag-chips{display:flex;flex-wrap:wrap;gap:6px;}
+.cl-flag-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 8px;border-radius:999px;border:1px solid var(--border);background:#fff;font-size:11.5px;color:var(--t1);}
+.cl-flag-chip.yellow{background:var(--amberL);border-color:#fcd34d;}
+.cl-flag-chip.red{background:#fef2f2;border-color:#fca5a5;}
+.cl-flag-chip-label{max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cl-flag-chip-x{background:none;border:none;cursor:pointer;color:var(--t3);font-size:14px;line-height:1;padding:0 4px;}
+.cl-flag-chip-x:hover{color:var(--red);}
 .cl-freshness-line{font-size:12px;color:var(--t1);margin-top:6px;}
 .cl-freshness-rel{color:var(--t3);font-weight:400;}
 .cl-freshness-note{font-size:11px;color:var(--t3);margin-top:6px;font-style:italic;}
@@ -823,28 +824,35 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bulk-close{background:none;border:none;color:#8888a0;cursor:pointer;padding:6px 8px;margin-left:4px;font-size:14px;border-radius:6px;}
 .bulk-close:hover{background:rgba(255,255,255,.1);color:#fff;}
 
-/* Bulk status modal — opened by "Set status…" in the bulk action bar.
-   Lets admins edit any subset of publication / approval / client /
-   expiration / custom flag across all selected assets in one motion. */
+/* Bulk modals — shared styles for both BulkVisibilityModal and BulkStatusModal.
+   Same shell so the two feel like siblings. Each modal owns one focused
+   concept (visibility OR status indicators) — visibility never appears in
+   the status modal and vice versa. */
 .bsm-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;animation:aepFade .15s ease-out;}
-.bsm-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,.25);z-index:201;width:480px;max-width:calc(100vw - 32px);max-height:calc(100vh - 64px);display:flex;flex-direction:column;font-family:var(--font);}
+.bsm-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,.25);z-index:201;width:420px;max-width:calc(100vw - 32px);max-height:calc(100vh - 64px);display:flex;flex-direction:column;font-family:var(--font);}
 .bsm-head{padding:18px 20px 12px;border-bottom:1px solid var(--border);}
 .bsm-title{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);}
 .bsm-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
-.bsm-body{flex:1;overflow-y:auto;padding:14px 20px;display:flex;flex-direction:column;gap:14px;}
-/* Top row mirrors the list view: Publication dropdown on the left, the
-   "Approval indicator" trigger on the right. Initial modal view shows
-   only this row — clicking the trigger expands the status fields below. */
-.bsm-row-top{display:flex;align-items:center;gap:14px;}
-.bsm-pub-select{width:auto;flex:0 0 auto;}
-.bsm-indicator-trigger{display:flex;align-items:center;gap:8px;background:none;border:none;padding:6px 10px;border-radius:6px;font-family:var(--font);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;cursor:pointer;transition:all .12s;}
-.bsm-indicator-trigger:hover{background:var(--bg2);color:var(--t1);}
-.bsm-indicator-trigger.open{color:var(--t1);}
-.bsm-status-fields{display:flex;flex-direction:column;gap:14px;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;}
-.bsm-fld{display:flex;flex-direction:column;gap:5px;}
-.bsm-fld > label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;display:flex;align-items:center;}
-.bsm-flag-form{margin-top:6px;padding:8px 10px;background:#fff;border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
+.bsm-body{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px;}
+/* Status fields — flat stack of selects, no per-row labels. Each select
+   carries a "Field — leave unchanged" placeholder option so the meaning
+   stays clear without taking vertical space for headers. */
+.bsm-status-fields{display:flex;flex-direction:column;gap:10px;}
+.bsm-fld-stack{display:flex;flex-direction:column;gap:8px;}
+.bsm-flag-toggle{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--t1);cursor:pointer;padding:7px 0;}
+.bsm-flag-form{padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:7px;display:flex;flex-direction:column;gap:8px;}
 .bsm-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;}
+/* Visibility-modal choice list — radio cards instead of a dropdown so the
+   help text for each option is visible at-a-glance. Active choice gets a
+   subtle ring; whole row is the click target. */
+.bsm-choice-list{display:flex;flex-direction:column;gap:8px;}
+.bsm-choice{display:flex;align-items:flex-start;gap:10px;padding:11px 13px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:border-color .12s,background .12s;}
+.bsm-choice:hover{background:var(--bg2);}
+.bsm-choice.selected{border-color:var(--accent);background:var(--accentLL);}
+.bsm-choice input[type="radio"]{margin-top:2px;accent-color:var(--accent);}
+.bsm-choice-text{display:flex;flex-direction:column;gap:2px;}
+.bsm-choice-label{font-size:13px;font-weight:600;color:var(--t1);}
+.bsm-choice-help{font-size:11.5px;color:var(--t3);line-height:1.35;}
 /* Red Clear-all button — visible in both the bulk modal (below status
    fields, above Cancel/Apply) and the per-asset popover (always visible
    at the bottom, top-level). Uses red color + outlined border to read as
@@ -1321,21 +1329,36 @@ interface BulkBarProps {
   onApplyStatus: (patch: BulkStatusPatch) => void | Promise<void>;
 }
 function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear, onApplyStatus }: BulkBarProps) {
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  // Wire the dedicated visibility modal back through onPublish/onDraft/onArchive
+  // so we don't have to pipe a new handler through ListView. Same network
+  // result either way.
+  void onMarkVerified; // (legacy hook; kept on props for parent compat)
+  const setVisibility = (next: "published" | "draft" | "archived") => {
+    if (next === "published") onPublish();
+    else if (next === "draft") onDraft();
+    else onArchive();
+  };
   return (
     <>
       <div className="bulk-bar">
         <span className="bulk-count">{count} selected</span>
-        <button className="bulk-btn" onClick={onPublish}>Make public</button>
-        <button className="bulk-btn" onClick={onDraft}>Make private</button>
-        <button className="bulk-btn" onClick={onArchive}>Archive</button>
+        <button className="bulk-btn" onClick={() => setVisibilityOpen(true)}>Set visibility…</button>
         <button className="bulk-btn" onClick={() => setStatusOpen(true)}>Set status…</button>
-        {/* Mark verified retired — freshness is now driven by Vimeo publish
-            date + the Rules → Freshness threshold. onMarkVerified left in
-            props for parent compatibility; harmless if never invoked. */}
         <button className="bulk-btn danger" onClick={onDelete}>Delete</button>
         <button className="bulk-close" onClick={onClear} title="Clear selection">✕</button>
       </div>
+      {visibilityOpen && (
+        <BulkVisibilityModal
+          count={count}
+          onClose={() => setVisibilityOpen(false)}
+          onApply={(next) => {
+            setVisibility(next);
+            setVisibilityOpen(false);
+          }}
+        />
+      )}
       {statusOpen && (
         <BulkStatusModal
           count={count}
@@ -1350,6 +1373,57 @@ function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelet
   );
 }
 
+// ─── BULK VISIBILITY MODAL ────────────────────────────────────────────────
+// Single-purpose modal for the "Set visibility…" bulk action. Three radio-
+// style options + Apply. Keeps visibility control completely separate from
+// the status (cleared) controls so neither modal has to handle both concepts.
+interface BulkVisibilityModalProps {
+  count: number;
+  onClose: () => void;
+  onApply: (next: "published" | "draft" | "archived") => void;
+}
+function BulkVisibilityModal({ count, onClose, onApply }: BulkVisibilityModalProps) {
+  const [choice, setChoice] = useState<"published" | "draft" | "archived">("published");
+  return createPortal(
+    <>
+      <div className="bsm-backdrop" onClick={onClose}/>
+      <div className="bsm-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bsm-head">
+          <div className="bsm-title">Set visibility</div>
+          <div className="bsm-sub">Apply to {count} selected {count === 1 ? "asset" : "assets"}.</div>
+        </div>
+        <div className="bsm-body">
+          <div className="bsm-choice-list">
+            {([
+              { value: "published", label: "Public", help: "Visible to sales reps and StoryMatch search" },
+              { value: "draft",     label: "Private", help: "Hidden from sales reps and search" },
+              { value: "archived",  label: "Archive", help: "Removed from active library" },
+            ] as { value: "published" | "draft" | "archived"; label: string; help: string }[]).map((opt) => (
+              <label key={opt.value} className={`bsm-choice${choice === opt.value ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="bsm-vis"
+                  checked={choice === opt.value}
+                  onChange={() => setChoice(opt.value)}
+                />
+                <div className="bsm-choice-text">
+                  <div className="bsm-choice-label">{opt.label}</div>
+                  <div className="bsm-choice-help">{opt.help}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="bsm-foot">
+          <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
+          <button className="cl-mini-btn primary" onClick={() => onApply(choice)}>Apply to {count}</button>
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+}
+
 // ─── BULK STATUS MODAL ────────────────────────────────────────────────────
 // One modal that lets admins edit publication + status indicator fields
 // across N selected assets at once. Each field has a "Leave unchanged"
@@ -1360,14 +1434,10 @@ interface BulkStatusModalProps {
   onApply: (patch: BulkStatusPatch) => void | Promise<void>;
 }
 function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
-  // Each top-level field: "" means leave unchanged. Specific value = apply.
-  const [pub, setPub] = useState<"" | "published" | "draft" | "archived">("");
+  // Each field: "" means leave unchanged. Specific value = apply.
+  // Visibility lives in its own dedicated modal (BulkVisibilityModal) — this
+  // one is purely for the cleared/approval indicator controls.
   const [approval, setApproval] = useState<"" | ApprovalStatus>("");
-  // Status indicator fields are hidden behind "Approval indicator" trigger
-  // until admin clicks it. Most bulk operations are publication-only, so
-  // the modal opens minimal and reveals more on demand.
-  const [indicatorExpanded, setIndicatorExpanded] = useState(false);
-  const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
   const [client, setClient] = useState<"" | "current" | "former" | "unknown">("");
   // Expiration: "leave" / "never" / "set"
   // "never" → far-future sentinel that overrides any org rule (admins
@@ -1392,7 +1462,6 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
 
   const handleApply = () => {
     const patch: BulkStatusPatch = {};
-    if (pub) patch.publication = pub;
     if (approval) patch.approval = approval as ApprovalStatus;
     if (client) patch.client = client as "current" | "former" | "unknown";
     if (expMode === "never") patch.freshnessExpiration = buildNeverExpiryIso();
@@ -1406,11 +1475,11 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
   };
 
   const handleClearAll = () => {
-    if (!confirm(`Reset status indicators on ${count} ${count === 1 ? "asset" : "assets"}? This resets approval, client status, expiration, and custom flags to default. Publication is unchanged.`)) return;
+    if (!confirm(`Reset status indicators on ${count} ${count === 1 ? "asset" : "assets"}? This resets approval, client status, expiration, and custom flags to default. Visibility is unchanged.`)) return;
     onApply({ clearAll: true });
   };
 
-  const dirty = !!pub || !!approval || !!client || expMode !== "leave" || addFlagToggle;
+  const dirty = !!approval || !!client || expMode !== "leave" || addFlagToggle;
 
   return createPortal(
     <>
@@ -1418,78 +1487,47 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
       <div className="bsm-modal" onClick={(e) => e.stopPropagation()}>
         <div className="bsm-head">
           <div className="bsm-title">Set status</div>
-          <div className="bsm-sub">Apply to {count} selected {count === 1 ? "asset" : "assets"}. Fields left as &quot;Leave unchanged&quot; aren&apos;t touched.</div>
+          <div className="bsm-sub">Apply to {count} selected {count === 1 ? "asset" : "assets"}.</div>
         </div>
+        {/* Body — flat list of status indicator controls. No labels, no
+            descriptive text, no expand/collapse. Each select uses a
+            placeholder option to communicate "leave unchanged" so we
+            don't need a header above each row. */}
         <div className="bsm-body">
-          {/* Initial view: just publication dropdown (no header) and a
-              clickable "Approval indicator" trigger that reveals the
-              status indicator fields when clicked. Mirrors the list
-              view's status column visually. */}
-          <div className="bsm-row-top">
-            <select
-              className="cl-select bsm-pub-select"
-              value={pub}
-              onChange={(e) => setPub(e.target.value as "" | "published" | "draft" | "archived")}
-            >
-              <option value="">Leave unchanged</option>
-              <option value="published">Public</option>
-              <option value="draft">Private</option>
-              <option value="archived">Archive</option>
-            </select>
-            <button
-              type="button"
-              className={`bsm-indicator-trigger${indicatorExpanded ? " open" : ""}`}
-              onClick={() => {
-                const wasCollapsed = !indicatorExpanded;
-                setIndicatorExpanded(true);
-                // Pre-select Approved on first expansion (most common bulk
-                // action) so admin only needs to click Apply. Picker
-                // intentionally NOT auto-opened — felt overwhelming in the
-                // modal context. Admin opens the dropdown manually if
-                // they want a different value.
-                if (wasCollapsed && approval === "") {
-                  setApproval("approved");
-                }
-              }}
-            >
-              <span className="cl-circle cl-circle-empty"/>
-              <span>Approval indicator</span>
-            </button>
-          </div>
-
-          {indicatorExpanded && (
           <div className="bsm-status-fields">
-            <div className="bsm-fld">
-              <label>Approval status</label>
+            <select
+              className="cl-select"
+              value={approval}
+              onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}
+            >
+              <option value="">Approval — leave unchanged</option>
+              <option value="approved">Approved</option>
+              <option value="pending">Pending</option>
+              <option value="denied">Denied</option>
+              <option value="needs_edits">Needs edits</option>
+              <option value="unset">Blank</option>
+            </select>
+
+            <select
+              className="cl-select"
+              value={client}
+              onChange={(e) => setClient(e.target.value as "" | "current" | "former" | "unknown")}
+            >
+              <option value="">Client — leave unchanged</option>
+              <option value="current">Active client</option>
+              <option value="former">Former client</option>
+              <option value="unknown">Blank</option>
+            </select>
+
+            <div className="bsm-fld-stack">
               <select
-                ref={approvalSelectRef}
                 className="cl-select"
-                value={approval}
-                onChange={(e) => setApproval(e.target.value as "" | ApprovalStatus)}
+                value={expMode}
+                onChange={(e) => setExpMode(e.target.value as "leave" | "never" | "set")}
               >
-                <option value="">Leave unchanged</option>
-                <option value="unset">Blank</option>
-                <option value="pending">Pending approval</option>
-                <option value="needs_edits">Needs edits</option>
-                <option value="approved">Approved</option>
-                <option value="denied">Denied</option>
-              </select>
-            </div>
-            <div className="bsm-fld">
-              <label>Still a client?</label>
-              <select className="cl-select" value={client} onChange={(e) => setClient(e.target.value as "" | "current" | "former" | "unknown")}>
-                <option value="">Leave unchanged</option>
-                <option value="unknown">Blank</option>
-                <option value="current">Yes</option>
-                <option value="former">No</option>
-              </select>
-            </div>
-            <div className="bsm-fld">
-              <label>Expiration</label>
-              <select className="cl-select" value={expMode} onChange={(e) => setExpMode(e.target.value as "leave" | "never" | "set")}>
-                <option value="leave">Leave unchanged</option>
-                <option value="never">No expiration (never flag)</option>
-                <option value="set">Set expiration date…</option>
+                <option value="leave">Expiration — leave unchanged</option>
+                <option value="never">Never expire</option>
+                <option value="set">Expire on…</option>
               </select>
               {expMode === "set" && (
                 <input
@@ -1497,25 +1535,29 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
                   type="date"
                   value={expDate}
                   onChange={(e) => setExpDate(e.target.value)}
-                  style={{ marginTop: 6 }}
                 />
               )}
             </div>
-            <div className="bsm-fld">
-              <label>
-                <input type="checkbox" checked={addFlagToggle} onChange={(e) => setAddFlagToggle(e.target.checked)} style={{ marginRight: 6 }}/>
-                Add a custom flag to all selected
+
+            <div className="bsm-fld-stack">
+              <label className="bsm-flag-toggle">
+                <input
+                  type="checkbox"
+                  checked={addFlagToggle}
+                  onChange={(e) => setAddFlagToggle(e.target.checked)}
+                />
+                Add a custom flag
               </label>
               {addFlagToggle && (
                 <div className="bsm-flag-form">
                   <div className="cf-severity-row">
                     <label className="cl-radio">
                       <input type="radio" name="bsm-color" checked={flagColor === "yellow"} onChange={() => setFlagColor("yellow")}/>
-                      <span className="cl-circle yellow"/> Yellow (review)
+                      <span className="cl-circle yellow"/> Yellow
                     </label>
                     <label className="cl-radio">
                       <input type="radio" name="bsm-color" checked={flagColor === "red"} onChange={() => setFlagColor("red")}/>
-                      <span className="cl-circle red"/> Red (do not share)
+                      <span className="cl-circle red"/> Red
                     </label>
                   </div>
                   <input
@@ -1528,10 +1570,7 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
               )}
             </div>
           </div>
-          )}
-          {indicatorExpanded && (
-            <button className="bsm-clear-all-btn" onClick={handleClearAll}>Reset status indicators</button>
-          )}
+          <button className="bsm-clear-all-btn" onClick={handleClearAll}>Reset all to default</button>
         </div>
         <div className="bsm-foot">
           <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
@@ -1948,9 +1987,10 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
 }
 
 function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
-  const [noteDraft, setNoteDraft] = useState(asset.approvalNote || "");
+  void onMarkVerified; void reasons; void libraryFreshnessRuleActive; // legacy props, kept for API compat
   const popRef = React.useRef<HTMLDivElement>(null);
   const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
+
   // Multi-select-aware handlers for the popover's status dropdowns. The
   // hook tracks user interaction (mousedown) so onBlur only fires the apply
   // when admin actually opened the picker — not on tab-away or focus loss.
@@ -1962,11 +2002,10 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
     isInMultiSelection,
     (v) => onSetClientStatus(asset, v as "current" | "former" | "unknown"),
   );
+
   // Auto-open the approval dropdown ONLY when the asset is genuinely fresh
-  // — nothing set, no flags fired by org rules. If anything is set or
-  // flagged, opening the picker on top of an already-flagged asset reads
-  // as buggy ("why is this opening a picker on a yellow asset?"). When in
-  // doubt, leave it closed.
+  // — nothing set, no flags. Avoids opening a picker on top of an already-
+  // flagged asset (reads as buggy).
   const approvalUnset = !asset.approvalStatus || asset.approvalStatus === "unset";
   const clientUnset = !asset.clientStatusSource || asset.clientStatusSource === "unset";
   const freshnessExceptionUnset = !asset.freshnessExceptionUntil;
@@ -1986,33 +2025,18 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Coords use either `top` (popover sits below trigger) or `bottom` (popover
-  // sits above trigger). We flip when there isn't enough room below the
-  // trigger — fixes the "popover cut off at bottom of viewport" bug.
-  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
-  // Most admins just want to mark approval — Client + Freshness sit
-  // behind an "Advanced" disclosure. Default collapsed UNLESS there's a
-  // yellow/red flag from a non-approval signal (so the admin lands on the
-  // explanation when they click a flagged dot, instead of seeing only the
-  // approval section that doesn't explain the flag).
-  const hasNonApprovalFlag = reasons.some(r =>
-    (r.signal === "client" || r.signal === "freshness" || r.signal === "custom") &&
-    (r.level === "yellow" || r.level === "red")
-  );
-  const [showAdvanced, setShowAdvanced] = useState(hasNonApprovalFlag);
 
   // Position the popover relative to the anchor + reposition on scroll/resize.
+  // Either `top` or `bottom` is set depending on space above/below the trigger.
+  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   useEffect(() => {
     const compute = () => {
       if (!anchor) return;
       const r = anchor.getBoundingClientRect();
-      // The popover renders ~360–400px tall when fully expanded (3 sections,
-      // textarea, etc). Pre-flip if there's less room than that below.
       const POP_HEIGHT_ESTIMATE = 380;
       const spaceBelow = window.innerHeight - r.bottom;
       const spaceAbove = r.top;
       const flipUp = spaceBelow < POP_HEIGHT_ESTIMATE && spaceAbove > spaceBelow;
-      // Also clamp horizontally so the popover doesn't run off the right edge.
       const POP_WIDTH = 340;
       const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_WIDTH - 8));
       if (flipUp) {
@@ -2038,13 +2062,70 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
       if (anchor?.contains(t)) return;
       onClose();
     };
-    // Defer one tick so the click that opened us doesn't immediately close us
     const timer = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
     return () => { clearTimeout(timer); document.removeEventListener("mousedown", onDoc); };
   }, [onClose, anchor]);
 
-  const reasonFor = (signal: "approval" | "client" | "freshness"): ClearedReason =>
-    reasons.find(r => r.signal === signal) || { signal, level: "yellow", label: "—" };
+  // Freshness popover state — three modes mirror the bulk modal: leave
+  // (no change), never (sentinel far-future), or set (custom date).
+  const NEVER_THRESHOLD_YEARS = 50;
+  const isNeverExpiry = (iso: string | null | undefined): boolean => {
+    if (!iso) return false;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return false;
+    return d.getTime() > Date.now() + NEVER_THRESHOLD_YEARS * 365 * 24 * 60 * 60 * 1000;
+  };
+  const buildNeverIso = (): string => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 100);
+    return d.toISOString();
+  };
+  const savedIsNever = isNeverExpiry(asset.freshnessExceptionUntil);
+  const savedHasDate = !!asset.freshnessExceptionUntil && !savedIsNever;
+  const initialFreshMode: "leave" | "never" | "set" = savedIsNever ? "never" : savedHasDate ? "set" : "leave";
+  const [freshMode, setFreshMode] = useState<"leave" | "never" | "set">(initialFreshMode);
+  const [freshDate, setFreshDate] = useState<string>(() => {
+    if (savedHasDate) return new Date(asset.freshnessExceptionUntil!).toISOString().split("T")[0];
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toISOString().split("T")[0];
+  });
+  const handleFreshChange = (next: "leave" | "never" | "set") => {
+    setFreshMode(next);
+    if (next === "never") onSetFreshnessException(asset, buildNeverIso());
+    else if (next === "leave") onSetFreshnessException(asset, null);
+    // For "set", wait for date input change before writing.
+  };
+  const handleFreshDateChange = (iso: string) => {
+    setFreshDate(iso);
+    if (iso) onSetFreshnessException(asset, new Date(iso).toISOString());
+  };
+
+  // Custom flag toggle — same UX as the bulk modal: checkbox to expand a
+  // small form, then add. Existing flags render as compact chips above so
+  // admins can see and remove them.
+  const [addFlagOpen, setAddFlagOpen] = useState(false);
+  const [flagColor, setFlagColor] = useState<"yellow" | "red">("yellow");
+  const [flagLabel, setFlagLabel] = useState("");
+  const flags: CustomFlag[] = Array.isArray(asset.customFlags) ? asset.customFlags as CustomFlag[] : [];
+  const handleAddFlag = () => {
+    const newFlag: CustomFlag = {
+      id: (typeof crypto !== "undefined" && "randomUUID" in crypto)
+        ? crypto.randomUUID()
+        : `f-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: flagLabel.trim(),
+      color: flagColor,
+      note: "",
+      setByEmail: "",
+      setAt: new Date().toISOString(),
+    };
+    onSetCustomFlags(asset, [...flags, newFlag]);
+    setAddFlagOpen(false);
+    setFlagLabel("");
+  };
+  const handleRemoveFlag = (id: string) => {
+    onSetCustomFlags(asset, flags.filter(f => f.id !== id));
+  };
 
   if (!coords || typeof document === "undefined") return null;
   return createPortal(
@@ -2054,83 +2135,30 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
       style={{
         position: "fixed",
         left: coords.left,
-        // Explicit "auto" on the unused axis so the class's legacy
-        // `top: calc(100% + 6px)` doesn't bleed through and push the
-        // popover off-screen when we're flipped above the trigger.
         top: coords.top !== undefined ? coords.top : "auto",
         bottom: coords.bottom !== undefined ? coords.bottom : "auto",
       }}
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Header removed — popover opens directly into the Approval section
-          since that's the primary thing admins come here to set. */}
-
-      {/* Approval section — primary focus. Larger title + select to reflect
-          that this is the main thing admins come here to set. */}
-      <div className="cl-section cl-section-primary">
-        <div className="cl-section-head">
-          {!reasonFor("approval").hideDot && <span className={`cl-circle ${reasonFor("approval").level}`}/>}
-          <span className="cl-section-title">Approval status</span>
-          {asset.approvalRecordedAt && (
-            <span className="cl-section-meta">recorded {timeAgoShort(asset.approvalRecordedAt)}</span>
-          )}
-        </div>
+      {/* Flat stack matching the BulkStatusModal — no section heads, no
+          labels above each select. Placeholder option text doubles as the
+          field name. The popover writes per-asset, so changes apply immediately
+          (no Apply button needed). */}
+      <div className="cl-pop-body">
         <select
           ref={approvalSelectRef}
-          className={`cl-select cl-select-primary${(asset.approvalStatus || "unset") === "unset" ? " placeholder" : ""}`}
+          className={`cl-select${(asset.approvalStatus || "unset") === "unset" ? " placeholder" : ""}`}
           value={asset.approvalStatus || "unset"}
           {...approvalSelectHandlers}
         >
-          <option value="unset">Blank</option>
-          <option value="pending">Pending approval</option>
-          <option value="needs_edits">Needs edits</option>
+          <option value="unset">Approval — blank</option>
           <option value="approved">Approved</option>
+          <option value="pending">Pending</option>
           <option value="denied">Denied</option>
+          <option value="needs_edits">Needs edits</option>
         </select>
-        <textarea
-          className="cl-textarea"
-          placeholder="Paste the email thread, or write a note about how approval was obtained…"
-          value={noteDraft}
-          onChange={(e) => setNoteDraft(e.target.value)}
-        />
-        {noteDraft !== (asset.approvalNote || "") && (
-          <div className="cl-row-actions">
-            <button className="cl-mini-btn primary" onClick={() => onSetApproval(asset, { note: noteDraft })}>Save note</button>
-            <button className="cl-mini-btn" onClick={() => setNoteDraft(asset.approvalNote || "")}>Cancel</button>
-          </div>
-        )}
-      </div>
 
-      {/* Disclosure for the secondary signals — most admins just need
-          approval, so client status + freshness are tucked behind an
-          "Advanced" toggle to keep the default view simple. */}
-      <button
-        className="cl-advanced-toggle"
-        onClick={() => setShowAdvanced(o => !o)}
-        type="button"
-      >
-        {showAdvanced ? "Hide advanced flagging options" : "Show advanced flagging options"}
-        <span className="cl-advanced-chevron">{showAdvanced ? "▴" : "▾"}</span>
-      </button>
-
-      {showAdvanced && (
-      <>
-      {/* Client status section — secondary */}
-      <div className="cl-section cl-section-secondary">
-        <div className="cl-section-head">
-          {!reasonFor("client").hideDot && <span className={`cl-circle ${reasonFor("client").level}`}/>}
-          <span className="cl-section-title">Still a client?</span>
-          {asset.clientStatusUpdatedAt && asset.clientStatusSource && asset.clientStatusSource !== "unset" && (
-            <span className="cl-section-meta">
-              recorded {asset.clientStatusSource === "manual" ? "manually" : `via ${asset.clientStatusSource}`}
-              {" "}{timeAgoShort(asset.clientStatusUpdatedAt)}
-            </span>
-          )}
-        </div>
         {(() => {
-          // Match computeCleared: only respect clientStatus when admin has
-          // manually engaged (or CRM did). Otherwise show "Unspecified" as
-          // the default placeholder regardless of the DB column's stored value.
           const manuallySet = asset.clientStatusSource === "manual" || asset.clientStatusSource === "crm";
           const value = manuallySet ? (asset.clientStatus || "unknown") : "unknown";
           return (
@@ -2139,39 +2167,90 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
               value={value as string}
               {...clientSelectHandlers}
             >
-              <option value="unknown">Blank</option>
-              <option value="current">Yes</option>
-              <option value="former">No</option>
+              <option value="unknown">Client — blank</option>
+              <option value="current">Active client</option>
+              <option value="former">Former client</option>
             </select>
           );
         })()}
+
+        <select
+          className={`cl-select${freshMode === "leave" ? " placeholder" : ""}`}
+          value={freshMode}
+          onChange={(e) => handleFreshChange(e.target.value as "leave" | "never" | "set")}
+        >
+          <option value="leave">Expiration — default</option>
+          <option value="never">Never expire</option>
+          <option value="set">Expire on…</option>
+        </select>
+        {freshMode === "set" && (
+          <input
+            className="cl-exception-date"
+            type="date"
+            value={freshDate}
+            onChange={(e) => handleFreshDateChange(e.target.value)}
+          />
+        )}
+
+        {/* Existing custom flags — chips with remove. */}
+        {flags.length > 0 && (
+          <div className="cl-flag-chips">
+            {flags.map(f => (
+              <span key={f.id} className={`cl-flag-chip ${f.color}`}>
+                <span className={`cl-circle ${f.color}`}/>
+                <span className="cl-flag-chip-label">{f.label || (f.color === "red" ? "Red flag" : "Yellow flag")}</span>
+                <button
+                  type="button"
+                  className="cl-flag-chip-x"
+                  onClick={() => handleRemoveFlag(f.id)}
+                  title="Remove flag"
+                >×</button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        <label className="bsm-flag-toggle">
+          <input
+            type="checkbox"
+            checked={addFlagOpen}
+            onChange={(e) => setAddFlagOpen(e.target.checked)}
+          />
+          Add a custom flag
+        </label>
+        {addFlagOpen && (
+          <div className="bsm-flag-form">
+            <div className="cf-severity-row">
+              <label className="cl-radio">
+                <input type="radio" name="cl-pop-color" checked={flagColor === "yellow"} onChange={() => setFlagColor("yellow")}/>
+                <span className="cl-circle yellow"/> Yellow
+              </label>
+              <label className="cl-radio">
+                <input type="radio" name="cl-pop-color" checked={flagColor === "red"} onChange={() => setFlagColor("red")}/>
+                <span className="cl-circle red"/> Red
+              </label>
+            </div>
+            <input
+              className="cl-input"
+              placeholder="Optional label"
+              value={flagLabel}
+              onChange={(e) => setFlagLabel(e.target.value)}
+            />
+            <div className="cl-row-actions">
+              <button className="cl-mini-btn primary" onClick={handleAddFlag}>Add</button>
+              <button className="cl-mini-btn" onClick={() => { setAddFlagOpen(false); setFlagLabel(""); }}>Cancel</button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <FreshnessSection
-        asset={asset}
-        freshnessReason={reasonFor("freshness")}
-        libraryRuleActive={libraryFreshnessRuleActive}
-        onSetFreshnessException={onSetFreshnessException}
-        onClose={onClose}
-      />
-      <CustomFlagsSection
-        asset={asset}
-        onSetCustomFlags={onSetCustomFlags}
-      />
-      </>
-      )}
-
-      {/* Reset — always visible at popover bottom (top-level, not behind
-          advanced disclosure). Resets every status indicator on this asset
-          via the parent handler, which knows about org-rule state and
-          multi-select propagation so it actually works. */}
       <button
         className="cl-clear-all"
         onClick={() => {
           if (!confirm("Reset status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
           onResetStatusIndicators(asset);
         }}
-      >Reset status indicators</button>
+      >Reset all to default</button>
     </div>,
     document.body
   );

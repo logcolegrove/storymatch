@@ -128,23 +128,38 @@ export async function applyPublicationRules(
   // Case 1: Rule fires → asset should be drafted/archived
   if (triggered) {
     const intendedAction = ruleAction(triggered, org);
-    const intendedStatus = intendedAction; // "draft" or "archive"
+    // Map the action verb to the actual asset.status enum value. The rule
+    // engine internally uses "archive" (the action), but the assets table
+    // stores past-tense "archived" — so writing "archive" directly would
+    // give the FE an unrecognized status and break archive-related UI.
+    const intendedStatus = intendedAction === "archive" ? "archived" : "draft";
     if (asset.status === intendedStatus && asset.auto_status_by_rule === triggered) {
       return { changed: false }; // already in the rule-driven state
     }
     if (asset.status === intendedStatus) {
-      // Already in target state but auto_status not stamped — stamp it so
-      // we can auto-revert later. (E.g. admin manually drafted, then
-      // approval flipped to denied — claim it as rule-driven so future
-      // approval restoration restores publication.)
-      // Actually, don't stamp manually-drafted assets — leave them alone.
+      // Already in target state but auto_status not stamped — leave manually-
+      // drafted/archived assets alone; the admin owns them now.
       return { changed: false };
     }
     // Only act on "published" assets — don't auto-flip drafts/archives.
     if (asset.status !== "published") return { changed: false };
+    // Build the update. For archive, also stamp archived_at and a reason
+    // so the FE's archive UI (badge, restore button, etc.) lights up the
+    // same way as a manual archive.
+    type StatusUpdate = {
+      status: string;
+      auto_status_by_rule: string;
+      archived_at?: string | null;
+      archived_reason?: string | null;
+    };
+    const update: StatusUpdate = { status: intendedStatus, auto_status_by_rule: triggered };
+    if (intendedStatus === "archived") {
+      update.archived_at = new Date().toISOString();
+      update.archived_reason = `Auto-archived by ${triggered.replace(/_/g, " ")} rule`;
+    }
     await supabaseAdmin
       .from("assets")
-      .update({ status: intendedStatus, auto_status_by_rule: triggered })
+      .update(update)
       .eq("id", asset.id);
     return { changed: true, newStatus: intendedStatus, newAutoBy: triggered };
   }
