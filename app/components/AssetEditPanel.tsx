@@ -4,8 +4,11 @@
 // no headers or dividers — just whitespace grouping by topic:
 //   1. Basics: Title, Description, Client name + Company, Type
 //   2. Filters: Vertical, Geography, Size
-//   3. Highlighted quotes: numbered, reorderable list. "+ Add quote"
+//   3. Pull quotes: numbered, reorderable callouts. "+ Add quote"
 //      opens a chooser → From transcript / AI recommend / Manual entry.
+//      "From transcript" doesn't show its own UI — it scrolls down to
+//      the actual transcript and turns on a hand-holdy "highlight text
+//      below" cue, leveraging the existing selection→quote mechanism.
 //   4. Transcript: editable textarea + "Add selection as quote".
 //
 // Visibility / approval / cleared status / custom flags all live in the
@@ -54,7 +57,7 @@ interface Props {
   authHeaders?: () => Promise<HeadersInit> | HeadersInit;
 }
 
-type AddMode = "closed" | "chooser" | "transcript" | "ai" | "manual";
+type AddMode = "closed" | "chooser" | "ai" | "manual";
 type AiState = "idle" | "loading" | "ready" | "error";
 
 export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onClose, authHeaders }: Props) {
@@ -73,7 +76,6 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   // Add-quote sub-flow state
   const [addMode, setAddMode] = useState<AddMode>("closed");
   const [manualDraft, setManualDraft] = useState("");
-  const [transcriptPicked, setTranscriptPicked] = useState<Set<number>>(new Set());
   const [aiState, setAiState] = useState<AiState>("idle");
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [aiPicked, setAiPicked] = useState<Set<number>>(new Set());
@@ -84,7 +86,13 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
 
   // Transcript selection → quote affordance
   const transcriptRef = useRef<HTMLTextAreaElement>(null);
+  const transcriptSectionRef = useRef<HTMLDivElement>(null);
   const [transcriptSel, setTranscriptSel] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
+  // "From transcript" mode — doesn't have its own UI block; instead we
+  // scroll to the transcript section, light up a hand-holdy cue banner,
+  // and pulse the textarea so admins instantly understand the move
+  // (highlight text → click button). Stays on until admin dismisses.
+  const [transcriptCue, setTranscriptCue] = useState(false);
 
   // Sync local state from the incoming asset. Combine pullQuote + additionalQuotes
   // into a single ordered array; first non-empty becomes index 0.
@@ -106,13 +114,13 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     // the previous asset, etc.).
     setAddMode("closed");
     setManualDraft("");
-    setTranscriptPicked(new Set());
     setAiState("idle");
     setAiSuggestions([]);
     setAiPicked(new Set());
     setAiError("");
     setTranscriptSel({ start: 0, end: 0 });
     setDragFrom(null);
+    setTranscriptCue(false);
   }, [asset]);
 
   // Close on Escape — but only if no add-quote sub-flow is open (those
@@ -204,28 +212,24 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   };
 
   // ── Sub-flows ─────────────────────────────────────────────────────
-  // Transcript sentences — split on terminal punctuation, keep the
-  // delimiter so each sentence reads naturally. Filter out empties.
-  const sentences = (() => {
-    if (!transcript) return [] as string[];
-    const parts = transcript
-      .replace(/\s+/g, " ")
-      .match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
-    return parts.map(s => s.trim()).filter(s => s.length > 6);
-  })();
-
   const togglePicked = (set: Set<number>, setter: (s: Set<number>) => void, i: number) => {
     const next = new Set(set);
     if (next.has(i)) next.delete(i); else next.add(i);
     setter(next);
   };
 
-  const confirmTranscriptPicks = () => {
-    const picks: string[] = [];
-    sentences.forEach((s, i) => { if (transcriptPicked.has(i)) picks.push(s); });
-    addQuotes(picks);
-    setTranscriptPicked(new Set());
+  // "From transcript" — no separate panel; we just scroll the admin to
+  // the transcript section and light up the hand-holdy cue. The existing
+  // selection→quote button continues doing the actual work.
+  const startTranscriptCue = () => {
     setAddMode("closed");
+    setTranscriptCue(true);
+    // Defer scroll one frame so the chooser collapse renders before the
+    // page jumps — feels more natural than an instant snap.
+    requestAnimationFrame(() => {
+      transcriptSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      transcriptRef.current?.focus();
+    });
   };
 
   const confirmAiPicks = () => {
@@ -288,7 +292,6 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   const cancelAdd = () => {
     setAddMode("closed");
     setManualDraft("");
-    setTranscriptPicked(new Set());
     setAiSuggestions([]);
     setAiPicked(new Set());
     setAiState("idle");
@@ -349,9 +352,9 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
             <div className="aep-fld"><label>Size</label><input className="aep-in" value={companySize} onChange={e => setCompanySize(e.target.value)}/></div>
           </div>
 
-          {/* ── 3. Highlighted quotes ── */}
+          {/* ── 3. Pull quotes ── blog-style callouts (no nested cards). */}
           <div className="aep-section">
-            <div className="aep-section-head">Highlighted quotes</div>
+            <div className="aep-section-head">Pull quotes</div>
 
             {quotes.length === 0 && addMode === "closed" && (
               <div className="aep-empty">No quotes yet. Add one to highlight on the asset's page.</div>
@@ -362,16 +365,20 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
                 {quotes.map((q, i) => (
                   <div
                     key={i}
-                    className={`aep-quote-card${dragFrom === i ? " dragging" : ""}`}
-                    draggable
-                    onDragStart={onDragStartIdx(i)}
+                    className={`aep-quote-callout${dragFrom === i ? " dragging" : ""}`}
                     onDragOver={onDragOverIdx(i)}
                     onDrop={onDropIdx(i)}
-                    onDragEnd={onDragEnd}
                   >
-                    <div className="aep-quote-header">
-                      <span className="aep-drag-handle" title="Drag to reorder" aria-label="Drag handle">⋮⋮</span>
-                      <span className="aep-quote-num">{i + 1}</span>
+                    <div className="aep-quote-meta">
+                      <span
+                        className="aep-drag-handle"
+                        draggable
+                        onDragStart={onDragStartIdx(i)}
+                        onDragEnd={onDragEnd}
+                        title="Drag to reorder"
+                        aria-label="Drag handle"
+                      >⋮⋮</span>
+                      <span className="aep-quote-num">Quote {i + 1}</span>
                       <button
                         type="button"
                         className="aep-quote-remove"
@@ -381,10 +388,11 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
                       >×</button>
                     </div>
                     <textarea
-                      className="aep-tx"
+                      className="aep-quote-text"
                       value={q}
                       onChange={e => updateQuote(i, e.target.value)}
-                      style={{ minHeight: 56 }}
+                      placeholder="Type or paste a quote…"
+                      rows={2}
                     />
                   </div>
                 ))}
@@ -415,13 +423,13 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
                   <button
                     type="button"
                     className="aep-choice"
-                    onClick={() => setAddMode("transcript")}
-                    disabled={sentences.length === 0}
-                    title={sentences.length === 0 ? "No transcript text to pick from" : ""}
+                    onClick={startTranscriptCue}
+                    disabled={!transcript || transcript.trim().length === 0}
+                    title={!transcript ? "No transcript to pick from" : ""}
                   >
                     <span className="aep-choice-icon">✎</span>
                     <span className="aep-choice-label">From transcript</span>
-                    <span className="aep-choice-help">Pick sentences from the transcript</span>
+                    <span className="aep-choice-help">Highlight text below</span>
                   </button>
                   <button
                     type="button"
@@ -442,41 +450,6 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
                     <span className="aep-choice-icon">⌨</span>
                     <span className="aep-choice-label">Manual entry</span>
                     <span className="aep-choice-help">Type a quote yourself</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {addMode === "transcript" && (
-              <div className="aep-subflow">
-                <div className="aep-subflow-head">
-                  <span>Pick sentences to add as quotes</span>
-                  <button type="button" className="aep-chooser-cancel" onClick={cancelAdd}>Cancel</button>
-                </div>
-                <div className="aep-sentence-list">
-                  {sentences.map((s, i) => {
-                    const picked = transcriptPicked.has(i);
-                    return (
-                      <button
-                        key={i}
-                        type="button"
-                        className={`aep-sentence${picked ? " picked" : ""}`}
-                        onClick={() => togglePicked(transcriptPicked, setTranscriptPicked, i)}
-                      >
-                        <span className="aep-sentence-checkbox">{picked ? "✓" : ""}</span>
-                        <span className="aep-sentence-text">{s}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="aep-subflow-actions">
-                  <button
-                    type="button"
-                    className="aep-subflow-confirm"
-                    onClick={confirmTranscriptPicks}
-                    disabled={transcriptPicked.size === 0}
-                  >
-                    Add {transcriptPicked.size > 0 ? `${transcriptPicked.size} ` : ""}selected
                   </button>
                 </div>
               </div>
@@ -561,12 +534,32 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           </div>
 
           {/* ── 4. Transcript ── */}
-          <div className="aep-section">
+          <div className="aep-section" ref={transcriptSectionRef}>
             <div className="aep-fld">
               <label>Transcript</label>
+              {/* Cue banner — appears when admin chose "From transcript"
+                  in the quotes chooser. Pulses an animated highlight
+                  inside a sample word so admins instantly understand:
+                  use cursor to select text. Dismiss × on the right. */}
+              {transcriptCue && (
+                <div className="aep-cue">
+                  <div className="aep-cue-msg">
+                    <strong>Highlight any text below</strong> with your cursor —
+                    your selection becomes a pull quote, like
+                    {" "}<span className="aep-cue-demo">this</span>.
+                  </div>
+                  <button
+                    type="button"
+                    className="aep-cue-dismiss"
+                    onClick={() => setTranscriptCue(false)}
+                    aria-label="Dismiss"
+                    title="Dismiss"
+                  >×</button>
+                </div>
+              )}
               <textarea
                 ref={transcriptRef}
-                className="aep-tx"
+                className={`aep-tx${transcriptCue ? " aep-tx-pulse" : ""}`}
                 value={transcript}
                 onChange={e => setTranscript(e.target.value)}
                 onSelect={captureTranscriptSelection}
@@ -622,19 +615,28 @@ const css = `
 .aep-in:focus,.aep-sel:focus,.aep-tx:focus{outline:none;border-color:var(--accent);}
 .aep-tx{min-height:120px;resize:vertical;line-height:1.5;}
 
-/* ── Quote cards ── numbered, draggable, identical-styled rows. */
-.aep-quotes-list{display:flex;flex-direction:column;gap:10px;}
-.aep-quote-card{border:1px solid var(--border);border-radius:9px;background:#fff;padding:10px 12px;transition:all .12s;cursor:default;}
-.aep-quote-card:hover{border-color:var(--border2);}
-.aep-quote-card.dragging{opacity:.4;border-style:dashed;}
-.aep-quote-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
-.aep-drag-handle{cursor:grab;color:var(--t4);font-size:14px;line-height:1;padding:2px 4px;border-radius:4px;letter-spacing:-2px;font-weight:700;user-select:none;}
+/* ── Pull-quote callouts ── blog-style. No nested cards: a soft accent
+   bar on the left, italic serif text, and a quiet meta row that only
+   shows on hover. The textarea is borderless and inherits the callout's
+   look so the field reads like an actual pull quote, not a form input. */
+.aep-quotes-list{display:flex;flex-direction:column;gap:18px;}
+.aep-quote-callout{position:relative;border-left:3px solid var(--accent);padding:6px 8px 6px 18px;transition:opacity .12s,border-color .12s;}
+.aep-quote-callout::before{content:"“";position:absolute;left:8px;top:-6px;font-family:var(--serif);font-size:30px;line-height:1;color:var(--accent);opacity:.35;font-weight:700;pointer-events:none;}
+.aep-quote-callout.dragging{opacity:.4;border-left-style:dashed;}
+.aep-quote-meta{display:flex;align-items:center;gap:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);margin-bottom:4px;opacity:.55;transition:opacity .15s;}
+.aep-quote-callout:hover .aep-quote-meta,.aep-quote-callout:focus-within .aep-quote-meta{opacity:1;}
+.aep-drag-handle{cursor:grab;color:var(--t4);font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;letter-spacing:-2px;font-weight:700;user-select:none;}
 .aep-drag-handle:hover{background:var(--bg2);color:var(--t2);}
 .aep-drag-handle:active{cursor:grabbing;}
-.aep-quote-num{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accentLL);color:var(--accent);font-size:11px;font-weight:700;font-family:var(--font);}
+.aep-quote-num{color:var(--t3);}
 .aep-quote-remove{margin-left:auto;background:none;border:none;color:var(--t4);cursor:pointer;font-size:18px;line-height:1;padding:2px 8px;border-radius:6px;}
-.aep-quote-remove:hover{background:var(--bg2);color:var(--t1);}
-.aep-quote-card .aep-tx{min-height:56px;}
+.aep-quote-remove:hover{background:var(--bg2);color:var(--red);}
+/* The actual quote textarea — no border, no bg, italic serif. Looks
+   like a typeset pull quote; clicking inside reveals a subtle focus
+   outline so admins know it's editable without the input chrome. */
+.aep-quote-text{width:100%;border:none;background:transparent;padding:6px 0;font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.55;color:var(--t1);resize:vertical;min-height:48px;outline:none;}
+.aep-quote-text:focus{background:var(--bg2);border-radius:5px;padding:6px 8px;}
+.aep-quote-text::placeholder{color:var(--t4);font-style:italic;}
 
 /* ── Add quote button + chooser ── */
 .aep-add-quote{display:inline-flex;align-items:center;gap:6px;background:none;border:1px dashed var(--border2);color:var(--t3);padding:8px 14px;border-radius:8px;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;align-self:flex-start;transition:all .12s;}
@@ -681,6 +683,28 @@ const css = `
 .aep-add-selection{display:inline-flex;align-items:center;gap:6px;background:var(--accentLL);border:1px solid var(--accent);color:var(--accent);padding:7px 12px;border-radius:8px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;align-self:flex-start;margin-top:8px;transition:all .12s;}
 .aep-add-selection:hover{background:var(--accentL);}
 .aep-add-selection .aep-add-plus{background:var(--accent);}
+
+/* Hand-holdy cue banner — appears above the transcript textarea when
+   admin entered "From transcript" mode. Pulses an animated highlight on
+   the demo word ("this") to teach the cursor-select gesture. */
+.aep-cue{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accentLL);font-size:12.5px;line-height:1.5;color:var(--t1);margin-bottom:6px;}
+.aep-cue strong{color:var(--accent);font-weight:700;}
+.aep-cue-msg{flex:1;min-width:0;}
+.aep-cue-demo{display:inline-block;padding:0 4px;border-radius:3px;font-family:var(--serif);font-style:italic;font-weight:600;color:var(--accent);animation:aepCueDemo 1.6s ease-in-out infinite;}
+@keyframes aepCueDemo{
+  0%,100%{background:rgba(99,102,241,.08);box-shadow:0 0 0 0 rgba(99,102,241,0);}
+  50%{background:rgba(99,102,241,.32);box-shadow:0 0 0 2px rgba(99,102,241,.18);}
+}
+.aep-cue-dismiss{background:none;border:none;color:var(--accent);cursor:pointer;font-size:18px;line-height:1;padding:0 6px;border-radius:6px;flex-shrink:0;opacity:.7;transition:opacity .12s;}
+.aep-cue-dismiss:hover{opacity:1;background:rgba(99,102,241,.12);}
+
+/* Pulsing transcript textarea while cue is on — the second visual hook
+   so admins know exactly where to act. Stops when cue is dismissed. */
+.aep-tx.aep-tx-pulse{animation:aepTxPulse 1.8s ease-in-out infinite;}
+@keyframes aepTxPulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(99,102,241,0);border-color:var(--border);}
+  50%{box-shadow:0 0 0 4px rgba(99,102,241,.18);border-color:var(--accent);}
+}
 
 .aep-foot{padding:14px 22px;border-top:1px solid var(--border);background:#fff;display:flex;gap:10px;}
 .aep-save{flex:1;padding:11px;border-radius:var(--r3);border:none;background:var(--accent);color:#fff;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;}
