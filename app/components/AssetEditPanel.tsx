@@ -81,8 +81,40 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   const [aiPicked, setAiPicked] = useState<Set<number>>(new Set());
   const [aiError, setAiError] = useState<string>("");
 
-  // Drag-and-drop reorder state
-  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  // Pointer-driven reorder. We capture the dragged item's rect + all item
+  // rects at drag start, render a floating clone that follows the pointer,
+  // and visually shift the other items via CSS transform to indicate the
+  // drop target. Items animate the shift via a CSS transition on
+  // transform — that's the "magical rearranging" feel.
+  type DragState = {
+    fromIdx: number;
+    pointerY: number;     // current viewport Y of pointer
+    pointerX: number;     // current viewport X of pointer (for clone position)
+    initialY: number;     // pointer Y when drag began
+    initialX: number;     // pointer X when drag began
+    rects: DOMRect[];     // captured at drag start, in original index order
+    gap: number;          // px gap between items (from .aep-quotes-list)
+    width: number;        // floating clone width matches the original
+  };
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Pull-quotes section collapse state. When collapsed, the list +
+  // chooser hide; the "Pull quotes" header still shows the count badge.
+  const [quotesCollapsed, setQuotesCollapsed] = useState(false);
+
+  // Auto-grow refs for each pull quote textarea so the block always
+  // expands to fit the entire quote (no manual resize, no scroll inside
+  // the block). Re-measure on quotes/value change.
+  const quoteTextareas = useRef<(HTMLTextAreaElement | null)[]>([]);
+  useEffect(() => {
+    for (const ta of quoteTextareas.current) {
+      if (!ta) continue;
+      ta.style.height = "auto";
+      ta.style.height = ta.scrollHeight + "px";
+    }
+  }, [quotes, quotesCollapsed]);
 
   // Transcript selection → quote affordance
   const transcriptRef = useRef<HTMLTextAreaElement>(null);
@@ -119,8 +151,9 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     setAiPicked(new Set());
     setAiError("");
     setTranscriptSel({ start: 0, end: 0 });
-    setDragFrom(null);
+    setDrag(null);
     setTranscriptCue(false);
+    setQuotesCollapsed(false);
   }, [asset]);
 
   // Close on Escape — but only if no add-quote sub-flow is open (those
@@ -176,27 +209,124 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     setQuotes(prev => prev.filter((_, idx) => idx !== i));
   };
 
-  // Drag-and-drop reorder
-  const onDragStartIdx = (i: number) => () => setDragFrom(i);
-  const onDragOverIdx = (i: number) => (e: React.DragEvent) => {
-    e.preventDefault();
-    if (dragFrom === null || dragFrom === i) return;
-  };
-  const onDropIdx = (i: number) => (e: React.DragEvent) => {
-    e.preventDefault();
-    if (dragFrom === null || dragFrom === i) {
-      setDragFrom(null);
-      return;
+  // ── Pointer-driven reorder ────────────────────────────────────────
+  // Compute the destination index given the pointer's current Y and the
+  // captured original rects. Iterates non-dragged items in document
+  // order and finds the slot whose midpoint the pointer is above.
+  const computeInsertIdx = (state: DragState): number => {
+    const others = state.rects
+      .map((r, i) => ({ i, mid: r.top + r.height / 2 }))
+      .filter(o => o.i !== state.fromIdx);
+    let slot = others.length; // default: drop at end
+    for (let k = 0; k < others.length; k++) {
+      if (state.pointerY < others[k].mid) {
+        slot = k;
+        break;
+      }
     }
-    setQuotes(prev => {
-      const next = [...prev];
-      const [moved] = next.splice(dragFrom, 1);
-      next.splice(i, 0, moved);
-      return next;
-    });
-    setDragFrom(null);
+    // Translate slot back into absolute index of the new array. If we
+    // dropped before item i in the "others" list, the absolute index in
+    // the post-drop list is just `slot` since "others" is the new list
+    // sans dragged.
+    return slot;
   };
-  const onDragEnd = () => setDragFrom(null);
+
+  const insertIdx = drag ? computeInsertIdx(drag) : null;
+
+  const onPointerDownHandle = (i: number) => (e: React.PointerEvent) => {
+    // Only start drag on primary button; don't preventDefault so text
+    // selection elsewhere still works if pointer wasn't on the handle.
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const list = listRef.current;
+    if (!list) return;
+    const rects = itemRefs.current.map(el => el?.getBoundingClientRect() || new DOMRect());
+    const fromRect = rects[i];
+    if (!fromRect) return;
+    // Read the gap from the computed style of the list — keeps the math
+    // synced with whatever CSS gap value we use.
+    const gapStr = window.getComputedStyle(list).rowGap || "0";
+    const gap = parseFloat(gapStr) || 0;
+    setDrag({
+      fromIdx: i,
+      pointerY: e.clientY,
+      pointerX: e.clientX,
+      initialY: e.clientY,
+      initialX: e.clientX,
+      rects,
+      gap,
+      width: fromRect.width,
+    });
+  };
+
+  // Wire window pointermove/up listeners while dragging. setDrag with
+  // functional update so we don't stale-close over the initial drag state.
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      setDrag(prev => prev ? { ...prev, pointerY: e.clientY, pointerX: e.clientX } : prev);
+    };
+    const onUp = () => {
+      setDrag(prev => {
+        if (!prev) return null;
+        const target = computeInsertIdx(prev);
+        if (target !== prev.fromIdx) {
+          setQuotes(curr => {
+            const next = [...curr];
+            const [moved] = next.splice(prev.fromIdx, 1);
+            next.splice(target, 0, moved);
+            return next;
+          });
+        }
+        return null;
+      });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag?.fromIdx]);
+
+  // Compute per-item Y offset to visually shift other items out of the
+  // dragged item's way. Other items between the original and target
+  // index slide up or down by (draggedHeight + gap).
+  const itemOffsetY = (i: number): number => {
+    if (!drag || insertIdx === null) return 0;
+    if (i === drag.fromIdx) return 0;
+    const draggedHeight = drag.rects[drag.fromIdx]?.height || 0;
+    const shift = draggedHeight + drag.gap;
+    if (insertIdx > drag.fromIdx) {
+      // moving down — items between original (excl) and target (incl) shift up
+      if (i > drag.fromIdx && i <= insertIdx) return -shift;
+    } else if (insertIdx < drag.fromIdx) {
+      // moving up — items between target (incl) and original (excl) shift down
+      if (i >= insertIdx && i < drag.fromIdx) return shift;
+    }
+    return 0;
+  };
+
+  // Floating clone position — track the pointer relative to where the
+  // drag began so the clone stays "stuck" to the spot the user grabbed.
+  const cloneStyle = (): React.CSSProperties | undefined => {
+    if (!drag) return undefined;
+    const fromRect = drag.rects[drag.fromIdx];
+    if (!fromRect) return undefined;
+    const dx = drag.pointerX - drag.initialX;
+    const dy = drag.pointerY - drag.initialY;
+    return {
+      position: "fixed",
+      left: fromRect.left + dx,
+      top: fromRect.top + dy,
+      width: drag.width,
+      pointerEvents: "none",
+      zIndex: 200,
+    };
+  };
 
   // ── Transcript-selection → quote ──────────────────────────────────
   const captureTranscriptSelection = () => {
@@ -354,50 +484,75 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
 
           {/* ── 3. Pull quotes ── blog-style callouts (no nested cards). */}
           <div className="aep-section">
-            <div className="aep-section-head">Pull quotes</div>
+            <div className="aep-section-head-row">
+              <button
+                type="button"
+                className="aep-section-toggle"
+                onClick={() => setQuotesCollapsed(c => !c)}
+                aria-expanded={!quotesCollapsed}
+              >
+                <span className={`aep-caret${quotesCollapsed ? " collapsed" : ""}`}>▾</span>
+                <span className="aep-section-head">Pull quotes</span>
+                {quotes.length > 0 && (
+                  <span className="aep-section-count">{quotes.length}</span>
+                )}
+              </button>
+            </div>
 
-            {quotes.length === 0 && addMode === "closed" && (
-              <div className="aep-empty">No quotes yet. Add one to highlight on the asset's page.</div>
-            )}
+            {!quotesCollapsed && (
+              <>
+                {quotes.length === 0 && addMode === "closed" && (
+                  <div className="aep-empty">No quotes yet. Add one to highlight on the asset's page.</div>
+                )}
 
-            {quotes.length > 0 && (
-              <div className="aep-quotes-list">
-                {quotes.map((q, i) => (
-                  <div
-                    key={i}
-                    className={`aep-quote-callout${dragFrom === i ? " dragging" : ""}`}
-                    onDragOver={onDragOverIdx(i)}
-                    onDrop={onDropIdx(i)}
-                  >
-                    <div className="aep-quote-meta">
-                      <span
-                        className="aep-drag-handle"
-                        draggable
-                        onDragStart={onDragStartIdx(i)}
-                        onDragEnd={onDragEnd}
-                        title="Drag to reorder"
-                        aria-label="Drag handle"
-                      >⋮⋮</span>
-                      <span className="aep-quote-num">Quote {i + 1}</span>
-                      <button
-                        type="button"
-                        className="aep-quote-remove"
-                        onClick={() => removeQuote(i)}
-                        title="Remove quote"
-                        aria-label="Remove quote"
-                      >×</button>
-                    </div>
-                    <textarea
-                      className="aep-quote-text"
-                      value={q}
-                      onChange={e => updateQuote(i, e.target.value)}
-                      placeholder="Type or paste a quote…"
-                      rows={2}
-                    />
+                {quotes.length > 0 && (
+                  <div className="aep-quotes-list" ref={listRef}>
+                    {quotes.map((q, i) => {
+                      const isDragging = drag?.fromIdx === i;
+                      const offset = itemOffsetY(i);
+                      return (
+                        <div
+                          key={i}
+                          ref={el => { itemRefs.current[i] = el; }}
+                          className={`aep-quote-callout${isDragging ? " dragging" : ""}`}
+                          style={{
+                            transform: offset !== 0 ? `translateY(${offset}px)` : undefined,
+                            // Items in motion get a smooth transition; the
+                            // dragged item itself stays static (the floating
+                            // clone handles the visual movement).
+                            transition: isDragging ? "none" : "transform .22s cubic-bezier(.2,.7,.2,1)",
+                            visibility: isDragging ? "hidden" : undefined,
+                          }}
+                        >
+                          <div className="aep-quote-meta">
+                            <span
+                              className="aep-drag-handle"
+                              onPointerDown={onPointerDownHandle(i)}
+                              title="Drag to reorder"
+                              aria-label="Drag handle"
+                            >⋮⋮</span>
+                            <span className="aep-quote-num">Quote {i + 1}</span>
+                            <button
+                              type="button"
+                              className="aep-quote-remove"
+                              onClick={() => removeQuote(i)}
+                              title="Remove quote"
+                              aria-label="Remove quote"
+                            >×</button>
+                          </div>
+                          <textarea
+                            ref={el => { quoteTextareas.current[i] = el; }}
+                            className="aep-quote-text"
+                            value={q}
+                            onChange={e => updateQuote(i, e.target.value)}
+                            placeholder="Type or paste a quote…"
+                            rows={1}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
-            )}
+                )}
 
             {/* Add quote chooser + sub-flows. The chooser stays inside the
                 Quotes section so admin context (the existing list above)
@@ -531,6 +686,8 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
                 </div>
               </div>
             )}
+              </>
+            )}
           </div>
 
           {/* ── 4. Transcript ── */}
@@ -559,7 +716,7 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
               )}
               <textarea
                 ref={transcriptRef}
-                className={`aep-tx${transcriptCue ? " aep-tx-pulse" : ""}`}
+                className={`aep-tx aep-transcript${transcriptCue ? " aep-tx-pulse" : ""}`}
                 value={transcript}
                 onChange={e => setTranscript(e.target.value)}
                 onSelect={captureTranscriptSelection}
@@ -579,6 +736,23 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
             </div>
           </div>
         </div>
+        {/* Floating drag clone — rendered above everything via position
+            fixed. Mirrors the dragged callout but with a subtle lift
+            (shadow + slight scale + slight rotate) so it visually
+            "detaches" from the list. Pointer-events: none so the real
+            content beneath still receives the pointer events that drive
+            the reorder math. */}
+        {drag && quotes[drag.fromIdx] !== undefined && (
+          <div className="aep-quote-clone" style={cloneStyle()}>
+            <div className="aep-quote-callout aep-quote-callout-clone">
+              <div className="aep-quote-meta">
+                <span className="aep-drag-handle">⋮⋮</span>
+                <span className="aep-quote-num">Quote {drag.fromIdx + 1}</span>
+              </div>
+              <div className="aep-quote-text aep-quote-text-clone">{quotes[drag.fromIdx]}</div>
+            </div>
+          </div>
+        )}
         <div className="aep-foot">
           <button className="aep-save" onClick={save}>Save changes</button>
           <button className="aep-del" onClick={del}>Delete</button>
@@ -606,6 +780,14 @@ const css = `
 .aep-body{flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:28px;}
 .aep-section{display:flex;flex-direction:column;gap:14px;}
 .aep-section-head{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+/* Section header row with collapse caret. The whole row is a button so
+   admins can click the header text or caret indifferently. */
+.aep-section-head-row{display:flex;align-items:center;}
+.aep-section-toggle{display:inline-flex;align-items:center;gap:8px;background:none;border:none;padding:2px 4px;margin-left:-4px;cursor:pointer;font-family:var(--font);border-radius:6px;}
+.aep-section-toggle:hover{background:var(--bg2);}
+.aep-caret{display:inline-block;color:var(--t3);font-size:11px;line-height:1;transition:transform .18s cubic-bezier(.2,.7,.2,1);}
+.aep-caret.collapsed{transform:rotate(-90deg);}
+.aep-section-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--bg2);color:var(--t3);font-size:10.5px;font-weight:700;font-family:var(--font);}
 .aep-empty{font-size:12px;color:var(--t4);font-style:italic;padding:6px 0;}
 .aep-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .aep-fld{display:flex;flex-direction:column;gap:5px;min-width:0;}
@@ -614,12 +796,19 @@ const css = `
 .aep-title-in{font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:-.2px;}
 .aep-in:focus,.aep-sel:focus,.aep-tx:focus{outline:none;border-color:var(--accent);}
 .aep-tx{min-height:120px;resize:vertical;line-height:1.5;}
+/* Transcript textarea — tuned for long-form reading. Serif typography,
+   generous line-height, comfortable padding, off-white background to
+   evoke a printed-page feel. No resize handle — the panel itself
+   scrolls, so the textarea stays a fixed-height window into the prose. */
+.aep-transcript{font-family:var(--serif);font-size:15px;line-height:1.75;padding:18px 22px;background:#fbfaf6;color:var(--t1);min-height:280px;resize:none;letter-spacing:.01em;}
+.aep-transcript:focus{background:#fffefb;}
+.aep-transcript::selection{background:rgba(99,102,241,.22);}
 
 /* ── Pull-quote callouts ── blog-style. No nested cards: a soft accent
    bar on the left, italic serif text, and a quiet meta row that only
    shows on hover. The textarea is borderless and inherits the callout's
    look so the field reads like an actual pull quote, not a form input. */
-.aep-quotes-list{display:flex;flex-direction:column;gap:18px;}
+.aep-quotes-list{display:flex;flex-direction:column;gap:18px;max-height:50vh;overflow-y:auto;padding-right:6px;}
 .aep-quote-callout{position:relative;border-left:3px solid var(--accent);padding:6px 8px 6px 18px;transition:opacity .12s,border-color .12s;}
 .aep-quote-callout::before{content:"“";position:absolute;left:8px;top:-6px;font-family:var(--serif);font-size:30px;line-height:1;color:var(--accent);opacity:.35;font-weight:700;pointer-events:none;}
 .aep-quote-callout.dragging{opacity:.4;border-left-style:dashed;}
@@ -634,9 +823,16 @@ const css = `
 /* The actual quote textarea — no border, no bg, italic serif. Looks
    like a typeset pull quote; clicking inside reveals a subtle focus
    outline so admins know it's editable without the input chrome. */
-.aep-quote-text{width:100%;border:none;background:transparent;padding:6px 0;font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.55;color:var(--t1);resize:vertical;min-height:48px;outline:none;}
+.aep-quote-text{width:100%;border:none;background:transparent;padding:6px 0;font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.55;color:var(--t1);resize:none;overflow:hidden;min-height:32px;outline:none;}
 .aep-quote-text:focus{background:var(--bg2);border-radius:5px;padding:6px 8px;}
 .aep-quote-text::placeholder{color:var(--t4);font-style:italic;}
+
+/* Floating drag clone — appears at the cursor while dragging. The
+   tilt + shadow give the "lifted card" feel. Pointer-events:none lets
+   real items underneath still receive pointer events for the math. */
+.aep-quote-clone{transform:rotate(-1.5deg) scale(1.02);transition:transform .12s cubic-bezier(.2,.7,.2,1);filter:drop-shadow(0 12px 24px rgba(0,0,0,.18)) drop-shadow(0 4px 8px rgba(0,0,0,.08));}
+.aep-quote-callout-clone{background:#fff;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:9px;padding:10px 14px 10px 18px;}
+.aep-quote-text-clone{font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.55;color:var(--t1);white-space:pre-wrap;}
 
 /* ── Add quote button + chooser ── */
 .aep-add-quote{display:inline-flex;align-items:center;gap:6px;background:none;border:1px dashed var(--border2);color:var(--t3);padding:8px 14px;border-radius:8px;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;align-self:flex-start;transition:all .12s;}
