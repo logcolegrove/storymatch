@@ -60,6 +60,19 @@ interface Props {
 type AddMode = "closed" | "chooser" | "ai" | "manual";
 type AiState = "idle" | "loading" | "ready" | "error";
 
+// Pointer-driven reorder state. Held in a single object on the drag
+// state so updates batch cleanly via a single setDrag call.
+type DragState = {
+  fromIdx: number;
+  pointerY: number;     // current viewport Y of pointer
+  pointerX: number;     // current viewport X of pointer
+  initialY: number;     // pointer Y when drag began
+  initialX: number;     // pointer X when drag began
+  rects: DOMRect[];     // captured at drag start, in original index order
+  gap: number;          // px gap between items (read from .aep-quotes-list)
+  width: number;        // floating clone width matches the original
+};
+
 export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onClose, authHeaders }: Props) {
   // ── Form state — unified quotes array is the source of truth in UI.
   const [headline, setHeadline] = useState("");
@@ -84,19 +97,12 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   // Pointer-driven reorder. We capture the dragged item's rect + all item
   // rects at drag start, render a floating clone that follows the pointer,
   // and visually shift the other items via CSS transform to indicate the
-  // drop target. Items animate the shift via a CSS transition on
-  // transform — that's the "magical rearranging" feel.
-  type DragState = {
-    fromIdx: number;
-    pointerY: number;     // current viewport Y of pointer
-    pointerX: number;     // current viewport X of pointer (for clone position)
-    initialY: number;     // pointer Y when drag began
-    initialX: number;     // pointer X when drag began
-    rects: DOMRect[];     // captured at drag start, in original index order
-    gap: number;          // px gap between items (from .aep-quotes-list)
-    width: number;        // floating clone width matches the original
-  };
+  // drop target. dragRef mirrors the drag state for event handlers that
+  // need the latest value without going through setState's updater (which
+  // would be a setState-in-setState anti-pattern).
   const [drag, setDrag] = useState<DragState | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  useEffect(() => { dragRef.current = drag; }, [drag]);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -259,27 +265,29 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     });
   };
 
-  // Wire window pointermove/up listeners while dragging. setDrag with
-  // functional update so we don't stale-close over the initial drag state.
+  // Wire window pointermove/up listeners while dragging. We attach once
+  // when drag begins and tear down on stop. Handlers read dragRef.current
+  // for the latest state and call setDrag/setQuotes outside any updater.
   useEffect(() => {
     if (!drag) return;
     const onMove = (e: PointerEvent) => {
-      setDrag(prev => prev ? { ...prev, pointerY: e.clientY, pointerX: e.clientX } : prev);
+      const cur = dragRef.current;
+      if (!cur) return;
+      setDrag({ ...cur, pointerY: e.clientY, pointerX: e.clientX });
     };
     const onUp = () => {
-      setDrag(prev => {
-        if (!prev) return null;
-        const target = computeInsertIdx(prev);
-        if (target !== prev.fromIdx) {
-          setQuotes(curr => {
-            const next = [...curr];
-            const [moved] = next.splice(prev.fromIdx, 1);
-            next.splice(target, 0, moved);
-            return next;
-          });
-        }
-        return null;
-      });
+      const current = dragRef.current;
+      setDrag(null);
+      if (!current) return;
+      const target = computeInsertIdx(current);
+      if (target !== current.fromIdx) {
+        setQuotes(curr => {
+          const next = [...curr];
+          const [moved] = next.splice(current.fromIdx, 1);
+          next.splice(target, 0, moved);
+          return next;
+        });
+      }
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
