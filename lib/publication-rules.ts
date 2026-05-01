@@ -25,7 +25,6 @@ export type PublicationRule = {
 export type OrgRulesContext = {
   freshness_warn_after_months: number | null;
   freshness_warn_before_date: string | null;
-  approval_required: boolean;
   publication_rules: Record<string, PublicationRule>;
 };
 
@@ -61,18 +60,17 @@ function isExpired(asset: AssetRuleInput, org: OrgRulesContext): boolean {
   return false;
 }
 
-// Returns the rule key that should be firing, if any. Order of precedence:
-//   1. Specific approval-status rule (e.g. approval_denied)
-//   2. expiration (if asset is expired)
-//   3. approval_required (if approval !== approved)
-// Returns null when nothing applies.
-// Approval-status keys we still honor as publication rules. Other approval
+// Approval-status keys we honor as publication rules. Other approval
 // values (e.g. "needs_edits", "pending", "unset") will not auto-flip
 // visibility even if they have orphaned data in publication_rules.
 const ALLOWED_APPROVAL_RULE_KEYS = new Set([
   "approval_denied",
 ]);
 
+// Returns the rule key that should be firing, if any. Order of precedence:
+//   1. Specific approval-status rule (currently only approval_denied)
+//   2. expiration (if asset is expired)
+// Returns null when nothing applies.
 function findActiveRule(asset: AssetRuleInput, org: OrgRulesContext): string | null {
   const approval = asset.approval_status || "unset";
 
@@ -91,18 +89,11 @@ function findActiveRule(asset: AssetRuleInput, org: OrgRulesContext): string | n
     return "expiration";
   }
 
-  // Approval required → effectively a draft rule when approval !== approved
-  if (org.approval_required && approval !== "approved") {
-    return "approval_required";
-  }
-
   return null;
 }
 
-// Returns the action this rule should perform (draft / archive). For
-// approval_required (synthetic key), always returns "draft".
+// Returns the action this rule should perform (draft / archive).
 function ruleAction(ruleKey: string, org: OrgRulesContext): "draft" | "archive" {
-  if (ruleKey === "approval_required") return "draft";
   const rule = org.publication_rules[ruleKey];
   if (!rule) return "draft";
   return rule.action === "archive" ? "archive" : "draft";
@@ -110,7 +101,6 @@ function ruleAction(ruleKey: string, org: OrgRulesContext): "draft" | "archive" 
 
 // Returns whether a rule supports auto-revert (default true).
 function ruleAutoRevert(ruleKey: string, org: OrgRulesContext): boolean {
-  if (ruleKey === "approval_required") return true; // always auto-revert
   const rule = org.publication_rules[ruleKey];
   if (!rule) return true;
   return rule.auto_revert !== false;
@@ -183,14 +173,13 @@ export async function applyPublicationRules(
 export async function getOrgRulesContext(orgId: string): Promise<OrgRulesContext | null> {
   const { data, error } = await supabaseAdmin
     .from("organizations")
-    .select("freshness_warn_after_months, freshness_warn_before_date, approval_required, default_approval_status, publication_rules")
+    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules")
     .eq("id", orgId)
     .maybeSingle();
   if (error || !data) return null;
   return {
     freshness_warn_after_months: data.freshness_warn_after_months as number | null,
     freshness_warn_before_date: data.freshness_warn_before_date as string | null,
-    approval_required: !!data.approval_required,
     publication_rules: (data.publication_rules as Record<string, PublicationRule>) || {},
   };
 }

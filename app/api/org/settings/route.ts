@@ -44,9 +44,6 @@ type PublicationRule = { action: "none" | "draft" | "archive"; auto_revert: bool
 type OrgSettingsFE = {
   freshnessWarnAfterMonths: number | null;
   freshnessWarnBeforeDate: string | null;
-  // Approval-required mode: when true, an asset can only be in "published"
-  // if approval_status === "approved". Anything else → forced to draft.
-  approvalRequired: boolean;
   // Default approval status applied to NEW imports only (existing assets
   // are unchanged). e.g. an org that pre-approves everything by policy
   // can set this to "approved" so imports come in cleared.
@@ -60,14 +57,13 @@ export async function GET(req: NextRequest) {
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { data, error } = await supabaseAdmin
     .from("organizations")
-    .select("freshness_warn_after_months, freshness_warn_before_date, approval_required, default_approval_status, publication_rules")
+    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules")
     .eq("id", ctx.orgId)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const settings: OrgSettingsFE = {
     freshnessWarnAfterMonths: (data?.freshness_warn_after_months as number | null) ?? null,
     freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
-    approvalRequired: !!data?.approval_required,
     defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
     publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
   };
@@ -107,7 +103,6 @@ export async function PUT(req: NextRequest) {
   type DbUpdates = {
     freshness_warn_after_months?: number | null;
     freshness_warn_before_date?: string | null;
-    approval_required?: boolean;
     default_approval_status?: string;
     publication_rules?: Record<string, PublicationRule>;
   };
@@ -123,12 +118,6 @@ export async function PUT(req: NextRequest) {
     if (body.freshnessWarnBeforeDate !== null) {
       updates.freshness_warn_after_months = null;
     }
-  }
-  if (body.approvalRequired !== undefined) {
-    if (typeof body.approvalRequired !== "boolean") {
-      return NextResponse.json({ error: "approvalRequired must be boolean" }, { status: 400 });
-    }
-    updates.approval_required = body.approvalRequired;
   }
   if (body.defaultApprovalStatus !== undefined) {
     const allowed = ["unset", "pending", "needs_edits", "approved", "denied"];
@@ -151,7 +140,7 @@ export async function PUT(req: NextRequest) {
     .from("organizations")
     .update(updates)
     .eq("id", ctx.orgId)
-    .select("freshness_warn_after_months, freshness_warn_before_date, approval_required, default_approval_status, publication_rules")
+    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -161,7 +150,6 @@ export async function PUT(req: NextRequest) {
   // "save = active." Scanning fires rules for existing assets that newly
   // meet (or stop meeting) a trigger.
   const triggeredRulesChange =
-    body.approvalRequired !== undefined ||
     body.publicationRules !== undefined ||
     body.freshnessWarnAfterMonths !== undefined ||
     body.freshnessWarnBeforeDate !== undefined;
@@ -194,7 +182,6 @@ export async function PUT(req: NextRequest) {
   const settings: OrgSettingsFE = {
     freshnessWarnAfterMonths: (data?.freshness_warn_after_months as number | null) ?? null,
     freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
-    approvalRequired: !!data?.approval_required,
     defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
     publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
   };

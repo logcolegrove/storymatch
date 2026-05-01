@@ -146,9 +146,6 @@ interface PublicationRule {
 interface OrgSettings {
   freshnessWarnAfterMonths: number | null;
   freshnessWarnBeforeDate: string | null;
-  // Approval-required gate — when true, only approval=approved assets
-  // can be in published state.
-  approvalRequired: boolean;
   // Default approval status for NEW imports (existing assets unchanged).
   defaultApprovalStatus: string;
   // Trigger → action map for publication state automation.
@@ -898,6 +895,9 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bsm-choice-text{display:flex;flex-direction:column;gap:2px;}
 .bsm-choice-label{font-size:13px;font-weight:600;color:var(--t1);}
 .bsm-choice-help{font-size:11.5px;color:var(--t3);line-height:1.35;}
+/* Visibility-override modal — supplemental help paragraph above the
+   override button. Quiet color, comfortable line height. */
+.vom-help{font-size:12px;color:var(--t2);line-height:1.5;}
 /* Reset button — neutral grey. Reset isn't dangerous in the way a delete
    is (it just clears flags / approval status / etc., all of which can be
    re-applied), so a destructive-red treatment was overkill. Used in both
@@ -1597,6 +1597,74 @@ function BulkVisibilityModal({ count, onClose, onApply }: BulkVisibilityModalPro
   );
 }
 
+// ─── VISIBILITY OVERRIDE MODAL ────────────────────────────────────────────
+// Shown when admin tries to set an asset to Public but a rule would
+// immediately reverse the change (e.g., expiration → Make private,
+// approval_denied → Make private). Without this, admin watches their
+// click silently re-flip and assumes it's broken. We intercept, explain
+// which rule is in the way, and offer a one-click override targeted at
+// the trigger that's firing (e.g., set a freshness exception for the
+// expiration rule).
+interface VisibilityOverrideModalProps {
+  asset: Asset;
+  ruleKey: string;
+  intendedAction: "draft" | "archive";
+  onClose: () => void;
+  // Override = neutralize the rule's trigger so the admin's intended Public
+  // change actually sticks. Implementation depends on which rule:
+  //   • expiration → set freshness exception to "never"
+  //   • approval_denied → set approval to approved
+  // Caller wires the handler. We just give them the rule key + asset.
+  onOverride: () => void;
+}
+function VisibilityOverrideModal({ asset, ruleKey, intendedAction, onClose, onOverride }: VisibilityOverrideModalProps) {
+  // Human-readable description of the rule + what overriding it means.
+  // Each rule type gets its own copy because the override mechanism is
+  // different (exception vs. approval change).
+  let ruleLabel: string;
+  let blockedExplanation: string;
+  let overrideLabel: string;
+  let overrideHelp: string;
+  if (ruleKey === "expiration") {
+    ruleLabel = "freshness rule";
+    blockedExplanation = `This story is flagged as expired (older than the freshness threshold), and your org's freshness rule moves expired stories to ${intendedAction === "archive" ? "Archive" : "Private"}.`;
+    overrideLabel = "Override expiration";
+    overrideHelp = "Mark this asset as never-expiring. Removes it from the rule going forward.";
+  } else if (ruleKey === "approval_denied") {
+    ruleLabel = "approval-denied rule";
+    blockedExplanation = `This story's approval is set to Denied, and your org's rule moves Denied stories to ${intendedAction === "archive" ? "Archive" : "Private"}.`;
+    overrideLabel = "Set approval to Approved";
+    overrideHelp = "Changes the approval status, which clears the rule.";
+  } else {
+    ruleLabel = "an org rule";
+    blockedExplanation = `An org rule (${ruleKey}) is keeping this asset in ${intendedAction === "archive" ? "Archive" : "Private"}.`;
+    overrideLabel = "Override";
+    overrideHelp = "Apply the override to clear the rule's trigger.";
+  }
+  void asset;
+  return createPortal(
+    <>
+      <div className="bsm-backdrop" onClick={onClose}/>
+      <div className="bsm-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bsm-head">
+          <div className="bsm-title">Visibility blocked by rule</div>
+          <div className="bsm-sub">{blockedExplanation}</div>
+        </div>
+        <div className="bsm-body">
+          <div className="vom-help">
+            You can override the {ruleLabel} on this story. {overrideHelp}
+          </div>
+        </div>
+        <div className="bsm-foot">
+          <button className="cl-mini-btn" onClick={onClose}>Cancel</button>
+          <button className="cl-mini-btn primary" onClick={onOverride}>{overrideLabel}…</button>
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+}
+
 // ─── BULK STATUS MODAL ────────────────────────────────────────────────────
 // One modal that lets admins edit publication + status indicator fields
 // across N selected assets at once. Each field has a "Leave unchanged"
@@ -1885,6 +1953,55 @@ interface ClearedReason {
   // Null/undefined for absolute-date org rules or when no rule is active.
   // Drives the "Set to expire on …" grey box in the popover.
   effectiveExpiration?: string;
+}
+
+// Client-side mirror of lib/publication-rules.ts findActiveRule. Lets the
+// FE predict whether setting visibility to Public would be undone by an
+// org rule, so we can intercept and offer an override instead of writing
+// a change that gets immediately reversed. Must stay in sync with the
+// server's rule-firing logic — the allowed-key set + isExpired math are
+// duplicated intentionally to avoid a network round-trip.
+const FE_ALLOWED_APPROVAL_RULE_KEYS = new Set(["approval_denied"]);
+
+function isAssetExpiredFE(asset: Asset, org: OrgSettings): boolean {
+  // Active per-asset exception suppresses the org rule.
+  const exUntil = asset.freshnessExceptionUntil
+    ? new Date(asset.freshnessExceptionUntil)
+    : null;
+  const exceptionActive =
+    exUntil !== null && !Number.isNaN(exUntil.getTime()) && exUntil.getTime() > Date.now();
+  if (exceptionActive) return false;
+
+  if (org.freshnessWarnBeforeDate) {
+    const cutoff = new Date(org.freshnessWarnBeforeDate);
+    const pub = asset.publishedAt ? new Date(asset.publishedAt) : null;
+    return !!pub && !Number.isNaN(cutoff.getTime()) && pub < cutoff;
+  }
+  if (org.freshnessWarnAfterMonths !== null) {
+    const pub = asset.publishedAt ? new Date(asset.publishedAt) : null;
+    if (!pub || Number.isNaN(pub.getTime())) return false;
+    const ageMonths = (Date.now() - pub.getTime()) / (1000 * 60 * 60 * 24 * 30);
+    return ageMonths > org.freshnessWarnAfterMonths;
+  }
+  return false;
+}
+
+// Returns the rule key (e.g. "expiration", "approval_denied") that would
+// fire on this asset right now, or null if no rule applies. Used to
+// preemptively warn the admin before they try to set Public on an asset
+// that the rule engine would immediately re-flip.
+function findActiveRuleFE(asset: Asset, org: OrgSettings): string | null {
+  const approval = asset.approvalStatus || "unset";
+  const approvalKey = `approval_${approval}`;
+  if (FE_ALLOWED_APPROVAL_RULE_KEYS.has(approvalKey)) {
+    const rule = org.publicationRules[approvalKey];
+    if (rule && rule.action !== "none") return approvalKey;
+  }
+  const expRule = org.publicationRules["expiration"];
+  if (expRule && expRule.action !== "none" && isAssetExpiredFE(asset, org)) {
+    return "expiration";
+  }
+  return null;
 }
 
 function isClearedEngaged(asset: Asset): boolean {
@@ -3456,7 +3573,6 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
           </div>
         </div>
 
-        <ApprovalRequiredToggle settings={settings} onSave={onSave}/>
         <DefaultApprovalSelect settings={settings} onSave={onSave}/>
 
         <PublicationRuleControl
@@ -3471,34 +3587,6 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
 }
 
 // ─── Sub-components for individual Rules panel controls ────────────────
-
-function ApprovalRequiredToggle({ settings, onSave }: { settings: OrgSettings; onSave: (next: OrgSettings) => Promise<void> | void }) {
-  const [draft, setDraft] = useState(settings.approvalRequired);
-  useEffect(() => { setDraft(settings.approvalRequired); }, [settings.approvalRequired]);
-  const dirty = draft !== settings.approvalRequired;
-  return (
-    <div className="rules-row" style={{ marginTop: 14 }}>
-      <label className="rules-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <input
-          type="checkbox"
-          checked={draft}
-          onChange={(e) => setDraft(e.target.checked)}
-        />
-        Approval required to be Public
-      </label>
-      <div className="rules-mode-help">
-        When on, an asset can only be in <strong>Public</strong> visibility if its
-        approval status is <strong>Approved</strong>. Anything else is moved to Private.
-      </div>
-      {dirty && (
-        <div className="rules-actions">
-          <button className="rules-save" onClick={() => onSave({ ...settings, approvalRequired: draft })}>Save</button>
-          <button className="rules-cancel" onClick={() => setDraft(settings.approvalRequired)}>Cancel</button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function DefaultApprovalSelect({ settings, onSave }: { settings: OrgSettings; onSave: (next: OrgSettings) => Promise<void> | void }) {
   const [draft, setDraft] = useState(settings.defaultApprovalStatus);
@@ -4365,12 +4453,15 @@ export default function App(){
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
+  // Visibility-override target — set when admin tries to mark something
+  // Public but a rule would re-flip it. Modal explains the rule and
+  // offers a one-click override targeted at whichever trigger is firing.
+  const [visOverride, setVisOverride] = useState<{ asset: Asset; ruleKey: string; intendedAction: "draft" | "archive" } | null>(null);
   const[sources,setSources]=useState<Source[]>([]); // video sources (showcases, playlists)
   // Org-level Rules. Loaded on mount; refreshed when admin saves in Rules panel.
   const[orgSettings,setOrgSettings]=useState<OrgSettings>({
     freshnessWarnAfterMonths:null,
     freshnessWarnBeforeDate:null,
-    approvalRequired:false,
     defaultApprovalStatus:"unset",
     publicationRules:{},
   });
@@ -4592,6 +4683,19 @@ export default function App(){
 
   // Change publication status (published / draft / archived) inline.
   const setPublicationStatus=async(asset: Asset, next: "published"|"draft"|"archived")=>{
+    // Intercept Public when a rule would immediately re-flip it. Without
+    // this, admin watches their click silently get reversed and assumes
+    // the UI is broken. Rules only fire on Public assets, so this guard
+    // is unnecessary for Private/Archive transitions.
+    if (next === "published") {
+      const ruleKey = findActiveRuleFE(asset, orgSettings);
+      if (ruleKey) {
+        const action = orgSettings.publicationRules[ruleKey]?.action;
+        const intendedAction: "draft" | "archive" = action === "archive" ? "archive" : "draft";
+        setVisOverride({ asset, ruleKey, intendedAction });
+        return; // Modal owns the next step — admin can override or cancel.
+      }
+    }
     if(next==="archived"){
       const today=new Date().toISOString().split("T")[0];
       await updateAssetInline(asset.id,{
@@ -4607,6 +4711,59 @@ export default function App(){
         archivedReason:null,
       },next==="published"?"Made public":"Made private");
     }
+  };
+
+  // Override handler — neutralizes whichever rule was about to fire on the
+  // override-target asset, then completes the original "make Public" intent.
+  // The override mechanism is rule-specific:
+  //   • expiration → set freshness exception to a far-future "never" sentinel
+  //   • approval_denied → set approval back to approved
+  // Both clear the rule's trigger so the subsequent publication update sticks.
+  const overrideAndPublish = async () => {
+    if (!visOverride) return;
+    const { asset, ruleKey } = visOverride;
+    try {
+      if (ruleKey === "expiration") {
+        const neverIso = (() => {
+          const d = new Date();
+          d.setFullYear(d.getFullYear() + 100);
+          return d.toISOString();
+        })();
+        await updateAssetInline(
+          asset.id,
+          {
+            freshnessExceptionUntil: neverIso,
+            status: "published",
+            archivedAt: null,
+            archivedReason: null,
+          },
+          "Override applied",
+        );
+      } else if (ruleKey === "approval_denied") {
+        await updateAssetInline(
+          asset.id,
+          {
+            approvalStatus: "approved",
+            approvalRecordedAt: new Date().toISOString(),
+            status: "published",
+            archivedAt: null,
+            archivedReason: null,
+          },
+          "Override applied",
+        );
+      } else {
+        // Unknown rule — fall through to a plain publish; server-side
+        // rule may still re-flip, but at least we attempted.
+        await updateAssetInline(
+          asset.id,
+          { status: "published", archivedAt: null, archivedReason: null },
+          "Made public",
+        );
+      }
+    } catch (e) {
+      console.error("override failed", e);
+    }
+    setVisOverride(null);
   };
 
   // Save the full asset edit form. Mirrors what the old AssetsPanel did:
@@ -5572,6 +5729,15 @@ export default function App(){
           onPreview={(id)=>{const a=assets.find(x=>x.id===id);if(a){setEditingAssetId(null);openAsset(a);}}}
           onClose={()=>setEditingAssetId(null)}
         />
+        {visOverride && (
+          <VisibilityOverrideModal
+            asset={visOverride.asset}
+            ruleKey={visOverride.ruleKey}
+            intendedAction={visOverride.intendedAction}
+            onClose={() => setVisOverride(null)}
+            onOverride={overrideAndPublish}
+          />
+        )}
       </div>
     </React.Fragment>
   );
