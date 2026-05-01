@@ -294,34 +294,66 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .ap-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
 .ap-body{flex:1;overflow-y:auto;padding:16px 20px;}
 
-/* Rules panel — admin's place for org-level conditional behavior. Future
-   rules stack below the freshness section. */
+/* Rules panel — Defaults block + Automations block. Defaults are stacked
+   labeled rows; Automations are trigger→action cards that read as
+   sentences. Both blocks scale by adding more children. */
 .rules-panel{padding:0;display:flex;flex-direction:column;height:100%;overflow-y:auto;}
+.rules-panel .ap-head{padding:18px 20px 14px;border-bottom:1px solid var(--border);}
 .rules-panel .ap-head h3{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);margin:0;}
-.rules-section{padding:18px 20px;border-bottom:1px solid var(--border);}
-.rules-section-head{margin-bottom:12px;}
-.rules-section-title{font-family:var(--serif);font-size:14px;font-weight:600;color:var(--t1);}
-.rules-section-help{font-size:11.5px;color:var(--t3);margin-top:4px;line-height:1.5;}
-.rules-row{display:flex;flex-direction:column;gap:6px;}
-.rules-label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+
+/* Block — wraps each top-level grouping (Defaults, Automations). */
+.rules-block{padding:18px 20px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:14px;}
+.rules-block-head{display:flex;flex-direction:column;gap:4px;}
+.rules-block-title{font-family:var(--serif);font-size:14px;font-weight:600;color:var(--t1);}
+.rules-block-sub{font-size:11.5px;color:var(--t3);line-height:1.5;}
+
+/* Default rows — stacked controls with their label inline above. */
+.rules-default-row{display:flex;flex-direction:column;gap:6px;}
+.rules-default-label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+
+/* Rule card — header strip + collapsible body. Soft border, subtle
+   background. When off, the card mutes (.off applies on the wrapper).
+   Header has icon + title on the left, on/off toggle on the right. */
+.rule-card{border:1px solid var(--border);border-radius:10px;background:#fff;overflow:hidden;transition:all .15s;}
+.rule-card.off{background:var(--bg);border-color:var(--border);opacity:.7;}
+.rule-card.on{box-shadow:0 1px 2px rgba(0,0,0,.04);}
+.rule-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;}
+.rule-card.on .rule-card-head{border-bottom:1px solid var(--border);}
+.rule-card-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--t1);}
+.rule-card-icon{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--bg2);color:var(--t2);}
+.rule-card.on .rule-card-icon{background:var(--accentLL);color:var(--accent);}
+.rule-card-body{padding:14px;display:flex;flex-direction:column;gap:8px;background:var(--bg);}
+
+/* On/off toggle — pill switch with sliding thumb. Off is muted; on is
+   accent-colored. Standard role=switch for a11y. */
+.rule-toggle{position:relative;width:34px;height:20px;border-radius:999px;border:none;background:var(--border2);cursor:pointer;padding:0;flex-shrink:0;transition:background .12s;}
+.rule-toggle.on{background:var(--accent);}
+.rule-toggle-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .12s;}
+.rule-toggle.on .rule-toggle-thumb{transform:translateX(14px);}
+
+/* Sentence-style rule body — inline dropdowns + plain text reading
+   left-to-right. Inline selects sized to content rather than 100%. */
+.rule-sentence{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px;color:var(--t1);line-height:1.5;}
+.rule-inline-select{font-family:var(--font);font-size:13px;padding:6px 28px 6px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t1);width:auto;cursor:pointer;}
+.rule-inline-select:focus{outline:none;border-color:var(--accent);}
+.rule-inline-date{font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t1);width:auto;}
+
+/* "↓ then" connector — small, color-neutral, centered. The visual
+   gesture that makes the trigger→action flow legible without a full
+   canvas. */
+.rule-then{font-size:11px;color:var(--t3);font-weight:600;letter-spacing:.4px;text-transform:uppercase;padding:2px 0;}
+
+/* Shared inline controls — reused by Default rows + rule sentences. */
 .rules-select{font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t1);width:100%;cursor:pointer;}
 .rules-select:focus{outline:none;border-color:var(--accent);}
-.rules-actions{display:flex;gap:8px;margin-top:12px;}
+.rules-input{font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t1);width:100%;}
+.rules-input:focus{outline:none;border-color:var(--accent);}
+.rules-actions{display:flex;gap:8px;margin-top:8px;}
 .rules-save{padding:7px 14px;border:none;border-radius:6px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
 .rules-save:hover{background:var(--accent2);}
 .rules-cancel{padding:7px 14px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
 .rules-cancel:hover{border-color:var(--border2);color:var(--t1);}
 .rules-save:disabled{opacity:.4;cursor:not-allowed;}
-.rules-modes{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap;}
-.rules-mode{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:#fff;color:var(--t3);font-family:var(--font);font-size:11.5px;font-weight:600;cursor:pointer;}
-.rules-mode:hover{border-color:var(--border2);color:var(--t1);}
-.rules-mode.on{background:var(--accentL);border-color:var(--accent);color:var(--accent);}
-.rules-mode-help{font-size:11px;color:var(--t3);margin-top:6px;line-height:1.4;}
-.rules-row-inline{display:flex;gap:6px;align-items:center;}
-.rules-input{font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t1);width:100%;}
-.rules-input:focus{outline:none;border-color:var(--accent);}
-.rules-row-inline .rules-input{flex:1;min-width:80px;}
-.rules-unit{flex:0 0 auto;width:auto;cursor:pointer;}
 
 /* Assets list */
 .asset-list{display:flex;flex-direction:column;gap:6px;}
@@ -3438,81 +3470,139 @@ interface Progress {
 }
 
 // ─── ADMIN: RULES PANEL ─────────────────────────────────────────────────────
-// Org-level configuration that affects how the library behaves under
-// conditions. v1 has one rule (freshness threshold). Future rules will stack
-// vertically below — approval-required-before-share, AI metadata triggers,
-// retention windows, etc.
+// Two top-level sections:
+//   • Defaults — one-time settings applied at import time (default approval,
+//     and future entries like AI auto-infer toggle).
+//   • Automations — trigger→action rule cards. Each reads as a sentence
+//     ("When a story is older than 1 year, then archive it.") with an on/off
+//     toggle in the header. Auto-revert to Public is always on; intentionally
+//     no UI for it (it's the right default in every realistic case).
 interface RulesPanelProps {
   settings: OrgSettings;
   onSave: (next: OrgSettings) => Promise<void> | void;
 }
-// "off" / "preset" / "custom-rolling" / "custom-date" — the four conceptual
-// modes the freshness rule can be in. "preset" covers the 1y/2y/3y/5y
-// dropdown values (which all map to freshnessWarnAfterMonths). Internally
-// the data model is just two columns; this enum drives the UI tabs only.
-type FreshMode = "off" | "preset" | "custom-rolling" | "custom-date";
-const PRESET_MONTHS = [12, 24, 36, 60];
 
-function deriveMode(s: OrgSettings): FreshMode {
-  if (s.freshnessWarnBeforeDate) return "custom-date";
-  if (s.freshnessWarnAfterMonths === null) return "off";
-  if (PRESET_MONTHS.includes(s.freshnessWarnAfterMonths)) return "preset";
-  return "custom-rolling";
-}
+// Threshold preset values for the Expiration rule. Specific date is kept as
+// an option but demoted to the bottom of the dropdown — uncommon escape hatch
+// for orgs that need a hard cutoff instead of a rolling threshold.
+const EXPIRATION_PRESETS: { value: string; months: number; label: string }[] = [
+  { value: "6m", months: 6, label: "Older than 6 months" },
+  { value: "1y", months: 12, label: "Older than 1 year" },
+  { value: "2y", months: 24, label: "Older than 2 years" },
+  { value: "3y", months: 36, label: "Older than 3 years" },
+  { value: "5y", months: 60, label: "Older than 5 years" },
+];
 
 function RulesPanel({ settings, onSave }: RulesPanelProps) {
-  // Three pieces of draft state — only one is meaningful at a time, but
-  // tracking all three lets the user switch modes without losing data
-  // they'd just typed.
-  const [mode, setMode] = useState<FreshMode>(deriveMode(settings));
-  const [draftMonths, setDraftMonths] = useState<number | null>(settings.freshnessWarnAfterMonths);
-  const [draftDate, setDraftDate] = useState<string | null>(settings.freshnessWarnBeforeDate);
-  // For custom-rolling, keep a separate number+unit so users can type "18 months" or "2 years" naturally.
-  const [customRollingNum, setCustomRollingNum] = useState<number>(() => {
-    const m = settings.freshnessWarnAfterMonths;
-    if (m === null || PRESET_MONTHS.includes(m)) return 18;
-    return m % 12 === 0 ? m / 12 : m;
-  });
-  const [customRollingUnit, setCustomRollingUnit] = useState<"months" | "years">(() => {
-    const m = settings.freshnessWarnAfterMonths;
-    if (m === null || PRESET_MONTHS.includes(m)) return "months";
-    return m % 12 === 0 ? "years" : "months";
-  });
+  // ── Expiration card state ─────────────────────────────────────────
+  const expirationOn =
+    settings.freshnessWarnAfterMonths !== null ||
+    !!settings.freshnessWarnBeforeDate;
 
-  // Re-derive when parent updates (post-save refresh, etc.)
+  const deriveExpValue = (): string => {
+    if (settings.freshnessWarnBeforeDate) return "specific";
+    if (settings.freshnessWarnAfterMonths !== null) {
+      const preset = EXPIRATION_PRESETS.find(p => p.months === settings.freshnessWarnAfterMonths);
+      return preset ? preset.value : "1y";
+    }
+    return "1y";
+  };
+  const [expValue, setExpValue] = useState<string>(deriveExpValue());
+  const [specificDate, setSpecificDate] = useState<string>(settings.freshnessWarnBeforeDate || "");
   useEffect(() => {
-    setMode(deriveMode(settings));
-    setDraftMonths(settings.freshnessWarnAfterMonths);
-    setDraftDate(settings.freshnessWarnBeforeDate);
+    setExpValue(deriveExpValue());
+    setSpecificDate(settings.freshnessWarnBeforeDate || "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.freshnessWarnAfterMonths, settings.freshnessWarnBeforeDate]);
 
-  // Compute the target settings for whatever mode is selected. Spread
-  // existing settings first so approval/publication-rule fields are
-  // preserved — only the freshness fields are being edited here.
-  const targetSettings = ((): OrgSettings => {
-    if (mode === "off") {
-      return { ...settings, freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: null };
-    }
-    if (mode === "preset") {
-      return { ...settings, freshnessWarnAfterMonths: draftMonths ?? 24, freshnessWarnBeforeDate: null };
-    }
-    if (mode === "custom-rolling") {
-      const months = customRollingUnit === "years" ? customRollingNum * 12 : customRollingNum;
-      return { ...settings, freshnessWarnAfterMonths: months, freshnessWarnBeforeDate: null };
-    }
-    // custom-date
-    return { ...settings, freshnessWarnAfterMonths: null, freshnessWarnBeforeDate: draftDate };
-  })();
+  const expAction = (settings.publicationRules["expiration"]?.action ?? "draft") as "draft" | "archive";
 
-  const dirty =
-    targetSettings.freshnessWarnAfterMonths !== settings.freshnessWarnAfterMonths ||
-    targetSettings.freshnessWarnBeforeDate !== settings.freshnessWarnBeforeDate;
+  // Toggling the rule on/off is a single onSave that flips multiple fields:
+  // threshold (months/date) AND the publication action. Off = no threshold +
+  // action "none"; on = restore default 1-year threshold + draft action.
+  const setExpirationEnabled = (on: boolean) => {
+    if (on) {
+      const existing = settings.publicationRules["expiration"];
+      const nextAction = existing && existing.action !== "none" ? existing.action : "draft";
+      onSave({
+        ...settings,
+        freshnessWarnAfterMonths: 12,
+        freshnessWarnBeforeDate: null,
+        publicationRules: {
+          ...settings.publicationRules,
+          expiration: { action: nextAction, auto_revert: true },
+        },
+      });
+    } else {
+      onSave({
+        ...settings,
+        freshnessWarnAfterMonths: null,
+        freshnessWarnBeforeDate: null,
+        publicationRules: {
+          ...settings.publicationRules,
+          expiration: { action: "none", auto_revert: true },
+        },
+      });
+    }
+  };
 
-  const canSave = (() => {
-    if (mode === "custom-rolling") return customRollingNum > 0 && customRollingNum <= 600;
-    if (mode === "custom-date") return !!draftDate;
-    return true;
-  })();
+  const setExpirationThreshold = (value: string, dateOverride?: string) => {
+    setExpValue(value);
+    if (value === "specific") {
+      const d = dateOverride ?? specificDate;
+      if (!d) return; // wait for date input before saving
+      onSave({
+        ...settings,
+        freshnessWarnAfterMonths: null,
+        freshnessWarnBeforeDate: d,
+      });
+    } else {
+      const preset = EXPIRATION_PRESETS.find(p => p.value === value);
+      if (!preset) return;
+      onSave({
+        ...settings,
+        freshnessWarnAfterMonths: preset.months,
+        freshnessWarnBeforeDate: null,
+      });
+    }
+  };
+
+  const setExpirationAction = (action: "draft" | "archive") => {
+    onSave({
+      ...settings,
+      publicationRules: {
+        ...settings.publicationRules,
+        expiration: { action, auto_revert: true },
+      },
+    });
+  };
+
+  // ── Approval-denied card state ────────────────────────────────────
+  const denialAction = (settings.publicationRules["approval_denied"]?.action ?? "none") as "none" | "draft" | "archive";
+  const denialOn = denialAction !== "none";
+
+  const setDenialEnabled = (on: boolean) => {
+    onSave({
+      ...settings,
+      publicationRules: {
+        ...settings.publicationRules,
+        approval_denied: {
+          action: on ? (denialAction === "none" ? "draft" : denialAction) : "none",
+          auto_revert: true,
+        },
+      },
+    });
+  };
+
+  const setDenialAction = (action: "draft" | "archive") => {
+    onSave({
+      ...settings,
+      publicationRules: {
+        ...settings.publicationRules,
+        approval_denied: { action, auto_revert: true },
+      },
+    });
+  };
 
   return (
     <div className="rules-panel">
@@ -3521,143 +3611,157 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
         <p className="ap-sub">Configure how the library behaves under conditions. Rules apply to the whole org.</p>
       </div>
 
-      <div className="rules-section">
-        <div className="rules-section-head">
-          <div className="rules-section-title">Expiration</div>
-          <div className="rules-section-help">
-            Flag testimonials whose Vimeo publish date is too old for review. Sales reps still see flagged stories — this is a hint, not a hard filter.
-          </div>
+      {/* ── Defaults block ── */}
+      <div className="rules-block">
+        <div className="rules-block-head">
+          <div className="rules-block-title">Defaults</div>
+          <div className="rules-block-sub">Applied at import time. Existing assets are unchanged.</div>
         </div>
-
-        {/* Mode tabs — pick one of four shapes. Switching modes preserves
-            whatever values the user has typed in each so they can compare. */}
-        <div className="rules-modes">
-          <button className={`rules-mode${mode === "off" ? " on" : ""}`} onClick={() => setMode("off")}>Off</button>
-          <button className={`rules-mode${mode === "preset" ? " on" : ""}`} onClick={() => setMode("preset")}>Preset</button>
-          <button className={`rules-mode${mode === "custom-rolling" ? " on" : ""}`} onClick={() => setMode("custom-rolling")}>Custom rolling</button>
-          <button className={`rules-mode${mode === "custom-date" ? " on" : ""}`} onClick={() => setMode("custom-date")}>Specific date</button>
-        </div>
-
-        {mode === "off" && (
-          <div className="rules-mode-help">No freshness flagging. Stories never trigger a review on age alone.</div>
-        )}
-
-        {mode === "preset" && (
-          <div className="rules-row">
-            <label className="rules-label">Flag testimonials older than</label>
-            <select
-              className="rules-select"
-              value={draftMonths === null ? "24" : String(draftMonths)}
-              onChange={(e) => setDraftMonths(parseInt(e.target.value, 10))}
-            >
-              {PRESET_MONTHS.map((m) => (
-                <option key={m} value={String(m)}>{m === 12 ? "1 year" : `${m / 12} years`}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {mode === "custom-rolling" && (
-          <div className="rules-row">
-            <label className="rules-label">Flag testimonials older than</label>
-            <div className="rules-row-inline">
-              <input
-                className="rules-input"
-                type="number"
-                min="1"
-                max={customRollingUnit === "years" ? 50 : 600}
-                value={customRollingNum}
-                onChange={(e) => setCustomRollingNum(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              />
-              <select
-                className="rules-select rules-unit"
-                value={customRollingUnit}
-                onChange={(e) => setCustomRollingUnit(e.target.value as "months" | "years")}
-              >
-                <option value="months">months</option>
-                <option value="years">years</option>
-              </select>
-            </div>
-            <div className="rules-mode-help">Rolling — shifts as time passes. {customRollingNum} {customRollingUnit} from each story&apos;s Vimeo publish date.</div>
-          </div>
-        )}
-
-        {mode === "custom-date" && (
-          <div className="rules-row">
-            <label className="rules-label">Flag testimonials published before</label>
-            <input
-              className="rules-input"
-              type="date"
-              value={draftDate || ""}
-              onChange={(e) => setDraftDate(e.target.value || null)}
-            />
-            <div className="rules-mode-help">Fixed cutoff — every story published before this date will be flagged. Doesn&apos;t shift over time.</div>
-          </div>
-        )}
-
-        {dirty && (
-          <div className="rules-actions">
-            <button
-              className="rules-save"
-              disabled={!canSave}
-              onClick={() => onSave(targetSettings)}
-            >Save</button>
-            <button
-              className="rules-cancel"
-              onClick={() => {
-                setMode(deriveMode(settings));
-                setDraftMonths(settings.freshnessWarnAfterMonths);
-                setDraftDate(settings.freshnessWarnBeforeDate);
-              }}
-            >Cancel</button>
-          </div>
-        )}
-
-        {/* Expiration trigger → action mapping. When asset becomes flagged
-            as expired, the chosen action fires automatically on next sync
-            (manual or daily cron, depending on auto-sync setting). */}
-        {mode !== "off" && (
-          <PublicationRuleControl
-            label="When an asset is flagged as expired"
-            ruleKey="expiration"
-            settings={settings}
-            onSave={onSave}
-          />
-        )}
+        <DefaultApprovalSelect settings={settings} onSave={onSave}/>
       </div>
 
-      {/* ─── Approval section ─── */}
-      <div className="rules-section">
-        <div className="rules-section-head">
-          <div className="rules-section-title">Approval</div>
-          <div className="rules-section-help">
-            Configure how approval status drives publication. Defaults apply
-            to new imports; existing assets are unchanged.
-          </div>
+      {/* ── Automations block ── */}
+      <div className="rules-block">
+        <div className="rules-block-head">
+          <div className="rules-block-title">Automations</div>
+          <div className="rules-block-sub">Each rule fires on its own trigger. When the trigger clears, the asset auto-reverts to Public.</div>
         </div>
 
-        <DefaultApprovalSelect settings={settings} onSave={onSave}/>
+        <RuleCard
+          icon={<TimerIcon/>}
+          title="Expiration"
+          enabled={expirationOn}
+          onToggle={setExpirationEnabled}
+        >
+          <div className="rule-sentence">
+            <span>When a story is</span>
+            <select
+              className="rules-select rule-inline-select"
+              value={expValue}
+              onChange={(e) => setExpirationThreshold(e.target.value)}
+            >
+              {EXPIRATION_PRESETS.map(p => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+              <option disabled>──────────</option>
+              <option value="specific">Published before specific date…</option>
+            </select>
+            {expValue === "specific" && (
+              <input
+                className="rules-input rule-inline-date"
+                type="date"
+                value={specificDate}
+                onChange={(e) => {
+                  setSpecificDate(e.target.value);
+                  if (e.target.value) setExpirationThreshold("specific", e.target.value);
+                }}
+              />
+            )}
+          </div>
+          <div className="rule-then">↓ then</div>
+          <div className="rule-sentence">
+            <select
+              className="rules-select rule-inline-select"
+              value={expAction}
+              onChange={(e) => setExpirationAction(e.target.value as "draft" | "archive")}
+            >
+              <option value="draft">Make private</option>
+              <option value="archive">Archive</option>
+            </select>
+          </div>
+        </RuleCard>
 
-        <PublicationRuleControl
-          label="When approval is set to Denied"
-          ruleKey="approval_denied"
-          settings={settings}
-          onSave={onSave}
-        />
+        <RuleCard
+          icon={<XMarkIcon/>}
+          title="Approval denied"
+          enabled={denialOn}
+          onToggle={setDenialEnabled}
+        >
+          <div className="rule-sentence">
+            <span>When approval is set to <strong>Denied</strong></span>
+          </div>
+          <div className="rule-then">↓ then</div>
+          <div className="rule-sentence">
+            <select
+              className="rules-select rule-inline-select"
+              value={denialAction === "none" ? "draft" : denialAction}
+              onChange={(e) => setDenialAction(e.target.value as "draft" | "archive")}
+            >
+              <option value="draft">Make private</option>
+              <option value="archive">Archive</option>
+            </select>
+          </div>
+        </RuleCard>
       </div>
     </div>
   );
 }
 
-// ─── Sub-components for individual Rules panel controls ────────────────
+// Reusable card for a single trigger→action rule. Header has the rule's
+// icon + name + on/off toggle. When on, body renders the configurable
+// trigger + action sentences. When off, body collapses entirely and the
+// card goes muted.
+interface RuleCardProps {
+  icon: React.ReactNode;
+  title: string;
+  enabled: boolean;
+  onToggle: (on: boolean) => void;
+  children?: React.ReactNode;
+}
+function RuleCard({ icon, title, enabled, onToggle, children }: RuleCardProps) {
+  return (
+    <div className={`rule-card${enabled ? " on" : " off"}`}>
+      <div className="rule-card-head">
+        <div className="rule-card-title">
+          <span className="rule-card-icon">{icon}</span>
+          <span>{title}</span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          className={`rule-toggle${enabled ? " on" : ""}`}
+          onClick={() => onToggle(!enabled)}
+          title={enabled ? "Click to turn off" : "Click to turn on"}
+        >
+          <span className="rule-toggle-thumb"/>
+        </button>
+      </div>
+      {enabled && (
+        <div className="rule-card-body">{children}</div>
+      )}
+    </div>
+  );
+}
 
+function TimerIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="13" r="8"/>
+      <path d="M12 9v4l2 2"/>
+      <path d="M9 2h6"/>
+    </svg>
+  );
+}
+
+function XMarkIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M9 9l6 6"/>
+      <path d="M15 9l-6 6"/>
+    </svg>
+  );
+}
+
+// Default approval status — used in the Defaults block. Saves on Save click.
 function DefaultApprovalSelect({ settings, onSave }: { settings: OrgSettings; onSave: (next: OrgSettings) => Promise<void> | void }) {
   const [draft, setDraft] = useState(settings.defaultApprovalStatus);
   useEffect(() => { setDraft(settings.defaultApprovalStatus); }, [settings.defaultApprovalStatus]);
   const dirty = draft !== settings.defaultApprovalStatus;
   return (
-    <div className="rules-row" style={{ marginTop: 14 }}>
-      <label className="rules-label">Default approval for new imports</label>
+    <div className="rules-default-row">
+      <label className="rules-default-label">Default approval for new imports</label>
       <select
         className="rules-select"
         value={draft}
@@ -3669,66 +3773,10 @@ function DefaultApprovalSelect({ settings, onSave }: { settings: OrgSettings; on
         <option value="approved">Approved</option>
         <option value="denied">Denied</option>
       </select>
-      <div className="rules-mode-help">
-        Applied to new assets at import time. Existing assets are not changed.
-      </div>
       {dirty && (
         <div className="rules-actions">
           <button className="rules-save" onClick={() => onSave({ ...settings, defaultApprovalStatus: draft })}>Save</button>
           <button className="rules-cancel" onClick={() => setDraft(settings.defaultApprovalStatus)}>Cancel</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Per-trigger action control. The trigger key (e.g. "expiration",
-// "approval_denied") is fixed; admin picks the action and auto-revert.
-function PublicationRuleControl({ label, ruleKey, settings, onSave }: {
-  label: string;
-  ruleKey: string;
-  settings: OrgSettings;
-  onSave: (next: OrgSettings) => Promise<void> | void;
-}) {
-  const current = settings.publicationRules[ruleKey] || { action: "none", auto_revert: true };
-  const [action, setAction] = useState(current.action);
-  const [autoRevert, setAutoRevert] = useState(current.auto_revert);
-  useEffect(() => {
-    const c = settings.publicationRules[ruleKey] || { action: "none", auto_revert: true };
-    setAction(c.action);
-    setAutoRevert(c.auto_revert);
-  }, [settings.publicationRules, ruleKey]);
-  const dirty = action !== current.action || autoRevert !== current.auto_revert;
-  const save = () => {
-    const nextRules = { ...settings.publicationRules, [ruleKey]: { action, auto_revert: autoRevert } };
-    onSave({ ...settings, publicationRules: nextRules });
-  };
-  return (
-    <div className="rules-row" style={{ marginTop: 14 }}>
-      <label className="rules-label">{label}</label>
-      <select
-        className="rules-select"
-        value={action}
-        onChange={(e) => setAction(e.target.value as "none" | "draft" | "archive")}
-      >
-        <option value="none">No action</option>
-        <option value="draft">Make private</option>
-        <option value="archive">Archive</option>
-      </select>
-      {action !== "none" && (
-        <label className="rules-mode-help" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-          <input
-            type="checkbox"
-            checked={autoRevert}
-            onChange={(e) => setAutoRevert(e.target.checked)}
-          />
-          Auto-revert to Public when the condition no longer applies
-        </label>
-      )}
-      {dirty && (
-        <div className="rules-actions">
-          <button className="rules-save" onClick={save}>Save</button>
-          <button className="rules-cancel" onClick={() => { setAction(current.action); setAutoRevert(current.auto_revert); }}>Cancel</button>
         </div>
       )}
     </div>
