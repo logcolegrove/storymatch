@@ -681,9 +681,15 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 
 /* ── CLEARED INDICATOR + POPOVER ── */
 .cl-cell{position:relative;}
-.cl-trigger{display:inline-flex;align-items:center;gap:7px;cursor:pointer;border:1px solid transparent;padding:4px 8px;border-radius:6px;font-size:11.5px;color:var(--t2);}
-.cl-trigger:hover{border-color:var(--border);background:#fff;}
-.cl-trigger.open{border-color:var(--accent);background:var(--accentLL);}
+/* Cleared trigger pill — colored background matches the level so it
+   visually pairs with the custom-status chips next to it. The chip
+   styling and the trigger styling intentionally share a vocabulary. */
+.cl-trigger{display:inline-flex;align-items:center;gap:7px;cursor:pointer;border:1px solid var(--border);padding:3px 9px;border-radius:999px;font-size:11.5px;color:var(--t1);background:#f9fafb;font-weight:600;}
+.cl-trigger:hover{filter:brightness(0.97);}
+.cl-trigger.open{outline:2px solid var(--accent);outline-offset:1px;}
+.cl-trigger.green{background:#f0fdf4;border-color:#bbf7d0;color:#166534;}
+.cl-trigger.yellow{background:#fef9e7;border-color:#fde68a;color:#92400e;}
+.cl-trigger.red{background:#fdf2f2;border-color:#f5d5d5;color:#b91c1c;}
 .cl-circle{width:11px;height:11px;border-radius:50%;flex-shrink:0;border:1px solid rgba(0,0,0,.08);}
 .cl-circle.green{background:var(--green);}
 .cl-circle.yellow{background:var(--amber);}
@@ -717,9 +723,6 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-flag-chip-label{max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .cl-flag-chip-x{background:none;border:none;cursor:pointer;color:var(--t3);font-size:14px;line-height:1;padding:0 4px;}
 .cl-flag-chip-x:hover{color:var(--red);}
-/* Soften the bare red dot too — was using full-saturation var(--red),
-   which feels alarming for what's often informational. */
-.cl-circle.red{background:#dc6970;}
 /* Custom-color dot rendered via inline style.color — keeps the same
    sizing/shape as preset circles. */
 .cl-circle.custom{background:transparent;}
@@ -834,8 +837,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .cl-mini-btn.primary:hover{background:var(--accent2);}
 
 /* Empty Cleared state — no admin engagement yet */
-.cl-trigger.unset{color:var(--t4);}
-.cl-trigger.unset:hover{color:var(--t2);}
+.cl-trigger.unset{background:transparent;border-color:transparent;color:var(--t4);padding:4px 8px;}
+.cl-trigger.unset:hover{background:var(--bg2);color:var(--t2);}
 .cl-trigger-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;}
 
 /* ── MULTI-SELECT (checkboxes + bulk action bar) ── */
@@ -895,17 +898,17 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .bsm-choice-text{display:flex;flex-direction:column;gap:2px;}
 .bsm-choice-label{font-size:13px;font-weight:600;color:var(--t1);}
 .bsm-choice-help{font-size:11.5px;color:var(--t3);line-height:1.35;}
-/* Red Clear-all button — visible in both the bulk modal (below status
-   fields, above Cancel/Apply) and the per-asset popover (always visible
-   at the bottom, top-level). Uses red color + outlined border to read as
-   a destructive action that admin should think twice about. */
+/* Reset button — neutral grey. Reset isn't dangerous in the way a delete
+   is (it just clears flags / approval status / etc., all of which can be
+   re-applied), so a destructive-red treatment was overkill. Used in both
+   the bulk modal and the per-asset popover. */
 .bsm-clear-all-btn,.cl-clear-all{
   width:100%;
   padding:8px 14px;
   border-radius:6px;
-  border:1px solid var(--red);
+  border:1px solid var(--border);
   background:#fff;
-  color:var(--red);
+  color:var(--t2);
   font-family:var(--font);
   font-size:12px;
   font-weight:600;
@@ -914,8 +917,9 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
   transition:all .12s;
 }
 .bsm-clear-all-btn:hover,.cl-clear-all:hover{
-  background:var(--red);
-  color:#fff;
+  background:var(--bg2);
+  color:var(--t1);
+  border-color:var(--border2);
 }
 
 /* ── 3-DOT MENU ── */
@@ -1141,10 +1145,14 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       <div className="card-body">
         <div className="card-headline" title={asset.headline||"Untitled"}>{asset.headline||"Untitled"}</div>
         {/* Custom-status chips — visible at the card level for admins so they
-            can scan organization tags without opening each card. Sales/public
-            views won't have customFlags rendered (they pass admin=false). */}
+            can scan organization tags without opening each card. Click target
+            opens the cleared popover (same affordance as the dot). */}
         {Array.isArray(asset.customFlags) && asset.customFlags.length > 0 && (
-          <FlagChips flags={asset.customFlags as CustomFlag[]} dense/>
+          <FlagChips
+            flags={asset.customFlags as CustomFlag[]}
+            dense
+            onClick={cleared ? (e) => { e.stopPropagation(); setClearedOpen(o => !o); } : undefined}
+          />
         )}
         <div className="card-co">
           <span className="card-co-name">
@@ -1375,16 +1383,29 @@ interface BulkStatusPatch {
   clearAll?: boolean;
 }
 
-// Compact, read-only chip strip showing every custom flag on an asset.
-// Used in list rows and on grid cards so admins can spot per-asset
-// organization tags at-a-glance without having to open the popover.
+// Compact chip strip showing every custom flag on an asset. Used in list
+// rows and on grid cards so admins can spot per-asset organization tags
+// at-a-glance. Optional onClick makes the whole strip a click target —
+// callers wire it to the same toggle that opens the cleared popover so
+// chips behave like a second affordance for the same control.
 // Uses inline style.color/borderColor for hex flags so we don't need a
-// CSS class per color. No remove affordance here — that lives in the
-// popover.
-function FlagChips({ flags, dense }: { flags: CustomFlag[]; dense?: boolean }) {
+// CSS class per color. Remove affordance lives in the popover.
+function FlagChips({
+  flags,
+  dense,
+  onClick,
+}: {
+  flags: CustomFlag[];
+  dense?: boolean;
+  onClick?: (e: React.MouseEvent) => void;
+}) {
   if (!flags || flags.length === 0) return null;
   return (
-    <div className={`cl-flag-chips${dense ? " dense" : ""}`}>
+    <div
+      className={`cl-flag-chips${dense ? " dense" : ""}${onClick ? " clickable" : ""}`}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+    >
       {flags.map(f => {
         const isHex = isHexColor(f.color);
         const presetClass = !isHex ? f.color : "custom";
@@ -2077,8 +2098,10 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
   // "Flagged for review:" prefix, since the dot color already conveys severity).
   // Prefixes with "Approved but…" when approval is positive so admins
   // understand the asset is approved AND has a separate concern.
+  // Excludes custom flags — those already render as chips next to/below
+  // the trigger, so duplicating their label here would look redundant.
   const flaggedReasons = cleared.reasons
-    .filter(r => r.level === cleared.level && (r.level === "yellow" || r.level === "red"))
+    .filter(r => r.level === cleared.level && (r.level === "yellow" || r.level === "red") && r.signal !== "custom")
     .map(r => r.shortLabel || r.label);
   const isApproved = cleared.reasons.some(r => r.signal === "approval" && r.level === "green" && !r.hideDot);
   const joined = flaggedReasons.length === 0 ? ""
@@ -2095,7 +2118,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
       <div
         ref={triggerRef}
-        className={`cl-trigger${open ? " open" : ""}${cleared.level === "unset" ? " unset" : ""}`}
+        className={`cl-trigger${open ? " open" : ""}${cleared.level !== "unset" ? " " + cleared.level : " unset"}`}
         onClick={onToggle}
         title={title}
       >
@@ -2104,7 +2127,7 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
         ) : cleared.level === "green" ? (
           <>
             <span className="cl-circle green"/>
-            <span className="cl-trigger-text">Cleared</span>
+            <span className="cl-trigger-text">Approved</span>
           </>
         ) : (
           <>
@@ -2424,10 +2447,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
 
       <button
         className="cl-clear-all"
-        onClick={() => {
-          if (!confirm("Reset status indicators on this asset? This resets approval, client status, expiration, and custom flags to default.")) return;
-          onResetStatusIndicators(asset);
-        }}
+        onClick={() => onResetStatusIndicators(asset)}
       >Reset</button>
     </div>,
     document.body
@@ -2948,7 +2968,14 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 onSetApproval={onSetApproval}
                 onMarkVerified={onMarkVerified}
               />
-              <FlagChips flags={(a.customFlags as CustomFlag[]) || []} dense/>
+              <FlagChips
+                flags={(a.customFlags as CustomFlag[]) || []}
+                dense
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenClearedFor(open ? null : a.id);
+                }}
+              />
             </div>
             <div className="lv-actions">
               <DotsMenu items={[
