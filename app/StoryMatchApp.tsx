@@ -585,6 +585,14 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .vdot.cl-green{background:var(--green);}
 .vdot.cl-yellow{background:var(--amber);}
 .vdot.cl-red{background:var(--red);}
+/* Custom-color flag dots use inline style.background, but we still need
+   .cl-custom to register so the tooling/cascade doesn't treat the class
+   as missing. Empty rule is intentional. */
+.vdot.cl-custom{}
+/* Custom-status dots on grid cards — sit inline with the cleared
+   indicator. Same size; no chip wrapper. Small left margin so they
+   read as a row of dots, not bunched together. */
+.card-flag-dot{margin-left:4px;}
 /* Button form of the dot — clickable to open the Cleared popover. Slightly
    larger hit area than the visual would suggest, and a hover bump for affordance. */
 .vdot.vdot-btn{border:none;padding:0;cursor:pointer;width:9px;height:9px;transition:transform .12s;}
@@ -1155,16 +1163,6 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       </div>
       <div className="card-body">
         <div className="card-headline" title={asset.headline||"Untitled"}>{asset.headline||"Untitled"}</div>
-        {/* Custom-status chips — visible at the card level for admins so they
-            can scan organization tags without opening each card. Click target
-            opens the cleared popover (same affordance as the dot). */}
-        {Array.isArray(asset.customFlags) && asset.customFlags.length > 0 && (
-          <FlagChips
-            flags={asset.customFlags as CustomFlag[]}
-            dense
-            onClick={cleared ? (e) => { e.stopPropagation(); setClearedOpen(o => !o); } : undefined}
-          />
-        )}
         <div className="card-co">
           <span className="card-co-name">
             {/* Dot reflects Cleared signal for admins (matches list view).
@@ -1181,6 +1179,30 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
                 title={clearedTooltip(cleared.level, cleared.reasons)}
               />
             )}
+            {/* Custom-status dots — only the *informational* (green / custom-
+                hex) flags render here. Severity flags (yellow/red) are folded
+                into the cleared trigger above. Each dot is the same size as
+                the cleared indicator, plain colored circle (no chip wrapper,
+                no border, no background) and click-opens the same popover. */}
+            {Array.isArray(asset.customFlags) && (asset.customFlags as CustomFlag[])
+              .filter(f => f && !isSeverityColor(f.color))
+              .map(f => {
+                const isHex = isHexColor(f.color);
+                const colorClass = !isHex ? f.color : "custom";
+                const dotStyle: React.CSSProperties = isHex
+                  ? { background: f.color, borderColor: f.color }
+                  : {};
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className={`vdot vdot-btn cl-${colorClass} card-flag-dot`}
+                    style={dotStyle}
+                    onClick={cleared ? (e) => { e.stopPropagation(); setClearedOpen(o => !o); } : undefined}
+                    title={f.label || ""}
+                  />
+                );
+              })}
             {asset.company||"—"}
           </span>
           <span className="card-vert">{cta} →</span>
@@ -2547,21 +2569,34 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
           />
         )}
 
-        {/* Existing custom flags — chips with remove. */}
+        {/* Existing custom flags — chips with remove. Handles hex colors
+            with inline styles so any custom color the admin picked
+            renders correctly. Blank labels render with no text — only
+            the dot — so admins can use a flag purely as a color tag. */}
         {flags.length > 0 && (
           <div className="cl-flag-chips">
-            {flags.map(f => (
-              <span key={f.id} className={`cl-flag-chip ${f.color}`}>
-                <span className={`cl-circle ${f.color}`}/>
-                <span className="cl-flag-chip-label">{f.label || (f.color === "red" ? "Red flag" : "Yellow flag")}</span>
-                <button
-                  type="button"
-                  className="cl-flag-chip-x"
-                  onClick={() => handleRemoveFlag(f.id)}
-                  title="Remove flag"
-                >×</button>
-              </span>
-            ))}
+            {flags.map(f => {
+              const isHex = isHexColor(f.color);
+              const presetClass = !isHex ? f.color : "custom";
+              const chipStyle: React.CSSProperties = isHex
+                ? { background: `${f.color}1a`, borderColor: `${f.color}66`, color: f.color }
+                : {};
+              const dotStyle: React.CSSProperties | undefined = isHex
+                ? { background: f.color, borderColor: f.color }
+                : undefined;
+              return (
+                <span key={f.id} className={`cl-flag-chip ${presetClass}`} style={chipStyle}>
+                  <span className={`cl-circle ${presetClass}`} style={dotStyle}/>
+                  {f.label && <span className="cl-flag-chip-label">{f.label}</span>}
+                  <button
+                    type="button"
+                    className="cl-flag-chip-x"
+                    onClick={() => handleRemoveFlag(f.id)}
+                    title="Remove flag"
+                  >×</button>
+                </span>
+              );
+            })}
           </div>
         )}
 
