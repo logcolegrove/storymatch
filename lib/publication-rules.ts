@@ -61,10 +61,13 @@ function isExpired(asset: AssetRuleInput, org: OrgRulesContext): boolean {
 }
 
 // Approval-status keys we honor as publication rules. Other approval
-// values (e.g. "needs_edits", "pending", "unset") will not auto-flip
-// visibility even if they have orphaned data in publication_rules.
+// values (currently only "approval_unset" / "approval_approved") will
+// not auto-flip visibility — they're not exposed as triggers in the UI
+// and any orphaned data with those keys is ignored.
 const ALLOWED_APPROVAL_RULE_KEYS = new Set([
   "approval_denied",
+  "approval_pending",
+  "approval_needs_edits",
 ]);
 
 // Returns the rule key that should be firing, if any. Order of precedence:

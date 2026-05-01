@@ -343,6 +343,31 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    canvas. */
 .rule-then{font-size:11px;color:var(--t3);font-weight:600;letter-spacing:.4px;text-transform:uppercase;padding:2px 0;}
 
+/* Branch — one trigger→action pair inside a multi-branch rule card.
+   Wraps the WHEN + THEN sentences so multiple branches stack cleanly
+   with their own internal grouping (vs. one long flat list). */
+.rule-branch{display:flex;flex-direction:column;gap:8px;}
+
+/* "AND" divider between branches — a thin centered horizontal line
+   with the word AND in the middle. Communicates "additional condition"
+   without weight. */
+.rule-and{display:flex;align-items:center;gap:10px;color:var(--t4);font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;margin:4px 0;}
+.rule-and::before,.rule-and::after{content:"";flex:1;height:1px;background:var(--border);}
+
+/* Per-branch remove button — small × that appears only when more than
+   one branch exists (admin can't remove the last branch via this; they
+   use the card's on/off toggle to clear everything). */
+.rule-branch-remove{background:none;border:none;color:var(--t4);cursor:pointer;font-size:18px;line-height:1;padding:0 4px;border-radius:4px;width:24px;height:24px;display:grid;place-items:center;}
+.rule-branch-remove:hover{background:var(--bg2);color:var(--t1);}
+
+/* "+ Add condition" button — quietly invites stacking another branch.
+   Subdued styling so it doesn't compete with the active sentences;
+   admin doesn't need to think about it unless they want it. */
+.rule-add-condition{display:inline-flex;align-items:center;gap:6px;background:none;border:1px dashed var(--border2);color:var(--t3);padding:7px 12px;border-radius:8px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;align-self:flex-start;margin-top:4px;transition:all .12s;}
+.rule-add-condition:hover{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
+.rule-add-plus{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:50%;background:currentColor;color:#fff;font-size:13px;font-weight:700;line-height:1;}
+.rule-add-condition:hover .rule-add-plus{background:var(--accent);}
+
 /* Shared inline controls — reused by Default rows + rule sentences. */
 .rules-select{font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t1);width:100%;cursor:pointer;}
 .rules-select:focus{outline:none;border-color:var(--accent);}
@@ -2038,7 +2063,7 @@ interface ClearedReason {
 // a change that gets immediately reversed. Must stay in sync with the
 // server's rule-firing logic — the allowed-key set + isExpired math are
 // duplicated intentionally to avoid a network round-trip.
-const FE_ALLOWED_APPROVAL_RULE_KEYS = new Set(["approval_denied"]);
+const FE_ALLOWED_APPROVAL_RULE_KEYS = new Set(["approval_denied", "approval_pending", "approval_needs_edits"]);
 
 function isAssetExpiredFE(asset: Asset, org: OrgSettings): boolean {
   // Active per-asset exception suppresses the org rule.
@@ -3503,9 +3528,9 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
     if (settings.freshnessWarnBeforeDate) return "specific";
     if (settings.freshnessWarnAfterMonths !== null) {
       const preset = EXPIRATION_PRESETS.find(p => p.months === settings.freshnessWarnAfterMonths);
-      return preset ? preset.value : "1y";
+      return preset ? preset.value : "3y";
     }
-    return "1y";
+    return "3y";
   };
   const [expValue, setExpValue] = useState<string>(deriveExpValue());
   const [specificDate, setSpecificDate] = useState<string>(settings.freshnessWarnBeforeDate || "");
@@ -3515,18 +3540,24 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.freshnessWarnAfterMonths, settings.freshnessWarnBeforeDate]);
 
-  const expAction = (settings.publicationRules["expiration"]?.action ?? "draft") as "draft" | "archive";
+  // Action can be "draft" (Make private), "archive" (Archive), or "none"
+  // (Nothing — flag-only mode). Flag-only keeps the threshold so the
+  // freshness signal still flags the asset; it just skips auto-action.
+  const expAction = (settings.publicationRules["expiration"]?.action ?? "archive") as "none" | "draft" | "archive";
 
-  // Toggling the rule on/off is a single onSave that flips multiple fields:
-  // threshold (months/date) AND the publication action. Off = no threshold +
-  // action "none"; on = restore default 1-year threshold + draft action.
+  // Toggling the rule on/off flips multiple fields in one save: threshold
+  // (months/date) AND the publication action. Off = no threshold + action
+  // "none" (no flagging at all). On = default 3-year threshold + Archive.
+  // Flag-only is a third state reachable via the action dropdown — keeps
+  // the threshold but sets action to "none" so isExpired still returns
+  // true and the cleared signal fires the yellow indicator.
   const setExpirationEnabled = (on: boolean) => {
     if (on) {
       const existing = settings.publicationRules["expiration"];
-      const nextAction = existing && existing.action !== "none" ? existing.action : "draft";
+      const nextAction = existing && existing.action !== "none" ? existing.action : "archive";
       onSave({
         ...settings,
-        freshnessWarnAfterMonths: 12,
+        freshnessWarnAfterMonths: 36,
         freshnessWarnBeforeDate: null,
         publicationRules: {
           ...settings.publicationRules,
@@ -3567,7 +3598,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
     }
   };
 
-  const setExpirationAction = (action: "draft" | "archive") => {
+  const setExpirationAction = (action: "none" | "draft" | "archive") => {
     onSave({
       ...settings,
       publicationRules: {
@@ -3577,31 +3608,100 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
     });
   };
 
-  // ── Approval-denied card state ────────────────────────────────────
-  const denialAction = (settings.publicationRules["approval_denied"]?.action ?? "none") as "none" | "draft" | "archive";
-  const denialOn = denialAction !== "none";
+  // ── Visibility card state ─────────────────────────────────────────
+  // The Visibility card holds N branches, one per approval status that
+  // has a configured visibility action. Admins can add up to one branch
+  // per status via the "+ Add condition" affordance, change which
+  // approval status a branch fires on, and remove individual branches.
+  // The card's on/off toggle is implicit: any branch with action !==
+  // "none" → on. Toggling off clears every branch's action to "none";
+  // toggling on creates a default approval_denied → archive branch.
+  const VISIBILITY_APPROVAL_STATUSES: { value: string; label: string }[] = [
+    { value: "denied", label: "Denied" },
+    { value: "pending", label: "Pending" },
+    { value: "needs_edits", label: "Needs edits" },
+  ];
 
-  const setDenialEnabled = (on: boolean) => {
+  const visibilityBranches = VISIBILITY_APPROVAL_STATUSES
+    .map(s => ({
+      approval: s.value,
+      action: (settings.publicationRules[`approval_${s.value}`]?.action ?? "none") as "none" | "draft" | "archive",
+    }))
+    .filter(b => b.action !== "none");
+
+  const visibilityOn = visibilityBranches.length > 0;
+  const canAddBranch = visibilityBranches.length < VISIBILITY_APPROVAL_STATUSES.length;
+
+  const setVisibilityEnabled = (on: boolean) => {
+    const nextRules = { ...settings.publicationRules };
+    if (on) {
+      if (!visibilityOn) {
+        nextRules["approval_denied"] = { action: "archive", auto_revert: true };
+      }
+    } else {
+      for (const s of VISIBILITY_APPROVAL_STATUSES) {
+        nextRules[`approval_${s.value}`] = { action: "none", auto_revert: true };
+      }
+    }
+    onSave({ ...settings, publicationRules: nextRules });
+  };
+
+  // Move a branch from one approval status to another. Carries the
+  // current action over so admin doesn't lose it on a swap.
+  const setBranchApproval = (oldApproval: string, newApproval: string) => {
+    if (oldApproval === newApproval) return;
+    const oldKey = `approval_${oldApproval}`;
+    const newKey = `approval_${newApproval}`;
+    const carryAction = settings.publicationRules[oldKey]?.action ?? "archive";
     onSave({
       ...settings,
       publicationRules: {
         ...settings.publicationRules,
-        approval_denied: {
-          action: on ? (denialAction === "none" ? "draft" : denialAction) : "none",
-          auto_revert: true,
-        },
+        [oldKey]: { action: "none", auto_revert: true },
+        [newKey]: { action: carryAction, auto_revert: true },
       },
     });
   };
 
-  const setDenialAction = (action: "draft" | "archive") => {
+  const setBranchAction = (approval: string, action: "draft" | "archive") => {
     onSave({
       ...settings,
       publicationRules: {
         ...settings.publicationRules,
-        approval_denied: { action, auto_revert: true },
+        [`approval_${approval}`]: { action, auto_revert: true },
       },
     });
+  };
+
+  const addVisibilityBranch = () => {
+    const used = new Set(visibilityBranches.map(b => b.approval));
+    const next = VISIBILITY_APPROVAL_STATUSES.find(s => !used.has(s.value));
+    if (!next) return;
+    onSave({
+      ...settings,
+      publicationRules: {
+        ...settings.publicationRules,
+        [`approval_${next.value}`]: { action: "archive", auto_revert: true },
+      },
+    });
+  };
+
+  const removeVisibilityBranch = (approval: string) => {
+    onSave({
+      ...settings,
+      publicationRules: {
+        ...settings.publicationRules,
+        [`approval_${approval}`]: { action: "none", auto_revert: true },
+      },
+    });
+  };
+
+  // Available approval statuses for a branch's dropdown: its own current
+  // value plus any unused status. Prevents two branches from binding to
+  // the same approval status.
+  const availableApprovalsFor = (currentApproval: string): { value: string; label: string }[] => {
+    const used = new Set(visibilityBranches.map(b => b.approval));
+    return VISIBILITY_APPROVAL_STATUSES.filter(s => s.value === currentApproval || !used.has(s.value));
   };
 
   return (
@@ -3634,7 +3734,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
           onToggle={setExpirationEnabled}
         >
           <div className="rule-sentence">
-            <span>When a story is</span>
+            <span>Flag when a story is</span>
             <select
               className="rules-select rule-inline-select"
               value={expValue}
@@ -3663,34 +3763,76 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
             <select
               className="rules-select rule-inline-select"
               value={expAction}
-              onChange={(e) => setExpirationAction(e.target.value as "draft" | "archive")}
+              onChange={(e) => setExpirationAction(e.target.value as "none" | "draft" | "archive")}
             >
-              <option value="draft">Make private</option>
               <option value="archive">Archive</option>
+              <option value="draft">Make private</option>
+              <option value="none">Nothing (flag only)</option>
             </select>
           </div>
         </RuleCard>
 
         <RuleCard
-          icon={<XMarkIcon/>}
-          title="Approval denied"
-          enabled={denialOn}
-          onToggle={setDenialEnabled}
+          icon={<EyeIcon/>}
+          title="Visibility"
+          enabled={visibilityOn}
+          onToggle={setVisibilityEnabled}
         >
-          <div className="rule-sentence">
-            <span>When approval is set to <strong>Denied</strong></span>
-          </div>
-          <div className="rule-then">↓ then</div>
-          <div className="rule-sentence">
-            <select
-              className="rules-select rule-inline-select"
-              value={denialAction === "none" ? "draft" : denialAction}
-              onChange={(e) => setDenialAction(e.target.value as "draft" | "archive")}
+          {/* Render configured branches separated by AND dividers. The
+              first branch defaults to Denied → Archive; admins can swap
+              the trigger via the inline approval-status dropdown. */}
+          {visibilityBranches.map((b, i) => (
+            <React.Fragment key={b.approval}>
+              {i > 0 && <div className="rule-and">AND</div>}
+              <div className="rule-branch">
+                <div className="rule-sentence">
+                  <span>When approval is set to</span>
+                  <select
+                    className="rules-select rule-inline-select"
+                    value={b.approval}
+                    onChange={(e) => setBranchApproval(b.approval, e.target.value)}
+                  >
+                    {availableApprovalsFor(b.approval).map(s => (
+                      <option key={s.value} value={s.value}>{s.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="rule-then">↓ then</div>
+                <div className="rule-sentence">
+                  <select
+                    className="rules-select rule-inline-select"
+                    value={b.action === "none" ? "archive" : b.action}
+                    onChange={(e) => setBranchAction(b.approval, e.target.value as "draft" | "archive")}
+                  >
+                    <option value="archive">Archive</option>
+                    <option value="draft">Make private</option>
+                  </select>
+                  {visibilityBranches.length > 1 && (
+                    <button
+                      type="button"
+                      className="rule-branch-remove"
+                      onClick={() => removeVisibilityBranch(b.approval)}
+                      title="Remove this condition"
+                      aria-label="Remove condition"
+                    >×</button>
+                  )}
+                </div>
+              </div>
+            </React.Fragment>
+          ))}
+          {/* "+ Add condition" — quietly invites stacking another approval
+              status without screaming for attention. Hidden when every
+              status already has a branch. */}
+          {canAddBranch && (
+            <button
+              type="button"
+              className="rule-add-condition"
+              onClick={addVisibilityBranch}
             >
-              <option value="draft">Make private</option>
-              <option value="archive">Archive</option>
-            </select>
-          </div>
+              <span className="rule-add-plus">+</span>
+              <span>Add condition</span>
+            </button>
+          )}
         </RuleCard>
       </div>
     </div>
@@ -3750,6 +3892,17 @@ function XMarkIcon() {
       <circle cx="12" cy="12" r="9"/>
       <path d="M9 9l6 6"/>
       <path d="M15 9l-6 6"/>
+    </svg>
+  );
+}
+
+// Eye icon for the Visibility rule card. The visibility concept already
+// uses pill colors elsewhere, so this is the icon that ties them together.
+function EyeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>
+      <circle cx="12" cy="12" r="3"/>
     </svg>
   );
 }
