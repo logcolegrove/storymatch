@@ -3673,6 +3673,12 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
     });
   };
 
+  // Default action per approval status. Denied is the strongest signal —
+  // archive feels right. Pending and Needs edits are softer signals where
+  // making private (still recoverable) reads more proportional.
+  const defaultActionForApproval = (approval: string): "draft" | "archive" =>
+    approval === "denied" ? "archive" : "draft";
+
   const addVisibilityBranch = () => {
     const used = new Set(visibilityBranches.map(b => b.approval));
     const next = VISIBILITY_APPROVAL_STATUSES.find(s => !used.has(s.value));
@@ -3681,7 +3687,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
       ...settings,
       publicationRules: {
         ...settings.publicationRules,
-        [`approval_${next.value}`]: { action: "archive", auto_revert: true },
+        [`approval_${next.value}`]: { action: defaultActionForApproval(next.value), auto_revert: true },
       },
     });
   };
@@ -3734,7 +3740,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
           onToggle={setExpirationEnabled}
         >
           <div className="rule-sentence">
-            <span>Flag when a story is</span>
+            <span>When asset is</span>
             <select
               className="rules-select rule-inline-select"
               value={expValue}
@@ -3760,6 +3766,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
           </div>
           <div className="rule-then">↓ then</div>
           <div className="rule-sentence">
+            <span>Auto-flag and</span>
             <select
               className="rules-select rule-inline-select"
               value={expAction}
@@ -3767,7 +3774,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
             >
               <option value="archive">Archive</option>
               <option value="draft">Make private</option>
-              <option value="none">Nothing (flag only)</option>
+              <option value="none">Nothing else</option>
             </select>
           </div>
         </RuleCard>
@@ -3799,6 +3806,7 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
                 </div>
                 <div className="rule-then">↓ then</div>
                 <div className="rule-sentence">
+                  <span>Auto-flag and</span>
                   <select
                     className="rules-select rule-inline-select"
                     value={b.action === "none" ? "archive" : b.action}
