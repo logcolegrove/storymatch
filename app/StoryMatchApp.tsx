@@ -6111,6 +6111,7 @@ export default function App(){
           onDelete={(id)=>{deleteAssetInline(id);setEditingAssetId(null);}}
           onPreview={(id)=>{const a=assets.find(x=>x.id===id);if(a){setEditingAssetId(null);openAsset(a);}}}
           onClose={()=>setEditingAssetId(null)}
+          authHeaders={authHeaders}
         />
         {visOverride && (
           <VisibilityOverrideModal
