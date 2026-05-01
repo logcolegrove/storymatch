@@ -896,6 +896,16 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Custom-color circle used in chips/dots where the color comes from a
    hex value. Sized identically to preset circles. */
 .cl-circle.custom{background:transparent;border:1px solid currentColor;}
+
+/* "Reuse a previous tag" row — appears inside Add custom status forms
+   below the color picker. Each chip is a button; click populates the
+   form's color + label so admin can reuse a consistent tag without
+   re-picking the color or retyping the label. */
+.known-tags-row{display:flex;flex-direction:column;gap:6px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);}
+.known-tags-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);font-weight:700;}
+.known-tags-chips{display:flex;flex-wrap:wrap;gap:6px;}
+.known-tag-chip{font-family:var(--font);cursor:pointer;}
+.known-tag-chip:hover{filter:brightness(0.97);}
 .cf-form-actions{display:flex;gap:6px;}
 .cl-cf-add{margin-top:6px;}
 .cl-textarea{min-height:64px;resize:vertical;font-family:var(--font);}
@@ -908,6 +918,12 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Empty Cleared state — no admin engagement yet */
 .cl-trigger.unset{background:transparent;border-color:transparent;color:var(--t4);padding:4px 8px;}
 .cl-trigger.unset:hover{background:var(--bg2);color:var(--t2);}
+/* Collapsed — when the row has only custom tags and no real cleared
+   signals. The trigger renders empty + zero-size so the chip strip
+   reads as the only visual on the row. The DOM element stays for
+   popover anchoring. */
+.cl-trigger.collapsed{padding:0;width:0;height:0;border:none;overflow:hidden;}
+.cl-trigger.collapsed:hover{background:transparent;}
 .cl-trigger-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;}
 
 /* ── MULTI-SELECT (checkboxes + bulk action bar) ── */
@@ -1162,6 +1178,7 @@ interface CardProps {
     onSetFreshnessException: (a: Asset, untilIso: string | null) => void;
     onSetCustomFlags: (a: Asset, flags: CustomFlag[]) => void;
     onResetStatusIndicators: (a: Asset) => void;
+    knownCustomTags?: { color: string; label: string }[];
   };
 }
 
@@ -1287,6 +1304,7 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           onSetApproval={cleared.onSetApproval}
           onMarkVerified={cleared.onMarkVerified}
           anchor={dotRef.current}
+          knownCustomTags={cleared.knownCustomTags}
         />
       )}
     </div>
@@ -1504,7 +1522,7 @@ function FlagChips({
         const isHex = isHexColor(f.color);
         const presetClass = !isHex ? f.color : "custom";
         const styleProps: React.CSSProperties = isHex
-          ? { background: `${f.color}1a`, borderColor: `${f.color}66`, color: f.color }
+          ? { background: `${f.color}1a`, borderColor: `${f.color}66`, color: "#1f2937" }
           : {};
         return (
           <span
@@ -1521,6 +1539,57 @@ function FlagChips({
           </span>
         );
       })}
+    </div>
+  );
+}
+
+// Reusable row of "previously-used custom tags" rendered below the
+// FlagColorPicker in any Add custom status form. Clicking a chip
+// populates the parent's color + label state. Hidden when there's
+// nothing to suggest. Lets admins maintain consistency in their custom
+// taxonomies without re-picking color or re-typing label every time.
+interface KnownTagsRowProps {
+  tags: { color: string; label: string }[];
+  // Skip tags whose (color, label) combo is already in this list — used
+  // by the per-asset popover to hide tags the asset already has applied
+  // (they'd be no-ops to re-apply).
+  excludeKeys?: Set<string>;
+  onPick: (tag: { color: string; label: string }) => void;
+}
+function KnownTagsRow({ tags, excludeKeys, onPick }: KnownTagsRowProps) {
+  const filtered = tags.filter(t => {
+    const k = `${t.color}|${t.label}`;
+    return !excludeKeys || !excludeKeys.has(k);
+  });
+  if (filtered.length === 0) return null;
+  return (
+    <div className="known-tags-row">
+      <div className="known-tags-label">Reuse a previous tag</div>
+      <div className="known-tags-chips">
+        {filtered.map(t => {
+          const isHex = isHexColor(t.color);
+          const presetClass = !isHex ? t.color : "custom";
+          const chipStyle: React.CSSProperties = isHex
+            ? { background: `${t.color}1a`, borderColor: `${t.color}66`, color: "#1f2937" }
+            : {};
+          const dotStyle: React.CSSProperties | undefined = isHex
+            ? { background: t.color, borderColor: t.color }
+            : undefined;
+          return (
+            <button
+              key={`${t.color}|${t.label}`}
+              type="button"
+              className={`known-tag-chip cl-flag-chip ${presetClass}`}
+              style={chipStyle}
+              onClick={() => onPick(t)}
+              title={`Reuse: ${t.label || (presetClass === "red" ? "Red" : presetClass === "yellow" ? "Yellow" : presetClass === "green" ? "Green" : "Custom")}`}
+            >
+              <span className={`cl-circle ${presetClass}`} style={dotStyle}/>
+              {t.label && <span className="cl-flag-chip-label">{t.label}</span>}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1594,8 +1663,11 @@ interface BulkBarProps {
   onDelete: () => void;
   onClear: () => void;
   onApplyStatus: (patch: BulkStatusPatch) => void | Promise<void>;
+  // Distinct (color, label) tags previously used across the org's assets,
+  // surfaced inside the bulk Set status modal as quick-pick chips.
+  knownCustomTags?: { color: string; label: string }[];
 }
-function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear, onApplyStatus }: BulkBarProps) {
+function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear, onApplyStatus, knownCustomTags }: BulkBarProps) {
   const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   // Wire the dedicated visibility modal back through onPublish/onDraft/onArchive
@@ -1634,6 +1706,7 @@ function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelet
             await onApplyStatus(patch);
             setStatusOpen(false);
           }}
+          knownCustomTags={knownCustomTags}
         />
       )}
     </>
@@ -1775,8 +1848,9 @@ interface BulkStatusModalProps {
   count: number;
   onClose: () => void;
   onApply: (patch: BulkStatusPatch) => void | Promise<void>;
+  knownCustomTags?: { color: string; label: string }[];
 }
-function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
+function BulkStatusModal({ count, onClose, onApply, knownCustomTags }: BulkStatusModalProps) {
   // Each field: "" means leave unchanged. Specific value = apply.
   // Visibility lives in its own dedicated modal (BulkVisibilityModal) — this
   // one is purely for the cleared/approval indicator controls.
@@ -1901,6 +1975,10 @@ function BulkStatusModal({ count, onClose, onApply }: BulkStatusModalProps) {
                     value={flagLabel}
                     onChange={(e) => setFlagLabel(e.target.value)}
                   />
+                  <KnownTagsRow
+                    tags={knownCustomTags || []}
+                    onPick={(t) => { setFlagColor(t.color); setFlagLabel(t.label); }}
+                  />
                 </div>
               )}
             </div>
@@ -1934,6 +2012,9 @@ interface ListViewProps {
   onCopyShareLink: (a: Asset) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
   orgSettings: OrgSettings;
+  // Distinct (color, label) tags used elsewhere in the org — surfaced in
+  // the per-row Add custom status form for quick reuse.
+  knownCustomTags?: { color: string; label: string }[];
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -2287,6 +2368,10 @@ interface ClearedPopoverProps {
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
+  // Org-wide previously-used custom tags — surfaced in the Add custom
+  // status form for quick reuse. Optional; absent or empty means just
+  // show Yellow/Red/Green/Other in the picker.
+  knownCustomTags?: { color: string; label: string }[];
 }
 
 interface ClearedPopoverPropsFull extends ClearedPopoverProps {
@@ -2314,8 +2399,9 @@ interface ClearedCellProps {
   onSetClientStatus: (a: Asset, next: "current" | "former" | "unknown") => void;
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
+  knownCustomTags?: { color: string; label: string }[];
 }
-function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified }: ClearedCellProps) {
+function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified, knownCustomTags }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
 
   // Visible inline text next to the dot — just the joined reasons (no
@@ -2337,16 +2423,23 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
     : joined;
 
   const title = clearedTooltip(cleared.level, cleared.reasons);
+  // When the cleared signal has nothing to say (level === unset) but the
+  // asset has custom tags, suppress the empty hollow circle so the row
+  // isn't cluttered. The trigger element still renders (zero-sized) so
+  // it can anchor the popover; clicks come from the chip strip in this
+  // case.
+  const hasCustomTagsOnAsset = Array.isArray(asset.customFlags) && asset.customFlags.length > 0;
+  const triggerCollapsed = cleared.level === "unset" && hasCustomTagsOnAsset;
 
   return (
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
       <div
         ref={triggerRef}
-        className={`cl-trigger${open ? " open" : ""}${cleared.level !== "unset" ? " " + cleared.level : " unset"}`}
+        className={`cl-trigger${open ? " open" : ""}${cleared.level !== "unset" ? " " + cleared.level : " unset"}${triggerCollapsed ? " collapsed" : ""}`}
         onClick={onToggle}
         title={title}
       >
-        {cleared.level === "unset" ? (
+        {triggerCollapsed ? null : cleared.level === "unset" ? (
           <span className="cl-circle cl-circle-empty"/>
         ) : cleared.level === "green" ? (
           <>
@@ -2374,13 +2467,14 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
           onSetApproval={onSetApproval}
           onMarkVerified={onMarkVerified}
           anchor={triggerRef.current}
+          knownCustomTags={knownCustomTags}
         />
       )}
     </div>
   );
 }
 
-function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified, anchor }: ClearedPopoverPropsFull) {
+function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified, anchor, knownCustomTags }: ClearedPopoverPropsFull) {
   void onMarkVerified; void reasons; void libraryFreshnessRuleActive; // legacy props, kept for API compat
   const popRef = React.useRef<HTMLDivElement>(null);
   const approvalSelectRef = React.useRef<HTMLSelectElement>(null);
@@ -2636,7 +2730,7 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
               const isHex = isHexColor(f.color);
               const presetClass = !isHex ? f.color : "custom";
               const chipStyle: React.CSSProperties = isHex
-                ? { background: `${f.color}1a`, borderColor: `${f.color}66`, color: f.color }
+                ? { background: `${f.color}1a`, borderColor: `${f.color}66`, color: "#1f2937" }
                 : {};
               const dotStyle: React.CSSProperties | undefined = isHex
                 ? { background: f.color, borderColor: f.color }
@@ -2673,6 +2767,11 @@ function ClearedPopover({ asset, reasons, onClose, libraryFreshnessRuleActive, i
               placeholder="Optional label"
               value={flagLabel}
               onChange={(e) => setFlagLabel(e.target.value)}
+            />
+            <KnownTagsRow
+              tags={knownCustomTags || []}
+              excludeKeys={new Set(flags.map(f => `${f.color}|${(f.label || "").trim()}`))}
+              onPick={(t) => { setFlagColor(t.color); setFlagLabel(t.label); }}
             />
             <div className="cl-row-actions">
               <button className="cl-mini-btn primary" onClick={handleAddFlag}>Add</button>
@@ -3124,7 +3223,7 @@ function PublicationSelectCell({
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, orgSettings }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, orgSettings, knownCustomTags }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -3204,6 +3303,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 onSetClientStatus={onSetClientStatus}
                 onSetApproval={onSetApproval}
                 onMarkVerified={onMarkVerified}
+                knownCustomTags={knownCustomTags}
               />
               <FlagChips
                 flags={(a.customFlags as CustomFlag[]) || []}
@@ -4709,6 +4809,27 @@ function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onU
 export default function App(){
   const{user,org,signOut}=useAuth();
   const[assets,setAssets]=useState<Asset[]>([]);
+  // Distinct (color, label) pairs across every asset's customFlags. Lets
+  // the Add custom status forms offer "reuse a previous tag" so admins
+  // don't have to retype/re-pick the same color and label across
+  // multiple assets — surface consistency without the friction.
+  const knownCustomTags = React.useMemo<{ color: string; label: string }[]>(() => {
+    const seen = new Map<string, { color: string; label: string }>();
+    for (const a of assets) {
+      if (!Array.isArray(a.customFlags)) continue;
+      for (const f of a.customFlags as CustomFlag[]) {
+        if (!f) continue;
+        // Key on color+label so different labels with same color don't dedupe
+        // and an unlabeled tag in some preset color (yellow/red/green) doesn't
+        // clutter the list — those are already in the picker as presets.
+        const labelTrimmed = (f.label || "").trim();
+        if (!labelTrimmed && (f.color === "yellow" || f.color === "red" || f.color === "green")) continue;
+        const key = `${f.color}|${labelTrimmed}`;
+        if (!seen.has(key)) seen.set(key, { color: f.color, label: labelTrimmed });
+      }
+    }
+    return Array.from(seen.values());
+  }, [assets]);
   const[filters,setFilters]=useState<Filters>({vertical:[],assetType:[]});
   const[openFilter,setOpenFilter]=useState<string|null>(null);
   const[search,setSearch]=useState("");
@@ -5911,6 +6032,7 @@ export default function App(){
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
                   orgSettings={orgSettings}
+                  knownCustomTags={knownCustomTags}
                 />
               ) : (
                 <div className="grid">
@@ -5951,6 +6073,7 @@ export default function App(){
                         onSetFreshnessException: setFreshnessException,
                         onSetCustomFlags: setCustomFlags,
                         onResetStatusIndicators: resetStatusIndicators,
+                        knownCustomTags,
                       };
                     })() : undefined;
                     return a.assetType==="Quote"
@@ -5975,6 +6098,7 @@ export default function App(){
             onDelete={bulkDelete}
             onClear={clearSelection}
             onApplyStatus={bulkApplyStatus}
+            knownCustomTags={knownCustomTags}
           />
         )}
         <AssetEditPanel
