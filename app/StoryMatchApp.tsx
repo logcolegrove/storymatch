@@ -129,9 +129,12 @@ function isHexColor(c: string): boolean {
   return /^#[0-9A-Fa-f]{3,8}$/.test(c);
 }
 
-// Tags whose presence on a flag drag the cleared signal toward yellow/red.
-// Green and custom (hex) colors are informational only.
-const FLAG_LEVEL_PRESETS = new Set(["yellow", "red"]);
+// Yellow and red are severity colors — they fold into the cleared trigger
+// pill rather than rendering as their own chip on the row. Green and any
+// custom hex color are informational and render as standalone chips.
+function isSeverityColor(c: string): boolean {
+  return c === "yellow" || c === "red";
+}
 
 // Org-level configuration that drives Rules behavior. Loaded once at app
 // boot via /api/org/settings and refreshed when admin saves changes in the
@@ -708,18 +711,22 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    popover when an approval status is set. Min height keeps the field
    visible enough to invite a paragraph; resizable for longer threads. */
 .cl-approval-note{min-height:64px;resize:vertical;font-size:12px;line-height:1.4;margin-top:0;}
-.cl-flag-chips{display:flex;flex-wrap:wrap;gap:6px;}
-/* Dense variant — used in row/card contexts where space is tight. */
-.cl-flag-chips.dense{gap:4px;}
-.cl-flag-chips.dense .cl-flag-chip{padding:2px 7px;font-size:10.5px;border-radius:4px;}
-.cl-flag-chips.dense .cl-flag-chip-label{max-width:120px;}
-.cl-flag-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 8px;border-radius:999px;border:1px solid var(--border);background:#f9fafb;font-size:11.5px;color:var(--t1);max-width:100%;}
-.cl-flag-chip.yellow{background:#fef9e7;border-color:#fde68a;}
-.cl-flag-chip.red{background:#fdf2f2;border-color:#f5d5d5;}
-.cl-flag-chip.green{background:#f0fdf4;border-color:#bbf7d0;}
+/* Custom flag chips — visually identical to the .cl-trigger pill so the
+   cleared trigger and any custom-status chips read as one row of pills.
+   Same border-radius (full pill), same padding, same font size, same
+   tinted backgrounds + text colors per level. The X close button only
+   renders inside the popover; at list/grid level the chip is read-only. */
+.cl-flag-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.cl-flag-chips.clickable{cursor:pointer;}
+.cl-flag-chip{display:inline-flex;align-items:center;gap:7px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);background:#f9fafb;font-size:11.5px;font-weight:600;color:var(--t1);max-width:100%;white-space:nowrap;}
+.cl-flag-chip.yellow{background:#fef9e7;border-color:#fde68a;color:#92400e;}
+.cl-flag-chip.red{background:#fdf2f2;border-color:#f5d5d5;color:#b91c1c;}
+.cl-flag-chip.green{background:#f0fdf4;border-color:#bbf7d0;color:#166534;}
 .cl-flag-chip-label{max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.cl-flag-chip-x{background:none;border:none;cursor:pointer;color:var(--t3);font-size:14px;line-height:1;padding:0 4px;}
-.cl-flag-chip-x:hover{color:var(--red);}
+/* The X close button keeps the chip slightly more padded on the right. */
+.cl-flag-chip:has(.cl-flag-chip-x){padding-right:4px;}
+.cl-flag-chip-x{background:none;border:none;cursor:pointer;color:currentColor;opacity:0.6;font-size:14px;line-height:1;padding:0 4px;border-radius:999px;}
+.cl-flag-chip-x:hover{opacity:1;}
 /* Custom-color dot rendered via inline style.color — keeps the same
    sizing/shape as preset circles. */
 .cl-circle.custom{background:transparent;}
@@ -1387,13 +1394,15 @@ interface BulkStatusPatch {
   clearAll?: boolean;
 }
 
-// Compact chip strip showing every custom flag on an asset. Used in list
-// rows and on grid cards so admins can spot per-asset organization tags
-// at-a-glance. Optional onClick makes the whole strip a click target —
-// callers wire it to the same toggle that opens the cleared popover so
-// chips behave like a second affordance for the same control.
-// Uses inline style.color/borderColor for hex flags so we don't need a
-// CSS class per color. Remove affordance lives in the popover.
+// Compact chip strip showing the asset's *informational* custom flags.
+// Yellow and red flags are intentionally excluded here — those are
+// severity flags and already show up inside the cleared trigger's
+// "Approved but [label]" text, so duplicating them as chips creates a
+// double-dot/double-label effect. Green and custom-hex flags pass
+// through. The popover keeps showing all flags for management.
+// Optional onClick makes the whole strip a click target — callers wire
+// it to the same toggle that opens the cleared popover so chips behave
+// like a second affordance for the same control.
 function FlagChips({
   flags,
   dense,
@@ -1403,14 +1412,16 @@ function FlagChips({
   dense?: boolean;
   onClick?: (e: React.MouseEvent) => void;
 }) {
-  if (!flags || flags.length === 0) return null;
+  // Filter out severity flags — they live in the cleared trigger.
+  const visible = (flags || []).filter(f => f && !isSeverityColor(f.color));
+  if (visible.length === 0) return null;
   return (
     <div
       className={`cl-flag-chips${dense ? " dense" : ""}${onClick ? " clickable" : ""}`}
       onClick={onClick}
       role={onClick ? "button" : undefined}
     >
-      {flags.map(f => {
+      {visible.map(f => {
         const isHex = isHexColor(f.color);
         const presetClass = !isHex ? f.color : "custom";
         const styleProps: React.CSSProperties = isHex
@@ -2131,15 +2142,17 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
     }
   }
 
-  // Custom flags — only yellow/red presets contribute to the cleared
-  // aggregate. Green and custom-color (hex) flags are informational and
-  // don't drag the cleared signal — they show as chips on the row but
-  // leave the dot color alone. This lets admins use custom-color flags
-  // freely as personal organization tags without nagging users.
+  // Custom flags split by purpose:
+  //   • Yellow/red (severity) → fold into the cleared signal so they
+  //     show up in the trigger pill text ("Approved but [label]").
+  //     Their chips are suppressed at list/grid level to avoid a double
+  //     indicator (the trigger already conveys the dot + label).
+  //   • Green and custom hex (informational) → don't affect the cleared
+  //     signal. Render as standalone chips.
+  // The popover always shows all custom flags as chips for management.
   const customFlags = Array.isArray(asset.customFlags) ? asset.customFlags : [];
   for (const f of customFlags) {
-    if (!f) continue;
-    if (!FLAG_LEVEL_PRESETS.has(f.color)) continue;
+    if (!f || !isSeverityColor(f.color)) continue;
     const text = f.label || "Custom flag";
     reasons.push({
       signal: "custom",
@@ -2229,11 +2242,11 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
   // Visible inline text next to the dot — just the joined reasons (no
   // "Flagged for review:" prefix, since the dot color already conveys severity).
   // Prefixes with "Approved but…" when approval is positive so admins
-  // understand the asset is approved AND has a separate concern.
-  // Excludes custom flags — those already render as chips next to/below
-  // the trigger, so duplicating their label here would look redundant.
+  // understand the asset is approved AND has a separate concern. Custom
+  // yellow/red flags are included here (and suppressed from the row-level
+  // chip strip) so each flag shows up exactly once.
   const flaggedReasons = cleared.reasons
-    .filter(r => r.level === cleared.level && (r.level === "yellow" || r.level === "red") && r.signal !== "custom")
+    .filter(r => r.level === cleared.level && (r.level === "yellow" || r.level === "red"))
     .map(r => r.shortLabel || r.label);
   const isApproved = cleared.reasons.some(r => r.signal === "approval" && r.level === "green" && !r.hideDot);
   const joined = flaggedReasons.length === 0 ? ""
