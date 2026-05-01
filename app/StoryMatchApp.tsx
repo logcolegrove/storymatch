@@ -110,6 +110,10 @@ interface Asset {
   // don't fit approval/client/freshness (e.g. "comments must be disabled,"
   // "logo update pending"). Each contributes to the cleared signal.
   customFlags?: CustomFlag[];
+  // Additional pull quotes beyond the primary `pullQuote`. Order matters
+  // — display in the order the array gives. Empty/missing means only the
+  // primary quote (if any) is used.
+  additionalQuotes?: string[];
 }
 
 interface CustomFlag {

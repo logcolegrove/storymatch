@@ -81,6 +81,10 @@ type AssetDB = {
   // Per-asset custom flags — admin-defined arbitrary review flags.
   // Each entry: { id, label, color, note, setByEmail, setAt }
   custom_flags: unknown;
+  // Additional pull quotes — primary quote stays in pull_quote (singular)
+  // for backward compat. This array holds the rest, in display order.
+  // Empty array = no additional quotes; only the primary is used.
+  additional_quotes: unknown;
   // Stamp tracking which org rule (if any) auto-set the current status.
   // Cleared on manual edits. Used by the rule engine to know when to
   // auto-restore a rule-drafted asset back to published.
@@ -133,6 +137,8 @@ type AssetFE = {
   // Custom flags — round-tripped as-is (clients send the full array on each
   // edit). Each entry: { id, label, color, note, setByEmail, setAt }.
   customFlags?: unknown;
+  // Additional quotes beyond the primary pullQuote. Array of strings.
+  additionalQuotes?: string[];
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -173,6 +179,7 @@ function dbToFe(r: AssetDB): AssetFE {
     freshnessExceptionSetByEmail: r.freshness_exception_set_by_email,
     freshnessExceptionSetAt: r.freshness_exception_set_at,
     customFlags: Array.isArray(r.custom_flags) ? r.custom_flags : [],
+    additionalQuotes: Array.isArray(r.additional_quotes) ? (r.additional_quotes as string[]) : [],
   };
 }
 
@@ -224,6 +231,9 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUser
   // doesn't validate structure beyond it being an array (client-side
   // shape enforcement is enough for this admin-only feature).
   if (a.customFlags !== undefined) o.custom_flags = a.customFlags;
+  // Additional quotes — array of strings beyond the primary pull_quote.
+  // Pass through; client-side validates that entries are strings.
+  if (a.additionalQuotes !== undefined) o.additional_quotes = a.additionalQuotes;
   // Per-asset freshness exception. When the FE writes a value (set or clear),
   // server stamps set_by_email + set_at from the auth context — clients
   // never set those directly, so we ignore any FE-supplied values.
