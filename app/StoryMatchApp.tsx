@@ -5178,7 +5178,8 @@ export default function App(){
       setToast("Save failed");
     }
     setTimeout(()=>setToast(null),1500);
-    setEditingAssetId(null);
+    // The AssetEditPanel handles its own close (saveAndClose). Don't
+    // force-close here or the panel disappears mid-edit on every save.
   };
 
   // Soft-delete an asset by flipping status to "deleted". Used by per-row

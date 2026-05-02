@@ -308,6 +308,23 @@ async function fetchSingleVideo(videoUrl: string, accessToken: string): Promise<
   }
 }
 
+// Single-asset transcript refresh. Used by the per-asset "Refresh
+// timestamps" affordance in the AssetEditPanel transcript modal.
+// Returns { plain, segments } or null if the org has no Vimeo
+// connection / the video can't be resolved. Callers persist the
+// result themselves so we don't need to know what asset row we're
+// updating from inside this lib.
+export async function fetchTranscriptForVideoUrl(
+  orgId: string,
+  videoUrl: string,
+): Promise<TranscriptResult | null> {
+  const videoId = extractVimeoVideoId(videoUrl);
+  if (!videoId) return null;
+  const token = await getVimeoTokenForOrg(orgId);
+  if (!token) return null;
+  return await fetchTranscript(videoId, token);
+}
+
 // ── Org's Vimeo connection lookup ──────────────────────────────────────
 async function getVimeoTokenForOrg(orgId: string): Promise<string | null> {
   // Find any admin in this org that has a connected Vimeo account.

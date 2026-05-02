@@ -118,9 +118,24 @@ interface TranscriptExpandProps {
   onChange: (next: string) => void;
   onAddQuote: (text: string) => void;
   onClose: () => void;
+  // Triggers a server fetch of the asset's transcript + segments from
+  // its source video. Only useful when segments is empty (e.g. asset
+  // imported before segment capture shipped). Modal calls this and
+  // expects the parent to pump the fresh transcript+segments back in
+  // via the transcript/segments props.
+  onRefreshTimestamps?: () => Promise<void> | void;
 }
-function TranscriptExpandModal({ transcript, segments, headline, videoUrl, onChange, onAddQuote, onClose }: TranscriptExpandProps) {
+function TranscriptExpandModal({ transcript, segments, headline, videoUrl, onChange, onAddQuote, onClose, onRefreshTimestamps }: TranscriptExpandProps) {
   const [mode, setMode] = useState<"read" | "edit">(segments.length > 0 ? "read" : "edit");
+  // Refresh-timestamps button state. Pending while the fetch is in
+  // flight; error message stays in the head until next click.
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState("");
+  // Whenever the parent feeds in new segments (post-refresh), flip the
+  // mode to "read" so the admin sees the timestamped view immediately.
+  useEffect(() => {
+    if (segments.length > 0) setMode("read");
+  }, [segments.length]);
   // Vimeo player state — embed iframe + load player.js, then listen for
   // timeupdate to highlight the current segment. Click a segment to seek.
   const vimeoId = videoUrl ? extractVimeoId(videoUrl) : null;
@@ -315,6 +330,35 @@ function TranscriptExpandModal({ transcript, segments, headline, videoUrl, onCha
                 >Edit</button>
               </div>
             )}
+            {/* Refresh-timestamps — visible whenever there's a video
+                URL and a refresh handler. Useful for backfilling
+                segments on assets imported before VTT capture shipped. */}
+            {videoUrl && onRefreshTimestamps && (
+              <button
+                type="button"
+                className="aep-tx-modal-btn"
+                onClick={async () => {
+                  if (refreshing) return;
+                  setRefreshError("");
+                  setRefreshing(true);
+                  try {
+                    await onRefreshTimestamps();
+                  } catch (e) {
+                    setRefreshError(e instanceof Error ? e.message : "Refresh failed");
+                  } finally {
+                    setRefreshing(false);
+                  }
+                }}
+                disabled={refreshing}
+                title={segments.length > 0 ? "Re-fetch transcript and timestamps from source" : "Fetch timestamps from the source video"}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={refreshing ? { animation: "aepSpin .8s linear infinite" } : undefined}>
+                  <path d="M21 12a9 9 0 1 1-3-6.7"/>
+                  <polyline points="21 4 21 12 13 12"/>
+                </svg>
+                <span>{refreshing ? "Refreshing…" : (segments.length > 0 ? "Refresh timestamps" : "Get timestamps")}</span>
+              </button>
+            )}
             <button type="button" className="aep-tx-modal-btn" onClick={downloadAsTxt} title="Download as plain text (.txt)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -345,6 +389,33 @@ function TranscriptExpandModal({ transcript, segments, headline, videoUrl, onCha
             <div className="aep-tx-segments" ref={segmentsRef}>
               {segments.map((seg, i) => {
                 const active = i === activeSegmentIdx;
+                // Word-level karaoke for the active segment while video
+                // is playing. VTT cues are phrase-level, so we estimate
+                // each word's start by splitting the segment's window
+                // (startSeconds → next segment's startSeconds) evenly
+                // across the word count. Imperfect but feels right.
+                const renderText = () => {
+                  if (!active || !showVideo) return seg.text;
+                  const segEnd = i + 1 < segments.length
+                    ? segments[i + 1].startSeconds
+                    : seg.startSeconds + Math.max(1, seg.text.split(/\s+/).length * 0.35);
+                  // Tokenise so spaces stay in the rendered output but
+                  // only non-blank tokens consume timing slots.
+                  const tokens = seg.text.split(/(\s+)/);
+                  const wordTokens = tokens.filter(t => t.trim().length > 0);
+                  const perWord = (segEnd - seg.startSeconds) / Math.max(wordTokens.length, 1);
+                  let wordIdx = 0;
+                  return tokens.map((tok, j) => {
+                    if (!tok.trim()) return <span key={j}>{tok}</span>;
+                    const wStart = seg.startSeconds + wordIdx * perWord;
+                    const wEnd = wStart + perWord;
+                    let cls = "aep-tx-word";
+                    if (videoTime >= wEnd) cls += " past";
+                    else if (videoTime >= wStart) cls += " current";
+                    wordIdx++;
+                    return <span key={j} className={cls}>{tok}</span>;
+                  });
+                };
                 return (
                   <div
                     key={i}
@@ -353,20 +424,38 @@ function TranscriptExpandModal({ transcript, segments, headline, videoUrl, onCha
                     onClick={showVideo ? () => seekTo(seg.startSeconds) : undefined}
                   >
                     <div className="aep-tx-segment-time">{formatTimestamp(seg.startSeconds)}</div>
-                    <div className="aep-tx-segment-text">{seg.text}</div>
+                    <div className="aep-tx-segment-text">{renderText()}</div>
                   </div>
                 );
               })}
             </div>
           ) : (
-            <textarea
-              ref={editorRef}
-              className="aep-tx-modal-editor"
-              value={transcript}
-              onChange={e => onChange(e.target.value)}
-              placeholder="Transcript text…"
-              autoFocus
-            />
+            <>
+              {/* Empty-state banner when this asset has a transcript but
+                  no timestamped segments — usually because it was
+                  imported before segment capture shipped. Tells admin
+                  what to click to fix it. */}
+              {videoUrl && segments.length === 0 && transcript.length > 0 && onRefreshTimestamps && (
+                <div className="aep-tx-empty-banner">
+                  <div className="aep-tx-empty-banner-text">
+                    No timestamps yet for this transcript. Click <strong>Get timestamps</strong> above to fetch them from the source video.
+                  </div>
+                </div>
+              )}
+              {refreshError && (
+                <div className="aep-tx-empty-banner aep-tx-empty-banner-error">
+                  <div className="aep-tx-empty-banner-text">{refreshError}</div>
+                </div>
+              )}
+              <textarea
+                ref={editorRef}
+                className="aep-tx-modal-editor"
+                value={transcript}
+                onChange={e => onChange(e.target.value)}
+                placeholder="Transcript text…"
+                autoFocus
+              />
+            </>
           )}
           {/* Floating "Add selection as quote" — shows whenever admin
               has highlighted any text in the modal. Anchored to the
@@ -657,16 +746,18 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   // Client-info section collapse state — same pattern.
   const [clientsCollapsed, setClientsCollapsed] = useState(false);
 
-  // Auto-save state — drives the small "Saving…" / "Saved" indicator
-  // in the foot. saveStatus toggles to "saving" while the debounced
-  // save is in flight, then "saved" briefly, then back to "idle".
-  type SaveStatus = "idle" | "saving" | "saved";
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  // skipAutoSave guards against firing the auto-save useEffect right
-  // after we initialize state from a freshly-loaded asset (otherwise
-  // we'd save on every asset open, which is harmless but wasteful and
-  // would flash the indicator).
-  const skipAutoSave = useRef(true);
+  // Save-on-close state. We track whether the form has been edited
+  // since the last load/save. The panel saves once when the admin
+  // closes it (Back / ESC / backdrop) — not on every keystroke — so
+  // mid-edit changes (like adding a client row) don't trigger a parent
+  // re-render that closes the panel out from under them.
+  type SaveStatus = "clean" | "dirty";
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("clean");
+  const dirtyRef = useRef(false);
+  // Skips the dirty-tracking effect's first run after an asset loads
+  // (state inits + sync useEffect both fire setState, which would
+  // otherwise immediately mark the form dirty).
+  const initialSyncRef = useRef(true);
 
   // Auto-grow refs for each pull quote textarea so the block always
   // expands to fit the entire quote (no manual resize, no scroll inside
@@ -745,19 +836,25 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     setTranscriptCue(false);
     setQuotesCollapsed(false);
     setClientsCollapsed(false);
-    setSaveStatus("idle");
-    skipAutoSave.current = true;
+    setSaveStatus("clean");
+    dirtyRef.current = false;
+    initialSyncRef.current = true;
   }, [asset]);
 
-  // Close on Escape — but only if no add-quote sub-flow is open (those
-  // own Escape via their own Cancel buttons, but we still let Esc close
-  // the whole panel since admins expect that universally).
+  // Stable ref for the save-and-close path. Reassigned every render
+  // (outside any useEffect) so the closure captures the latest form
+  // state. ESC + Back + backdrop all call through this ref so they
+  // always see the freshest values without re-binding event handlers.
+  const saveAndCloseRef = useRef<() => void>(() => {});
+
+  // Close on Escape — routes through saveAndCloseRef so any unsaved
+  // edits get persisted before the panel goes away.
   useEffect(() => {
     if (!asset) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") saveAndCloseRef.current(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [asset, onClose]);
+  }, [asset]);
 
   // Compute the destination index given the pointer's current Y. Iterates
   // non-dragged items and finds the slot whose midpoint the pointer is
@@ -813,61 +910,19 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag?.fromIdx]);
 
-  // ── Auto-save ─────────────────────────────────────────────────────
-  // Debounce 800ms after the last form change. Skips the initial setup
-  // state that fires when an asset loads (skipAutoSave is true at that
-  // point and gets reset below). Persists by calling onSave with the
-  // current form state — the parent's saveAssetEdit handles the PUT.
+  // ── Dirty tracking ────────────────────────────────────────────────
+  // Whenever a tracked field changes (after the initial asset-load
+  // sync), mark the form dirty. The actual persist happens once when
+  // the admin closes the panel (saveAndClose, below), not on every
+  // keystroke — so adding a row mid-edit doesn't close the panel.
   useEffect(() => {
     if (!asset) return;
-    if (skipAutoSave.current) {
-      skipAutoSave.current = false;
+    if (initialSyncRef.current) {
+      initialSyncRef.current = false;
       return;
     }
-    setSaveStatus("saving");
-    const t = setTimeout(() => {
-      // Build the payload inline (mirrors save() below). Done here so
-      // the effect doesn't depend on the changing-each-render save fn.
-      const cleaned = quotes
-        .map(q => ({ text: (q.text || "").trim(), favorite: !!q.favorite }))
-        .filter(q => q.text.length > 0);
-      const primary = cleaned[0];
-      const cleanClients: ClientRow[] = clientList
-        .map(c => ({
-          clientName: (c.clientName || "").trim(),
-          company: (c.company || "").trim(),
-          role: (c.role || "").trim(),
-          vertical: (c.vertical || "").trim(),
-          geography: (c.geography || "").trim(),
-          companySize: (c.companySize || "").trim(),
-        }))
-        .filter(c =>
-          c.clientName.length > 0 || c.company.length > 0 || c.role.length > 0 ||
-          c.vertical.length > 0 || c.geography.length > 0 || c.companySize.length > 0
-        );
-      const primaryClient = cleanClients[0] || { clientName: "", company: "", role: "", vertical: "", geography: "", companySize: "" };
-      onSave({
-        ...asset,
-        headline,
-        description,
-        clientName: primaryClient.clientName,
-        company: primaryClient.company,
-        clientRole: primaryClient.role,
-        vertical: primaryClient.vertical,
-        geography: primaryClient.geography,
-        companySize: primaryClient.companySize,
-        additionalClients: cleanClients.slice(1),
-        assetType,
-        transcript,
-        pullQuote: primary?.text || "",
-        pullQuoteFavorite: !!primary?.favorite,
-        additionalQuotes: cleaned.slice(1),
-      });
-      setSaveStatus("saved");
-      // Reset to idle a moment later so the indicator doesn't linger.
-      setTimeout(() => setSaveStatus(prev => prev === "saved" ? "idle" : prev), 1200);
-    }, 800);
-    return () => clearTimeout(t);
+    dirtyRef.current = true;
+    setSaveStatus("dirty");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [headline, description, assetType, transcript, quotes, clientList]);
 
@@ -924,6 +979,19 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
       additionalQuotes,
     });
   };
+  // Persist only if there are actual edits, then close. All close
+  // affordances (Back button, ESC, backdrop) route through this so
+  // mid-edit field changes don't trigger a save → close cycle.
+  const saveAndClose = () => {
+    if (dirtyRef.current) {
+      save();
+      dirtyRef.current = false;
+    }
+    onClose();
+  };
+  // Refresh the ref on each render so the ESC effect always invokes
+  // the latest closure (current state vars, current props).
+  saveAndCloseRef.current = saveAndClose;
   const del = () => {
     const primaryName = (clientList[0]?.company || clientList[0]?.clientName || "");
     if (confirm(`Delete "${headline || primaryName || "this asset"}"? This can't be undone.`)) {
@@ -1116,11 +1184,11 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   return (
     <>
       <style>{css}</style>
-      <div className="aep-backdrop" onClick={onClose}/>
+      <div className="aep-backdrop" onClick={saveAndClose}/>
       <aside className="aep">
         <div className="aep-head">
           <div className="aep-head-title">
-            <button className="aep-back" onClick={onClose} title="Close (Esc)">← Back</button>
+            <button className="aep-back" onClick={saveAndClose} title="Close (Esc)">← Back</button>
             <div>
               <div className="aep-title">Edit Asset</div>
               <div className="aep-sub">{headline || clientList[0]?.company || clientList[0]?.clientName || "—"}</div>
@@ -1471,12 +1539,12 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           </div>
         )}
         <div className="aep-foot">
-          {/* Save indicator — replaces the explicit Save button.
-              Auto-save fires 800ms after any change. */}
+          {/* Save status — the panel saves once on close, not on every
+              change. So the indicator just tells the admin whether
+              they have pending edits that haven't been written yet. */}
           <div className="aep-save-status" aria-live="polite">
-            {saveStatus === "saving" && <><span className="aep-save-spinner"/><span>Saving…</span></>}
-            {saveStatus === "saved" && <><span className="aep-save-check">✓</span><span>Saved</span></>}
-            {saveStatus === "idle" && <span className="aep-save-idle">Changes save automatically</span>}
+            {saveStatus === "dirty" && <><span className="aep-save-dot"/><span>Unsaved — closes will save</span></>}
+            {saveStatus === "clean" && <span className="aep-save-idle">Saves when you close</span>}
           </div>
           <button className="aep-del" onClick={del}>Delete</button>
         </div>
@@ -1495,6 +1563,30 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           onChange={setTranscript}
           onAddQuote={(text) => addQuotes([text])}
           onClose={() => setTranscriptExpanded(false)}
+          onRefreshTimestamps={async () => {
+            // Hit the per-asset refresh endpoint and pump the
+            // returned transcript+segments straight into local state
+            // so the modal flips into segments view immediately.
+            const headers: HeadersInit = { "Content-Type": "application/json" };
+            if (authHeaders) {
+              const auth = await authHeaders();
+              Object.assign(headers as Record<string, string>, auth);
+            }
+            const r = await fetch(`/api/assets/${asset.id}/refresh-transcript`, {
+              method: "POST",
+              headers,
+            });
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({}));
+              throw new Error(err?.error || `Refresh failed (${r.status})`);
+            }
+            const data = await r.json() as { transcript: string; transcriptSegments: { startSeconds: number; text: string }[] };
+            // Suppress dirty mark for these — they're fresh-from-source
+            // and already persisted server-side.
+            initialSyncRef.current = true;
+            setTranscript(data.transcript || "");
+            setTranscriptSegments(data.transcriptSegments || []);
+          }}
         />
       )}
     </>
@@ -1559,7 +1651,7 @@ const css = `
 .aep-tx-modal-btn:hover{border-color:var(--accent);color:var(--accent);}
 .aep-tx-modal-close{background:none;border:none;color:var(--t3);font-size:24px;line-height:1;padding:0 8px;cursor:pointer;border-radius:6px;}
 .aep-tx-modal-close:hover{background:var(--bg2);color:var(--t1);}
-.aep-tx-modal-body{flex:1;overflow-y:auto;background:#fbfaf6;position:relative;}
+.aep-tx-modal-body{flex:1;overflow-y:auto;background:#fbfaf6;position:relative;display:flex;flex-direction:column;}
 /* Floating "Add selection as quote" button inside the expand modal —
    docks to the bottom-right when admin has any text selected. Sticky
    feel without literally being position:sticky (modal scroll is on
@@ -1586,9 +1678,19 @@ const css = `
 .aep-tx-segment-time{font-family:var(--font);font-variant-numeric:tabular-nums;font-size:12px;font-weight:600;color:var(--t4);letter-spacing:.02em;padding-top:5px;}
 .aep-tx-segment-text{font-family:var(--serif);font-size:18px;line-height:1.7;color:var(--t1);user-select:text;}
 .aep-tx-segment-text::selection{background:rgba(99,102,241,.22);}
+/* Word-level karaoke (Descript-style). Past words dim, current word
+   gets a bright highlight + slight color pop. Transitions are short so
+   the leading edge feels snappy as the video plays. */
+.aep-tx-word{transition:color .12s ease, background-color .12s ease;}
+.aep-tx-word.past{color:rgba(99,102,241,.55);}
+.aep-tx-word.current{color:#fff;background:var(--accent,#6366f1);padding:1px 3px;margin:0 -3px;border-radius:4px;font-weight:700;box-shadow:0 1px 6px rgba(99,102,241,.25);}
 /* Edit view — full-bleed textarea matching the segments typography. */
-.aep-tx-modal-editor{width:100%;height:100%;border:none;background:#fbfaf6;font-family:var(--serif);font-size:17px;line-height:1.75;padding:36px 40px;color:var(--t1);resize:none;outline:none;}
+.aep-tx-modal-editor{width:100%;flex:1;min-height:200px;border:none;background:#fbfaf6;font-family:var(--serif);font-size:17px;line-height:1.75;padding:36px 40px;color:var(--t1);resize:none;outline:none;}
 .aep-tx-modal-editor::selection{background:rgba(99,102,241,.22);}
+.aep-tx-empty-banner{margin:18px 40px 0;padding:14px 18px;border-radius:10px;border:1px solid rgba(245,158,11,.4);background:rgba(254,243,199,.6);}
+.aep-tx-empty-banner-error{border-color:rgba(220,38,38,.4);background:rgba(254,226,226,.6);}
+.aep-tx-empty-banner-text{font-family:var(--font);font-size:13px;line-height:1.55;color:var(--t2);}
+.aep-tx-empty-banner-text strong{color:var(--t1);font-weight:700;}
 
 /* Transcript textarea — tuned for long-form reading. Serif typography,
    generous line-height, comfortable padding, off-white background to
@@ -1730,8 +1832,7 @@ const css = `
    saving (spinner + text), saved (green check + text). */
 .aep-save-status{flex:1;display:flex;align-items:center;gap:8px;font-family:var(--font);font-size:12px;color:var(--t3);}
 .aep-save-idle{color:var(--t4);}
-.aep-save-spinner{width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:aepSpin .8s linear infinite;}
-.aep-save-check{color:var(--green,#16a34a);font-weight:700;}
+.aep-save-dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block;}
 .aep-save{flex:1;padding:11px;border-radius:var(--r3);border:none;background:var(--accent);color:#fff;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;}
 .aep-save:hover{background:var(--accent2);}
 .aep-del{padding:11px 18px;border-radius:var(--r3);border:1px solid var(--border);background:#fff;color:var(--red);font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;}
