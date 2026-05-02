@@ -98,16 +98,67 @@ interface TranscriptExpandProps {
   segments: { startSeconds: number; text: string }[];
   headline: string;
   onChange: (next: string) => void;
+  onAddQuote: (text: string) => void;
   onClose: () => void;
 }
-function TranscriptExpandModal({ transcript, segments, headline, onChange, onClose }: TranscriptExpandProps) {
+function TranscriptExpandModal({ transcript, segments, headline, onChange, onAddQuote, onClose }: TranscriptExpandProps) {
   const [mode, setMode] = useState<"read" | "edit">(segments.length > 0 ? "read" : "edit");
+  // Selection state for the floating "Add selection as quote" button.
+  // Read mode tracks DOM selection (window.getSelection on the segments
+  // div); edit mode tracks the textarea's selectionStart/End. Both
+  // resolve to a string in `selectedText`.
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const segmentsRef = useRef<HTMLDivElement>(null);
+  const [selectedText, setSelectedText] = useState("");
+
+  // Listen for selection changes globally; resolve based on current mode.
+  useEffect(() => {
+    const update = () => {
+      if (mode === "read") {
+        const sel = window.getSelection?.();
+        if (!sel || sel.isCollapsed) { setSelectedText(""); return; }
+        const text = sel.toString().trim();
+        // Only count if selection is fully inside the segments view.
+        const root = segmentsRef.current;
+        if (!root) { setSelectedText(""); return; }
+        // Anchor or focus must descend from segments root.
+        const a = sel.anchorNode;
+        const f = sel.focusNode;
+        const inside = (n: Node | null) => n != null && root.contains(n);
+        setSelectedText(inside(a) && inside(f) ? text : "");
+      } else {
+        const ta = editorRef.current;
+        if (!ta) { setSelectedText(""); return; }
+        const start = ta.selectionStart ?? 0;
+        const end = ta.selectionEnd ?? 0;
+        if (end > start) {
+          setSelectedText(transcript.substring(start, end).trim());
+        } else {
+          setSelectedText("");
+        }
+      }
+    };
+    document.addEventListener("selectionchange", update);
+    return () => document.removeEventListener("selectionchange", update);
+  }, [mode, transcript]);
+  // Reset selection when mode flips so the previous mode's selection
+  // doesn't carry over to the new view.
+  useEffect(() => { setSelectedText(""); }, [mode]);
+
   // Close on Escape
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const handleAddSelection = () => {
+    if (!selectedText) return;
+    onAddQuote(selectedText);
+    // Clear native selection so the button hides cleanly after add.
+    try { window.getSelection?.()?.removeAllRanges(); } catch {}
+    setSelectedText("");
+  };
 
   const downloadAsTxt = () => {
     const blob = new Blob([transcript], { type: "text/plain;charset=utf-8" });
@@ -161,7 +212,7 @@ function TranscriptExpandModal({ transcript, segments, headline, onChange, onClo
         </div>
         <div className="aep-tx-modal-body">
           {mode === "read" && segments.length > 0 ? (
-            <div className="aep-tx-segments">
+            <div className="aep-tx-segments" ref={segmentsRef}>
               {segments.map((seg, i) => (
                 <div key={i} className="aep-tx-segment">
                   <div className="aep-tx-segment-time">{formatTimestamp(seg.startSeconds)}</div>
@@ -171,12 +222,28 @@ function TranscriptExpandModal({ transcript, segments, headline, onChange, onClo
             </div>
           ) : (
             <textarea
+              ref={editorRef}
               className="aep-tx-modal-editor"
               value={transcript}
               onChange={e => onChange(e.target.value)}
               placeholder="Transcript text…"
               autoFocus
             />
+          )}
+          {/* Floating "Add selection as quote" — shows whenever admin
+              has highlighted any text in the modal. Anchored to the
+              bottom-right of the body so it doesn't fight with the
+              user's selection or the scroll. */}
+          {selectedText && (
+            <button
+              type="button"
+              className="aep-tx-modal-add-selection"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleAddSelection}
+            >
+              <span className="aep-add-plus">+</span>
+              <span>Add selection as quote</span>
+            </button>
           )}
         </div>
       </div>
@@ -185,15 +252,124 @@ function TranscriptExpandModal({ transcript, segments, headline, onChange, onClo
 }
 
 // ── ClientList ──────────────────────────────────────────────────────
-// List of {clientName, company} rows. The first is the "primary" by
-// convention; reorder via drag handle to promote a different row to
-// primary. Empty rows are dropped on save. Uses native HTML5 drag —
-// quotes use pointer-events for finer control, but the client list is
-// shorter and lower-stakes so the simpler API is fine here.
+// List of {clientName, company} rows. First entry is the "primary"; drag
+// to promote a different row. Pointer-driven reorder mirrors the quotes
+// section so the two list patterns feel like the same component family.
+// Visually flat — no per-row card chrome, just a small meta line above
+// the inputs and whitespace between rows.
 interface ClientRow { clientName: string; company: string }
+type ClientDragState = {
+  fromIdx: number;
+  pointerY: number;
+  pointerX: number;
+  initialY: number;
+  initialX: number;
+  rects: DOMRect[];
+  gap: number;
+  width: number;
+};
 function ClientList({ clients, onChange }: { clients: ClientRow[]; onChange: (next: ClientRow[]) => void }) {
-  const [dragFrom, setDragFrom] = useState<number | null>(null);
-  const [dragOver, setDragOver] = useState<number | null>(null);
+  const [drag, setDrag] = useState<ClientDragState | null>(null);
+  const dragRef = useRef<ClientDragState | null>(null);
+  useEffect(() => { dragRef.current = drag; }, [drag]);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const computeInsertIdx = (state: ClientDragState): number => {
+    const others = state.rects
+      .map((r, i) => ({ i, mid: r.top + r.height / 2 }))
+      .filter(o => o.i !== state.fromIdx);
+    let slot = others.length;
+    for (let k = 0; k < others.length; k++) {
+      if (state.pointerY < others[k].mid) { slot = k; break; }
+    }
+    return slot;
+  };
+
+  // Keep the insert calculation memo-stable per render.
+  const insertIdx = drag ? computeInsertIdx(drag) : null;
+
+  // Mirror the quote-list pointer event wiring.
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const cur = dragRef.current;
+      if (!cur) return;
+      setDrag({ ...cur, pointerY: e.clientY, pointerX: e.clientX });
+    };
+    const onUp = () => {
+      const cur = dragRef.current;
+      setDrag(null);
+      if (!cur) return;
+      const target = computeInsertIdx(cur);
+      if (target !== cur.fromIdx) {
+        const next = [...clients];
+        const [moved] = next.splice(cur.fromIdx, 1);
+        next.splice(target, 0, moved);
+        onChange(next);
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag?.fromIdx, clients]);
+
+  const itemOffsetY = (i: number): number => {
+    if (!drag || insertIdx === null) return 0;
+    if (i === drag.fromIdx) return 0;
+    const draggedHeight = drag.rects[drag.fromIdx]?.height || 0;
+    const shift = draggedHeight + drag.gap;
+    if (insertIdx > drag.fromIdx) {
+      if (i > drag.fromIdx && i <= insertIdx) return -shift;
+    } else if (insertIdx < drag.fromIdx) {
+      if (i >= insertIdx && i < drag.fromIdx) return shift;
+    }
+    return 0;
+  };
+
+  const cloneStyle = (): React.CSSProperties | undefined => {
+    if (!drag) return undefined;
+    const fromRect = drag.rects[drag.fromIdx];
+    if (!fromRect) return undefined;
+    const dx = drag.pointerX - drag.initialX;
+    const dy = drag.pointerY - drag.initialY;
+    return {
+      position: "fixed",
+      left: fromRect.left + dx,
+      top: fromRect.top + dy,
+      width: drag.width,
+      pointerEvents: "none",
+      zIndex: 200,
+    };
+  };
+
+  const onPointerDownHandle = (i: number) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const list = listRef.current;
+    if (!list) return;
+    const rects = itemRefs.current.map(el => el?.getBoundingClientRect() || new DOMRect());
+    const fromRect = rects[i];
+    if (!fromRect) return;
+    const gapStr = window.getComputedStyle(list).rowGap || "0";
+    const gap = parseFloat(gapStr) || 0;
+    setDrag({
+      fromIdx: i,
+      pointerY: e.clientY,
+      pointerX: e.clientX,
+      initialY: e.clientY,
+      initialX: e.clientX,
+      rects,
+      gap,
+      width: fromRect.width,
+    });
+  };
 
   const updateRow = (i: number, patch: Partial<ClientRow>) => {
     onChange(clients.map((c, idx) => idx === i ? { ...c, ...patch } : c));
@@ -205,67 +381,77 @@ function ClientList({ clients, onChange }: { clients: ClientRow[]; onChange: (ne
   };
   const addRow = () => onChange([...clients, { clientName: "", company: "" }]);
 
-  const onDropAt = (i: number) => () => {
-    if (dragFrom === null || dragFrom === i) {
-      setDragFrom(null);
-      setDragOver(null);
-      return;
-    }
-    const next = [...clients];
-    const [moved] = next.splice(dragFrom, 1);
-    next.splice(i, 0, moved);
-    onChange(next);
-    setDragFrom(null);
-    setDragOver(null);
-  };
+  const showMeta = clients.length > 1;
 
   return (
-    <div className="aep-client-list">
-      {clients.map((c, i) => (
-        <div
-          key={i}
-          className={`aep-client-row${dragOver === i && dragFrom !== null && dragFrom !== i ? " drag-over" : ""}${dragFrom === i ? " dragging" : ""}`}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(i); }}
-          onDragLeave={() => setDragOver(prev => prev === i ? null : prev)}
-          onDrop={onDropAt(i)}
+    <>
+      <div className="aep-client-list" ref={listRef}>
+        {clients.map((c, i) => {
+          const isDragging = drag?.fromIdx === i;
+          const offset = itemOffsetY(i);
+          return (
+            <div
+              key={i}
+              ref={el => { itemRefs.current[i] = el; }}
+              className={`aep-client-row${isDragging ? " dragging" : ""}`}
+              style={{
+                transform: offset !== 0 ? `translateY(${offset}px)` : undefined,
+                transition: isDragging ? "none" : "transform .22s cubic-bezier(.2,.7,.2,1)",
+                visibility: isDragging ? "hidden" : undefined,
+              }}
+            >
+              {showMeta && (
+                <div className="aep-client-meta">
+                  <span
+                    className="aep-drag-handle"
+                    onPointerDown={onPointerDownHandle(i)}
+                    title="Drag to reorder"
+                    aria-label="Drag handle"
+                  >⋮⋮</span>
+                  <span className="aep-client-num">
+                    {i === 0 ? "Primary" : `Client ${i + 1}`}
+                  </span>
+                  <button
+                    type="button"
+                    className="aep-quote-remove"
+                    onClick={() => removeRow(i)}
+                    title="Remove client"
+                    aria-label="Remove client"
+                  >×</button>
+                </div>
+              )}
+              <div className="aep-client-fields">
+                <div className="aep-fld"><label>Client name</label><input className="aep-in" value={c.clientName} onChange={e => updateRow(i, { clientName: e.target.value })}/></div>
+                <div className="aep-fld"><label>Company</label><input className="aep-in" value={c.company} onChange={e => updateRow(i, { company: e.target.value })}/></div>
+              </div>
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          className="aep-add-quote"
+          onClick={addRow}
         >
-          <div className="aep-client-meta">
-            <span
-              className="aep-drag-handle"
-              draggable
-              onDragStart={() => setDragFrom(i)}
-              onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
-              title="Drag to reorder"
-              aria-label="Drag handle"
-            >⋮⋮</span>
-            <span className="aep-client-num">
-              {i === 0 ? "Primary client" : `Client ${i + 1}`}
-            </span>
-            {clients.length > 1 && (
-              <button
-                type="button"
-                className="aep-quote-remove"
-                onClick={() => removeRow(i)}
-                title="Remove client"
-                aria-label="Remove client"
-              >×</button>
-            )}
-          </div>
-          <div className="aep-client-fields">
-            <div className="aep-fld"><label>Client name</label><input className="aep-in" value={c.clientName} onChange={e => updateRow(i, { clientName: e.target.value })}/></div>
-            <div className="aep-fld"><label>Company</label><input className="aep-in" value={c.company} onChange={e => updateRow(i, { company: e.target.value })}/></div>
+          <span className="aep-add-plus">+</span>
+          <span>Add client</span>
+        </button>
+      </div>
+      {/* Floating clone — same lifted-card visual as the quotes drag. */}
+      {drag && clients[drag.fromIdx] && (
+        <div className="aep-quote-clone" style={cloneStyle()}>
+          <div className="aep-client-row aep-client-row-clone">
+            <div className="aep-client-meta">
+              <span className="aep-drag-handle">⋮⋮</span>
+              <span className="aep-client-num">{drag.fromIdx === 0 ? "Primary" : `Client ${drag.fromIdx + 1}`}</span>
+            </div>
+            <div className="aep-client-fields">
+              <div className="aep-fld"><label>Client name</label><div className="aep-in aep-client-clone-input">{clients[drag.fromIdx].clientName || "—"}</div></div>
+              <div className="aep-fld"><label>Company</label><div className="aep-in aep-client-clone-input">{clients[drag.fromIdx].company || "—"}</div></div>
+            </div>
           </div>
         </div>
-      ))}
-      <button
-        type="button"
-        className="aep-add-quote"
-        onClick={addRow}
-      >
-        <span className="aep-add-plus">+</span>
-        <span>Add client</span>
-      </button>
-    </div>
+      )}
+    </>
   );
 }
 
@@ -1012,6 +1198,7 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           segments={transcriptSegments}
           headline={headline}
           onChange={setTranscript}
+          onAddQuote={(text) => addQuotes([text])}
           onClose={() => setTranscriptExpanded(false)}
         />
       )}
@@ -1077,7 +1264,14 @@ const css = `
 .aep-tx-modal-btn:hover{border-color:var(--accent);color:var(--accent);}
 .aep-tx-modal-close{background:none;border:none;color:var(--t3);font-size:24px;line-height:1;padding:0 8px;cursor:pointer;border-radius:6px;}
 .aep-tx-modal-close:hover{background:var(--bg2);color:var(--t1);}
-.aep-tx-modal-body{flex:1;overflow-y:auto;background:#fbfaf6;}
+.aep-tx-modal-body{flex:1;overflow-y:auto;background:#fbfaf6;position:relative;}
+/* Floating "Add selection as quote" button inside the expand modal —
+   docks to the bottom-right when admin has any text selected. Sticky
+   feel without literally being position:sticky (modal scroll is on
+   the body, not this button). */
+.aep-tx-modal-add-selection{position:sticky;bottom:18px;left:auto;right:18px;float:right;display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:#fff;border:none;padding:10px 16px;border-radius:999px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(99,102,241,.32),0 2px 4px rgba(0,0,0,.08);transition:transform .12s,box-shadow .12s;margin:18px;}
+.aep-tx-modal-add-selection:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(99,102,241,.38),0 4px 6px rgba(0,0,0,.1);}
+.aep-tx-modal-add-selection .aep-add-plus{background:#fff;color:var(--accent);}
 /* Segments view — each entry has a sticky-feeling timestamp on the left
    and the cue text on the right. Generous line-height; serif body. */
 .aep-tx-segments{max-width:760px;margin:0 auto;padding:36px 40px;display:flex;flex-direction:column;gap:18px;}
@@ -1106,7 +1300,7 @@ const css = `
    clips the glyph since it floats above its parent. */
 .aep-quotes-list{display:flex;flex-direction:column;gap:18px;max-height:50vh;overflow-y:auto;padding-right:6px;padding-top:10px;}
 .aep-quote-callout{position:relative;border-left:3px solid var(--accent);padding:6px 8px 6px 18px;transition:opacity .12s,border-color .12s;}
-.aep-quote-callout::before{content:"“";position:absolute;left:8px;top:-2px;font-family:Georgia,"Times New Roman",serif;font-size:34px;line-height:1;color:var(--accent);opacity:.4;font-weight:700;pointer-events:none;}
+.aep-quote-callout::before{content:"“";position:absolute;left:-2px;top:-12px;font-family:Georgia,"Times New Roman",serif;font-size:34px;line-height:1;color:var(--accent);opacity:.4;font-weight:700;pointer-events:none;}
 .aep-quote-callout.dragging{opacity:.4;border-left-style:dashed;}
 .aep-quote-meta{display:flex;align-items:center;gap:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);margin-bottom:4px;opacity:.55;transition:opacity .15s;}
 .aep-quote-callout:hover .aep-quote-meta,.aep-quote-callout:focus-within .aep-quote-meta{opacity:1;}
@@ -1129,18 +1323,20 @@ const css = `
 .aep-quote-text:focus{background:var(--bg2);border-radius:5px;padding:6px 8px;}
 .aep-quote-text::placeholder{color:var(--t4);font-style:normal;}
 
-/* Client/company multi-row list. Same drag-handle + meta-row pattern
-   as the quote callouts but two inputs side-by-side and lighter chrome
-   (no accent bar — these are inputs, not callouts). */
-.aep-client-list{display:flex;flex-direction:column;gap:14px;}
-.aep-client-row{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:#fff;transition:all .12s;}
-.aep-client-row:hover{border-color:var(--border2);}
-.aep-client-row.dragging{opacity:.4;border-style:dashed;}
-.aep-client-row.drag-over{border-color:var(--accent);background:var(--accentLL);}
-.aep-client-meta{display:flex;align-items:center;gap:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);opacity:.7;transition:opacity .15s;}
+/* Client/company multi-row list. Visually flat — no per-row card,
+   just whitespace between rows. The drag-handle/number/× meta row
+   appears only when there are 2+ rows (single-client case is just two
+   inputs, no chrome). */
+.aep-client-list{display:flex;flex-direction:column;gap:18px;}
+.aep-client-row{display:flex;flex-direction:column;gap:6px;}
+.aep-client-meta{display:flex;align-items:center;gap:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);opacity:.65;transition:opacity .15s;}
 .aep-client-row:hover .aep-client-meta,.aep-client-row:focus-within .aep-client-meta{opacity:1;}
 .aep-client-num{color:var(--t3);}
 .aep-client-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+/* Drag-clone of a client row — boxed (since the original is unboxed)
+   so the lifted-card metaphor still reads. */
+.aep-client-row-clone{padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:#fff;}
+.aep-client-clone-input{display:flex;align-items:center;background:var(--bg);color:var(--t1);min-height:34px;}
 
 /* Floating drag clone — appears at the cursor while dragging. The
    tilt + shadow give the "lifted card" feel. Pointer-events:none lets
