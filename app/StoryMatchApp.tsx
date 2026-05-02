@@ -114,6 +114,14 @@ interface Asset {
   // — display in the order the array gives. Empty/missing means only the
   // primary quote (if any) is used.
   additionalQuotes?: string[];
+  // Additional client/company pairs beyond the primary clientName +
+  // company. First entry is conventionally the primary. Used for
+  // compilation videos featuring multiple speakers/companies.
+  additionalClients?: { clientName: string; company: string }[];
+  // Read-only timestamped transcript segments. Populated by source-sync
+  // from the captured VTT. Empty when the asset was synced before
+  // segment capture was added — admin can manual-sync to backfill.
+  transcriptSegments?: { startSeconds: number; text: string }[];
 }
 
 interface CustomFlag {

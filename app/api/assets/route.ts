@@ -85,6 +85,16 @@ type AssetDB = {
   // for backward compat. This array holds the rest, in display order.
   // Empty array = no additional quotes; only the primary is used.
   additional_quotes: unknown;
+  // Additional client/company pairs beyond the primary client_name +
+  // company. Same pattern as additional_quotes — first entry is the
+  // "primary" by convention. Used for compilation videos featuring
+  // multiple speakers from one or many companies.
+  additional_clients: unknown;
+  // Timestamped transcript segments parsed from the source VTT. Each
+  // entry: { startSeconds: number; text: string }. Plain transcript
+  // (the existing `transcript` column) is still the source of truth
+  // for editing; segments are read-only for the expand-view reader.
+  transcript_segments: unknown;
   // Stamp tracking which org rule (if any) auto-set the current status.
   // Cleared on manual edits. Used by the rule engine to know when to
   // auto-restore a rule-drafted asset back to published.
@@ -139,6 +149,13 @@ type AssetFE = {
   customFlags?: unknown;
   // Additional quotes beyond the primary pullQuote. Array of strings.
   additionalQuotes?: string[];
+  // Additional client/company pairs beyond the primary clientName +
+  // company. Each: { clientName: string; company: string }.
+  additionalClients?: { clientName: string; company: string }[];
+  // Read-only timestamped transcript segments (parsed from source VTT).
+  // Empty when source had no captions or asset hasn't been synced since
+  // segments were introduced.
+  transcriptSegments?: { startSeconds: number; text: string }[];
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -180,6 +197,8 @@ function dbToFe(r: AssetDB): AssetFE {
     freshnessExceptionSetAt: r.freshness_exception_set_at,
     customFlags: Array.isArray(r.custom_flags) ? r.custom_flags : [],
     additionalQuotes: Array.isArray(r.additional_quotes) ? (r.additional_quotes as string[]) : [],
+    additionalClients: Array.isArray(r.additional_clients) ? (r.additional_clients as { clientName: string; company: string }[]) : [],
+    transcriptSegments: Array.isArray(r.transcript_segments) ? (r.transcript_segments as { startSeconds: number; text: string }[]) : [],
   };
 }
 
@@ -234,6 +253,12 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUser
   // Additional quotes — array of strings beyond the primary pull_quote.
   // Pass through; client-side validates that entries are strings.
   if (a.additionalQuotes !== undefined) o.additional_quotes = a.additionalQuotes;
+  // Additional clients — array of {clientName, company} objects beyond
+  // the primary client_name/company. Same pass-through pattern.
+  if (a.additionalClients !== undefined) o.additional_clients = a.additionalClients;
+  // transcript_segments is sync-derived (server-only) — clients never
+  // post it. Intentionally not mapped here so a stray FE write can't
+  // overwrite the parsed segments captured by source-sync.
   // Per-asset freshness exception. When the FE writes a value (set or clear),
   // server stamps set_by_email + set_at from the auth context — clients
   // never set those directly, so we ignore any FE-supplied values.

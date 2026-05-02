@@ -124,25 +124,65 @@ function parseVtt(vtt: string): string {
   return out.join(" ").replace(/\s+/g, " ").trim();
 }
 
-async function fetchTranscript(videoId: string, accessToken: string): Promise<string> {
+// Parse VTT into timestamped segments for the transcript expand-view.
+// Same input as parseVtt; this version preserves the cue start times so
+// admins can scrub the transcript by timestamp when reviewing.
+export interface TranscriptSegment { startSeconds: number; text: string }
+function parseVttSegments(vtt: string): TranscriptSegment[] {
+  const lines = vtt.split(/\r?\n/);
+  const segments: TranscriptSegment[] = [];
+  let currentTime: number | null = null;
+  let buffer: string[] = [];
+  const flush = () => {
+    if (currentTime !== null && buffer.length > 0) {
+      const text = buffer.join(" ").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      if (text) segments.push({ startSeconds: currentTime, text });
+    }
+    currentTime = null;
+    buffer = [];
+  };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) { flush(); continue; }
+    if (trimmed.startsWith("WEBVTT")) continue;
+    if (trimmed.startsWith("NOTE")) continue;
+    if (/^\d+$/.test(trimmed)) continue;
+    const tm = trimmed.match(/^(?:(\d+):)?(\d+):(\d+)(?:\.\d+)?\s*-->/);
+    if (tm) {
+      const h = tm[1] ? parseInt(tm[1], 10) : 0;
+      const m = parseInt(tm[2], 10);
+      const s = parseInt(tm[3], 10);
+      currentTime = h * 3600 + m * 60 + s;
+      continue;
+    }
+    buffer.push(trimmed);
+  }
+  flush();
+  return segments;
+}
+
+interface TranscriptResult { plain: string; segments: TranscriptSegment[] }
+
+async function fetchTranscript(videoId: string, accessToken: string): Promise<TranscriptResult> {
   try {
     const tracksResp = await fetch(`https://api.vimeo.com/videos/${videoId}/texttracks`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/vnd.vimeo.*+json;version=3.4" },
     });
-    if (!tracksResp.ok) return "";
+    if (!tracksResp.ok) return { plain: "", segments: [] };
     const tracksBody = await tracksResp.json() as { data?: { active: boolean; type: string; language: string; link: string; auto_generated?: boolean }[] };
     const tracks = tracksBody.data || [];
-    if (tracks.length === 0) return "";
+    if (tracks.length === 0) return { plain: "", segments: [] };
     const chosen =
       tracks.find(t => t.active && t.language?.toLowerCase().startsWith("en")) ||
       tracks.find(t => t.language?.toLowerCase().startsWith("en")) ||
       tracks.find(t => t.active) || tracks[0];
-    if (!chosen?.link) return "";
+    if (!chosen?.link) return { plain: "", segments: [] };
     const vttResp = await fetch(chosen.link, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!vttResp.ok) return "";
-    return parseVtt(await vttResp.text());
+    if (!vttResp.ok) return { plain: "", segments: [] };
+    const raw = await vttResp.text();
+    return { plain: parseVtt(raw), segments: parseVttSegments(raw) };
   } catch {
-    return "";
+    return { plain: "", segments: [] };
   }
 }
 
@@ -153,6 +193,9 @@ interface NormalizedVideo {
   description: string;
   thumbnail: string;
   transcript: string;
+  // Timestamped segments from the source VTT, parallel to `transcript`.
+  // Empty when the source had no captions.
+  transcriptSegments: TranscriptSegment[];
   // Vimeo's created_time — the actual publish date of the video. Used by
   // the Cleared signal to flag stale stories per org-level freshness rule.
   publishedAt: string;
@@ -212,7 +255,7 @@ async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Pr
   };
 
   const [transcripts, hiResThumbs] = await Promise.all([
-    parallelMap(basics, 5, async b => b.vimeoId ? await fetchTranscript(b.vimeoId, accessToken) : ""),
+    parallelMap(basics, 5, async b => b.vimeoId ? await fetchTranscript(b.vimeoId, accessToken) : { plain: "", segments: [] as TranscriptSegment[] }),
     parallelMap(basics, 5, async b => b.vimeoId ? await fetchHighResThumb(b.vimeoId, accessToken) : ""),
   ]);
 
@@ -222,7 +265,8 @@ async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Pr
     title: b.title,
     description: b.description,
     thumbnail: hiResThumbs[i] || b.thumbnailFallback,
-    transcript: transcripts[i] || "",
+    transcript: transcripts[i]?.plain || "",
+    transcriptSegments: transcripts[i]?.segments || [],
     publishedAt: b.publishedAt,
   }));
 }
@@ -255,7 +299,8 @@ async function fetchSingleVideo(videoUrl: string, accessToken: string): Promise<
       title: v.name,
       description: v.description || "",
       thumbnail: hiResThumb || pickLargestThumb(v.pictures?.sizes),
-      transcript: transcript || "",
+      transcript: transcript.plain || "",
+      transcriptSegments: transcript.segments || [],
       publishedAt: v.created_time || "",
     }];
   } catch {
@@ -389,6 +434,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       headline: v.title || "Imported video",
       pull_quote: "",
       transcript: v.transcript || "",
+      transcript_segments: v.transcriptSegments || [],
       description: v.description || "",
       thumbnail: v.thumbnail || "",
       // Vimeo's actual publish date — drives the freshness Rule.
@@ -556,7 +602,13 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       v.transcript || "",
       a.transcript || "",
       a.last_synced_transcript,
-      () => { updates.transcript = v.transcript; updates.last_synced_transcript = v.transcript; },
+      () => {
+        updates.transcript = v.transcript;
+        updates.last_synced_transcript = v.transcript;
+        // Keep segments in lockstep with the plain transcript so the
+        // expand-view never shows mismatched timing.
+        (updates as Record<string, unknown>).transcript_segments = v.transcriptSegments || [];
+      },
       () => { updates.last_synced_transcript = v.transcript; },
     );
 

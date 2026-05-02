@@ -35,7 +35,9 @@ export interface EditableAsset {
   headline: string;
   pullQuote: string;
   additionalQuotes?: string[];
+  additionalClients?: { clientName: string; company: string }[];
   transcript: string;
+  transcriptSegments?: { startSeconds: number; text: string }[];
   description: string;
   thumbnail: string;
   approvalStatus?: string;
@@ -73,17 +75,215 @@ type DragState = {
   width: number;        // floating clone width matches the original
 };
 
+// ── TranscriptExpandModal ───────────────────────────────────────────
+// Near-fullscreen reader/editor for the transcript. Two view modes:
+//   • Read mode (default when segments exist) — renders timestamped
+//     segments as a vertical list, clickable to copy. Comfortable
+//     prose typography, plenty of whitespace.
+//   • Edit mode — a big resizable textarea with the same prose styling
+//     so admins can fix typos. No segments here (timestamps are derived
+//     from the source VTT and re-captured on next sync).
+// Download button writes the plain transcript out as a .txt file.
+function formatTimestamp(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+interface TranscriptExpandProps {
+  transcript: string;
+  segments: { startSeconds: number; text: string }[];
+  headline: string;
+  onChange: (next: string) => void;
+  onClose: () => void;
+}
+function TranscriptExpandModal({ transcript, segments, headline, onChange, onClose }: TranscriptExpandProps) {
+  const [mode, setMode] = useState<"read" | "edit">(segments.length > 0 ? "read" : "edit");
+  // Close on Escape
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const downloadAsTxt = () => {
+    const blob = new Blob([transcript], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safe = (headline || "transcript").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 60) || "transcript";
+    a.href = url;
+    a.download = `${safe}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      <div className="aep-tx-modal-backdrop" onClick={onClose}/>
+      <div className="aep-tx-modal" role="dialog" aria-label="Transcript">
+        <div className="aep-tx-modal-head">
+          <div className="aep-tx-modal-title">
+            <div className="aep-tx-modal-eyebrow">Transcript</div>
+            <div className="aep-tx-modal-headline">{headline || "Untitled"}</div>
+          </div>
+          <div className="aep-tx-modal-actions">
+            {/* Mode toggle — read vs. edit. Read mode is segments view
+                when available; edit mode is a big editable textarea. */}
+            {segments.length > 0 && (
+              <div className="aep-tx-mode-switch">
+                <button
+                  type="button"
+                  className={`aep-tx-mode${mode === "read" ? " on" : ""}`}
+                  onClick={() => setMode("read")}
+                >Read</button>
+                <button
+                  type="button"
+                  className={`aep-tx-mode${mode === "edit" ? " on" : ""}`}
+                  onClick={() => setMode("edit")}
+                >Edit</button>
+              </div>
+            )}
+            <button type="button" className="aep-tx-modal-btn" onClick={downloadAsTxt} title="Download as plain text (.txt)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <span>Download .txt</span>
+            </button>
+            <button type="button" className="aep-tx-modal-close" onClick={onClose} title="Close (Esc)" aria-label="Close">×</button>
+          </div>
+        </div>
+        <div className="aep-tx-modal-body">
+          {mode === "read" && segments.length > 0 ? (
+            <div className="aep-tx-segments">
+              {segments.map((seg, i) => (
+                <div key={i} className="aep-tx-segment">
+                  <div className="aep-tx-segment-time">{formatTimestamp(seg.startSeconds)}</div>
+                  <div className="aep-tx-segment-text">{seg.text}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <textarea
+              className="aep-tx-modal-editor"
+              value={transcript}
+              onChange={e => onChange(e.target.value)}
+              placeholder="Transcript text…"
+              autoFocus
+            />
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── ClientList ──────────────────────────────────────────────────────
+// List of {clientName, company} rows. The first is the "primary" by
+// convention; reorder via drag handle to promote a different row to
+// primary. Empty rows are dropped on save. Uses native HTML5 drag —
+// quotes use pointer-events for finer control, but the client list is
+// shorter and lower-stakes so the simpler API is fine here.
+interface ClientRow { clientName: string; company: string }
+function ClientList({ clients, onChange }: { clients: ClientRow[]; onChange: (next: ClientRow[]) => void }) {
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
+
+  const updateRow = (i: number, patch: Partial<ClientRow>) => {
+    onChange(clients.map((c, idx) => idx === i ? { ...c, ...patch } : c));
+  };
+  const removeRow = (i: number) => {
+    const next = clients.filter((_, idx) => idx !== i);
+    // Always keep at least one row so admins have a place to type.
+    onChange(next.length === 0 ? [{ clientName: "", company: "" }] : next);
+  };
+  const addRow = () => onChange([...clients, { clientName: "", company: "" }]);
+
+  const onDropAt = (i: number) => () => {
+    if (dragFrom === null || dragFrom === i) {
+      setDragFrom(null);
+      setDragOver(null);
+      return;
+    }
+    const next = [...clients];
+    const [moved] = next.splice(dragFrom, 1);
+    next.splice(i, 0, moved);
+    onChange(next);
+    setDragFrom(null);
+    setDragOver(null);
+  };
+
+  return (
+    <div className="aep-client-list">
+      {clients.map((c, i) => (
+        <div
+          key={i}
+          className={`aep-client-row${dragOver === i && dragFrom !== null && dragFrom !== i ? " drag-over" : ""}${dragFrom === i ? " dragging" : ""}`}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(i); }}
+          onDragLeave={() => setDragOver(prev => prev === i ? null : prev)}
+          onDrop={onDropAt(i)}
+        >
+          <div className="aep-client-meta">
+            <span
+              className="aep-drag-handle"
+              draggable
+              onDragStart={() => setDragFrom(i)}
+              onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
+              title="Drag to reorder"
+              aria-label="Drag handle"
+            >⋮⋮</span>
+            <span className="aep-client-num">
+              {i === 0 ? "Primary client" : `Client ${i + 1}`}
+            </span>
+            {clients.length > 1 && (
+              <button
+                type="button"
+                className="aep-quote-remove"
+                onClick={() => removeRow(i)}
+                title="Remove client"
+                aria-label="Remove client"
+              >×</button>
+            )}
+          </div>
+          <div className="aep-client-fields">
+            <div className="aep-fld"><label>Client name</label><input className="aep-in" value={c.clientName} onChange={e => updateRow(i, { clientName: e.target.value })}/></div>
+            <div className="aep-fld"><label>Company</label><input className="aep-in" value={c.company} onChange={e => updateRow(i, { company: e.target.value })}/></div>
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="aep-add-quote"
+        onClick={addRow}
+      >
+        <span className="aep-add-plus">+</span>
+        <span>Add client</span>
+      </button>
+    </div>
+  );
+}
+
 export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onClose, authHeaders }: Props) {
   // ── Form state — unified quotes array is the source of truth in UI.
   const [headline, setHeadline] = useState("");
   const [description, setDescription] = useState("");
-  const [clientName, setClientName] = useState("");
-  const [company, setCompany] = useState("");
+  // Client list — unified array (primary first, additional after).
+  // Same UI pattern as quotes; on save we split index 0 → clientName +
+  // company, rest → additionalClients. UI always operates on the array.
+  const [clientList, setClientList] = useState<{ clientName: string; company: string }[]>([{ clientName: "", company: "" }]);
   const [assetType, setAssetType] = useState("Video Testimonial");
   const [vertical, setVertical] = useState("");
   const [geography, setGeography] = useState("");
   const [companySize, setCompanySize] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [transcriptSegments, setTranscriptSegments] = useState<{ startSeconds: number; text: string }[]>([]);
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [quotes, setQuotes] = useState<string[]>([]);
 
   // Add-quote sub-flow state
@@ -138,13 +338,22 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     if (!asset) return;
     setHeadline(asset.headline || "");
     setDescription(asset.description || "");
-    setClientName(asset.clientName || "");
-    setCompany(asset.company || "");
+    // Combine primary + additional into one array. Always render at
+    // least one row so the form has somewhere to type into when admin
+    // opens an empty asset.
+    const primary = { clientName: asset.clientName || "", company: asset.company || "" };
+    const extras = Array.isArray(asset.additionalClients) ? asset.additionalClients.map(c => ({
+      clientName: c.clientName || "",
+      company: c.company || "",
+    })) : [];
+    setClientList([primary, ...extras]);
     setAssetType(asset.assetType || "Video Testimonial");
     setVertical(asset.vertical || "");
     setGeography(asset.geography || "");
     setCompanySize(asset.companySize || "");
     setTranscript(asset.transcript || "");
+    setTranscriptSegments(Array.isArray(asset.transcriptSegments) ? asset.transcriptSegments : []);
+    setTranscriptExpanded(false);
     const all = [asset.pullQuote || "", ...(asset.additionalQuotes || [])].filter(q => (q || "").trim().length > 0);
     setQuotes(all);
     // Reset all sub-flow state to a clean baseline whenever the target
@@ -235,12 +444,21 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     const cleaned = quotes.map(q => (q || "").trim()).filter(q => q.length > 0);
     const pullQuote = cleaned[0] || "";
     const additionalQuotes = cleaned.slice(1);
+    // Same split for clients: first → primary clientName/company, rest
+    // → additionalClients. Drop fully-empty rows so admin can leave a
+    // half-typed row behind without persisting noise.
+    const cleanClients = clientList
+      .map(c => ({ clientName: (c.clientName || "").trim(), company: (c.company || "").trim() }))
+      .filter(c => c.clientName.length > 0 || c.company.length > 0);
+    const primaryClient = cleanClients[0] || { clientName: "", company: "" };
+    const additionalClients = cleanClients.slice(1);
     onSave({
       ...asset,
       headline,
       description,
-      clientName,
-      company,
+      clientName: primaryClient.clientName,
+      company: primaryClient.company,
+      additionalClients,
       assetType,
       vertical,
       geography,
@@ -251,7 +469,8 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     });
   };
   const del = () => {
-    if (confirm(`Delete "${headline || company || "this asset"}"? This can't be undone.`)) {
+    const primaryName = (clientList[0]?.company || clientList[0]?.clientName || "");
+    if (confirm(`Delete "${headline || primaryName || "this asset"}"? This can't be undone.`)) {
       onDelete(asset.id);
     }
   };
@@ -443,7 +662,7 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
             <button className="aep-back" onClick={onClose} title="Close (Esc)">← Back</button>
             <div>
               <div className="aep-title">Edit Asset</div>
-              <div className="aep-sub">{headline || company || "—"}</div>
+              <div className="aep-sub">{headline || clientList[0]?.company || clientList[0]?.clientName || "—"}</div>
             </div>
           </div>
           {onPreview && (
@@ -461,16 +680,19 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
               <label>Description</label>
               <textarea className="aep-tx" style={{ minHeight: 80 }} value={description} onChange={e => setDescription(e.target.value)}/>
             </div>
-            <div className="aep-row">
-              <div className="aep-fld"><label>Client name</label><input className="aep-in" value={clientName} onChange={e => setClientName(e.target.value)}/></div>
-              <div className="aep-fld"><label>Company</label><input className="aep-in" value={company} onChange={e => setCompany(e.target.value)}/></div>
-            </div>
             <div className="aep-fld">
-              <label>Type</label>
+              <label>Asset type</label>
               <select className="aep-sel" value={assetType} onChange={e => setAssetType(e.target.value)}>
                 {ASSET_TYPES.map(v => (<option key={v}>{v}</option>))}
               </select>
             </div>
+            {/* Client/company multi-entry — primary by default; admins can
+                add more for compilation videos and reorder so any entry
+                can become primary. */}
+            <ClientList
+              clients={clientList}
+              onChange={setClientList}
+            />
           </div>
 
           {/* ── 2. Filters / metadata ── */}
@@ -698,7 +920,23 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           {/* ── 4. Transcript ── */}
           <div className="aep-section" ref={transcriptSectionRef}>
             <div className="aep-fld">
-              <label>Transcript</label>
+              <div className="aep-transcript-label-row">
+                <label>Transcript</label>
+                <button
+                  type="button"
+                  className="aep-transcript-expand"
+                  onClick={() => setTranscriptExpanded(true)}
+                  title="Open transcript in a larger reader"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M15 3h6v6"/>
+                    <path d="M9 21H3v-6"/>
+                    <path d="M21 3l-7 7"/>
+                    <path d="M3 21l7-7"/>
+                  </svg>
+                  <span>Expand</span>
+                </button>
+              </div>
               {/* Cue banner — appears when admin chose "From transcript"
                   in the quotes chooser. Pulses an animated highlight
                   inside a sample word so admins instantly understand:
@@ -763,6 +1001,20 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
           <button className="aep-del" onClick={del}>Delete</button>
         </div>
       </aside>
+      {/* Transcript expand-view — near-fullscreen reader/editor with
+          larger typography, optional timestamped segments, and a
+          download-as-plain-text button. Edits flow back to the
+          transcript field on the panel. Segments are read-only since
+          they're captured server-side from the source VTT. */}
+      {transcriptExpanded && (
+        <TranscriptExpandModal
+          transcript={transcript}
+          segments={transcriptSegments}
+          headline={headline}
+          onChange={setTranscript}
+          onClose={() => setTranscriptExpanded(false)}
+        />
+      )}
     </>
   );
 }
@@ -801,6 +1053,42 @@ const css = `
 .aep-title-in{font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:-.2px;}
 .aep-in:focus,.aep-sel:focus,.aep-tx:focus{outline:none;border-color:var(--accent);}
 .aep-tx{min-height:120px;resize:vertical;line-height:1.5;}
+/* Transcript label row — label on the left, expand button on the right. */
+.aep-transcript-label-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.aep-transcript-expand{display:inline-flex;align-items:center;gap:6px;background:none;border:1px solid var(--border);color:var(--t2);padding:5px 10px;border-radius:6px;font-family:var(--font);font-size:11.5px;font-weight:600;cursor:pointer;transition:all .12s;}
+.aep-transcript-expand:hover{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
+
+/* Transcript expand modal — near-fullscreen reader/editor. Sits above
+   the panel via portal-like z-index. Read mode shows timestamped
+   segments; edit mode replaces the segments with a big textarea. */
+.aep-tx-modal-backdrop{position:fixed;inset:0;background:rgba(15,15,20,.55);backdrop-filter:blur(2px);z-index:200;animation:aepFade .2s ease-out;}
+.aep-tx-modal{position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(880px,92vw);height:90vh;background:#fff;border-radius:14px;box-shadow:0 32px 80px rgba(0,0,0,.3);z-index:201;display:flex;flex-direction:column;overflow:hidden;animation:aepTxModalIn .22s cubic-bezier(.2,.7,.2,1);font-family:var(--font);}
+@keyframes aepTxModalIn{from{opacity:0;transform:translate(-50%,12px) scale(.985);}to{opacity:1;transform:translate(-50%,0) scale(1);}}
+.aep-tx-modal-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:18px 24px;border-bottom:1px solid var(--border);}
+.aep-tx-modal-title{min-width:0;}
+.aep-tx-modal-eyebrow{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+.aep-tx-modal-headline{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);letter-spacing:-.2px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.aep-tx-modal-actions{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+.aep-tx-mode-switch{display:inline-flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;background:var(--bg);}
+.aep-tx-mode{background:none;border:none;padding:6px 12px;font-family:var(--font);font-size:12px;font-weight:600;color:var(--t3);cursor:pointer;}
+.aep-tx-mode:hover{color:var(--t1);}
+.aep-tx-mode.on{background:#fff;color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);}
+.aep-tx-modal-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:#fff;color:var(--t2);padding:6px 12px;border-radius:7px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
+.aep-tx-modal-btn:hover{border-color:var(--accent);color:var(--accent);}
+.aep-tx-modal-close{background:none;border:none;color:var(--t3);font-size:24px;line-height:1;padding:0 8px;cursor:pointer;border-radius:6px;}
+.aep-tx-modal-close:hover{background:var(--bg2);color:var(--t1);}
+.aep-tx-modal-body{flex:1;overflow-y:auto;background:#fbfaf6;}
+/* Segments view — each entry has a sticky-feeling timestamp on the left
+   and the cue text on the right. Generous line-height; serif body. */
+.aep-tx-segments{max-width:760px;margin:0 auto;padding:36px 40px;display:flex;flex-direction:column;gap:18px;}
+.aep-tx-segment{display:grid;grid-template-columns:72px 1fr;gap:18px;align-items:baseline;}
+.aep-tx-segment-time{font-family:var(--font);font-variant-numeric:tabular-nums;font-size:12px;font-weight:600;color:var(--t4);letter-spacing:.02em;padding-top:5px;}
+.aep-tx-segment-text{font-family:var(--serif);font-size:18px;line-height:1.7;color:var(--t1);user-select:text;}
+.aep-tx-segment-text::selection{background:rgba(99,102,241,.22);}
+/* Edit view — full-bleed textarea matching the segments typography. */
+.aep-tx-modal-editor{width:100%;height:100%;border:none;background:#fbfaf6;font-family:var(--serif);font-size:17px;line-height:1.75;padding:36px 40px;color:var(--t1);resize:none;outline:none;}
+.aep-tx-modal-editor::selection{background:rgba(99,102,241,.22);}
+
 /* Transcript textarea — tuned for long-form reading. Serif typography,
    generous line-height, comfortable padding, off-white background to
    evoke a printed-page feel. No resize handle — the panel itself
@@ -813,9 +1101,12 @@ const css = `
    bar on the left, italic serif text, and a quiet meta row that only
    shows on hover. The textarea is borderless and inherits the callout's
    look so the field reads like an actual pull quote, not a form input. */
-.aep-quotes-list{display:flex;flex-direction:column;gap:18px;max-height:50vh;overflow-y:auto;padding-right:6px;}
+/* padding-top reserves space for the floating opening-quote glyph
+   above the first callout — without it, the list's overflow:auto
+   clips the glyph since it floats above its parent. */
+.aep-quotes-list{display:flex;flex-direction:column;gap:18px;max-height:50vh;overflow-y:auto;padding-right:6px;padding-top:10px;}
 .aep-quote-callout{position:relative;border-left:3px solid var(--accent);padding:6px 8px 6px 18px;transition:opacity .12s,border-color .12s;}
-.aep-quote-callout::before{content:"“";position:absolute;left:8px;top:-6px;font-family:var(--serif);font-size:30px;line-height:1;color:var(--accent);opacity:.35;font-weight:700;pointer-events:none;}
+.aep-quote-callout::before{content:"“";position:absolute;left:8px;top:-2px;font-family:Georgia,"Times New Roman",serif;font-size:34px;line-height:1;color:var(--accent);opacity:.4;font-weight:700;pointer-events:none;}
 .aep-quote-callout.dragging{opacity:.4;border-left-style:dashed;}
 .aep-quote-meta{display:flex;align-items:center;gap:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);margin-bottom:4px;opacity:.55;transition:opacity .15s;}
 .aep-quote-callout:hover .aep-quote-meta,.aep-quote-callout:focus-within .aep-quote-meta{opacity:1;}
@@ -828,16 +1119,35 @@ const css = `
 /* The actual quote textarea — no border, no bg, italic serif. Looks
    like a typeset pull quote; clicking inside reveals a subtle focus
    outline so admins know it's editable without the input chrome. */
-.aep-quote-text{width:100%;border:none;background:transparent;padding:6px 0;font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.55;color:var(--t1);resize:none;overflow:hidden;min-height:32px;outline:none;}
+/* Pull-quote text — distinct, readable editorial serif. Not italic
+   (italic at this size hurts scannability for longer quotes). Slight
+   letter-spacing tightening + comfortable line-height give it the
+   typeset feel without hitting the wall of decorative italic.
+   System-wide so chips/cards/etc. that show pull-quote text inherit
+   this voice via the .aep-quote-text class. */
+.aep-quote-text{width:100%;border:none;background:transparent;padding:6px 0;font-family:Georgia,Charter,"Source Serif Pro",Cambria,"Times New Roman",serif;font-weight:500;font-style:normal;font-size:18px;line-height:1.55;letter-spacing:-.005em;color:var(--t1);resize:none;overflow:hidden;min-height:32px;outline:none;}
 .aep-quote-text:focus{background:var(--bg2);border-radius:5px;padding:6px 8px;}
-.aep-quote-text::placeholder{color:var(--t4);font-style:italic;}
+.aep-quote-text::placeholder{color:var(--t4);font-style:normal;}
+
+/* Client/company multi-row list. Same drag-handle + meta-row pattern
+   as the quote callouts but two inputs side-by-side and lighter chrome
+   (no accent bar — these are inputs, not callouts). */
+.aep-client-list{display:flex;flex-direction:column;gap:14px;}
+.aep-client-row{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:#fff;transition:all .12s;}
+.aep-client-row:hover{border-color:var(--border2);}
+.aep-client-row.dragging{opacity:.4;border-style:dashed;}
+.aep-client-row.drag-over{border-color:var(--accent);background:var(--accentLL);}
+.aep-client-meta{display:flex;align-items:center;gap:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);opacity:.7;transition:opacity .15s;}
+.aep-client-row:hover .aep-client-meta,.aep-client-row:focus-within .aep-client-meta{opacity:1;}
+.aep-client-num{color:var(--t3);}
+.aep-client-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 
 /* Floating drag clone — appears at the cursor while dragging. The
    tilt + shadow give the "lifted card" feel. Pointer-events:none lets
    real items underneath still receive pointer events for the math. */
 .aep-quote-clone{transform:rotate(-1.5deg) scale(1.02);transition:transform .12s cubic-bezier(.2,.7,.2,1);filter:drop-shadow(0 12px 24px rgba(0,0,0,.18)) drop-shadow(0 4px 8px rgba(0,0,0,.08));}
 .aep-quote-callout-clone{background:#fff;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:9px;padding:10px 14px 10px 18px;}
-.aep-quote-text-clone{font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.55;color:var(--t1);white-space:pre-wrap;}
+.aep-quote-text-clone{font-family:Georgia,Charter,"Source Serif Pro",Cambria,"Times New Roman",serif;font-weight:500;font-size:18px;line-height:1.55;letter-spacing:-.005em;color:var(--t1);white-space:pre-wrap;}
 
 /* ── Add quote button + chooser ── */
 .aep-add-quote{display:inline-flex;align-items:center;gap:6px;background:none;border:1px dashed var(--border2);color:var(--t3);padding:8px 14px;border-radius:8px;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;align-self:flex-start;transition:all .12s;}
