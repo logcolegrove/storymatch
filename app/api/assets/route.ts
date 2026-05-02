@@ -66,6 +66,12 @@ type AssetDB = {
   approval_status: string;
   approval_note: string | null;
   approval_recorded_at: string | null;
+  // Job title / role of the primary client (e.g. "Director of IT").
+  // Per-client roles for additional_clients live inside the JSONB blob.
+  client_role: string | null;
+  // Whether the primary pull quote is starred. Per-quote favorite flags
+  // for additional_quotes live inside their JSONB objects.
+  pull_quote_favorite: boolean | null;
   // Vimeo sync conflict-detection markers (auto-sync migration)
   last_synced_title: string | null;
   last_synced_description: string | null;
@@ -132,6 +138,10 @@ type AssetFE = {
   approvalStatus?: string;
   approvalNote?: string | null;
   approvalRecordedAt?: string | null;
+  // Primary client's job title / role.
+  clientRole?: string;
+  // Star/favorite flag for the primary pull quote.
+  pullQuoteFavorite?: boolean;
   // Vimeo sync conflict-detection markers — only set when admin pulls from
   // Vimeo via the drift report (so we know their local edit was overridden).
   lastSyncedTitle?: string | null;
@@ -147,11 +157,14 @@ type AssetFE = {
   // Custom flags — round-tripped as-is (clients send the full array on each
   // edit). Each entry: { id, label, color, note, setByEmail, setAt }.
   customFlags?: unknown;
-  // Additional quotes beyond the primary pullQuote. Array of strings.
-  additionalQuotes?: string[];
-  // Additional client/company pairs beyond the primary clientName +
-  // company. Each: { clientName: string; company: string }.
-  additionalClients?: { clientName: string; company: string }[];
+  // Additional quotes beyond the primary pullQuote. Each entry stores
+  // its own text + favorite flag. Old data may contain plain strings
+  // — dbToFe coerces them to {text, favorite:false} on read.
+  additionalQuotes?: { text: string; favorite?: boolean }[];
+  // Additional client/company pairs beyond the primary client. Each
+  // carries its own role + filter metadata (vertical/geography/size)
+  // so compilation videos can mix companies and verticals cleanly.
+  additionalClients?: { clientName: string; company: string; role?: string; vertical?: string; geography?: string; companySize?: string }[];
   // Read-only timestamped transcript segments (parsed from source VTT).
   // Empty when source had no captions or asset hasn't been synced since
   // segments were introduced.
@@ -196,9 +209,33 @@ function dbToFe(r: AssetDB): AssetFE {
     freshnessExceptionSetByEmail: r.freshness_exception_set_by_email,
     freshnessExceptionSetAt: r.freshness_exception_set_at,
     customFlags: Array.isArray(r.custom_flags) ? r.custom_flags : [],
-    additionalQuotes: Array.isArray(r.additional_quotes) ? (r.additional_quotes as string[]) : [],
-    additionalClients: Array.isArray(r.additional_clients) ? (r.additional_clients as { clientName: string; company: string }[]) : [],
+    // Quotes can be old strings or new {text, favorite} objects in DB.
+    // Coerce both shapes to the new shape so the FE only deals with one.
+    additionalQuotes: (Array.isArray(r.additional_quotes) ? r.additional_quotes : []).map((q: unknown) => {
+      if (typeof q === "string") return { text: q, favorite: false };
+      if (q && typeof q === "object") {
+        const o = q as Record<string, unknown>;
+        return { text: typeof o.text === "string" ? o.text : "", favorite: !!o.favorite };
+      }
+      return { text: "", favorite: false };
+    }),
+    // Additional clients — older data may only have {clientName, company}.
+    // Fill in missing fields with empty strings so the FE always sees the
+    // full shape.
+    additionalClients: (Array.isArray(r.additional_clients) ? r.additional_clients : []).map((c: unknown) => {
+      const o = (c && typeof c === "object" ? c : {}) as Record<string, unknown>;
+      return {
+        clientName: typeof o.clientName === "string" ? o.clientName : "",
+        company: typeof o.company === "string" ? o.company : "",
+        role: typeof o.role === "string" ? o.role : "",
+        vertical: typeof o.vertical === "string" ? o.vertical : "",
+        geography: typeof o.geography === "string" ? o.geography : "",
+        companySize: typeof o.companySize === "string" ? o.companySize : "",
+      };
+    }),
     transcriptSegments: Array.isArray(r.transcript_segments) ? (r.transcript_segments as { startSeconds: number; text: string }[]) : [],
+    clientRole: r.client_role || "",
+    pullQuoteFavorite: !!r.pull_quote_favorite,
   };
 }
 
@@ -253,9 +290,12 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUser
   // Additional quotes — array of strings beyond the primary pull_quote.
   // Pass through; client-side validates that entries are strings.
   if (a.additionalQuotes !== undefined) o.additional_quotes = a.additionalQuotes;
-  // Additional clients — array of {clientName, company} objects beyond
-  // the primary client_name/company. Same pass-through pattern.
+  // Additional clients — array of full per-client objects beyond the
+  // primary. Pass through; the JSONB column is shape-agnostic.
   if (a.additionalClients !== undefined) o.additional_clients = a.additionalClients;
+  // Primary client's role + primary quote favorite flag.
+  if (a.clientRole !== undefined) o.client_role = a.clientRole;
+  if (a.pullQuoteFavorite !== undefined) o.pull_quote_favorite = a.pullQuoteFavorite;
   // transcript_segments is sync-derived (server-only) — clients never
   // post it. Intentionally not mapped here so a stray FE write can't
   // overwrite the parsed segments captured by source-sync.

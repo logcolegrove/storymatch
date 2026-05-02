@@ -110,14 +110,18 @@ interface Asset {
   // don't fit approval/client/freshness (e.g. "comments must be disabled,"
   // "logo update pending"). Each contributes to the cleared signal.
   customFlags?: CustomFlag[];
-  // Additional pull quotes beyond the primary `pullQuote`. Order matters
-  // — display in the order the array gives. Empty/missing means only the
-  // primary quote (if any) is used.
-  additionalQuotes?: string[];
-  // Additional client/company pairs beyond the primary clientName +
-  // company. First entry is conventionally the primary. Used for
+  // Additional pull quotes beyond the primary `pullQuote`. Each carries
+  // its own favorite flag. Old data may contain plain strings — server
+  // coerces to {text, favorite} on read.
+  additionalQuotes?: { text: string; favorite?: boolean }[];
+  // Additional client/company entries beyond the primary, each with its
+  // own role + filter metadata (vertical/geography/size). Used for
   // compilation videos featuring multiple speakers/companies.
-  additionalClients?: { clientName: string; company: string }[];
+  additionalClients?: { clientName: string; company: string; role?: string; vertical?: string; geography?: string; companySize?: string }[];
+  // Primary client's job title / role.
+  clientRole?: string;
+  // Star/favorite for the primary pull quote.
+  pullQuoteFavorite?: boolean;
   // Read-only timestamped transcript segments. Populated by source-sync
   // from the captured VTT. Empty when the asset was synced before
   // segment capture was added — admin can manual-sync to backfill.
