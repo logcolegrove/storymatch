@@ -730,8 +730,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lc-pill.unknown{background:var(--bg2);color:var(--t3);border-color:var(--border2);}
 
 /* ── VIEW MODE TOGGLE (admin only) ── */
-.view-toggle{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;background:#fff;}
-.view-toggle-btn{padding:6px 9px;background:none;border:none;cursor:pointer;color:var(--t3);display:grid;place-items:center;}
+.view-toggle{display:flex;height:32px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff;}
+.view-toggle-btn{height:100%;padding:0 10px;background:none;border:none;cursor:pointer;color:var(--t3);display:grid;place-items:center;}
 .view-toggle-btn.on{background:var(--accentLL);color:var(--accent);}
 .view-toggle-btn:hover:not(.on){background:var(--bg2);}
 .view-toggle-btn+.view-toggle-btn{border-left:1px solid var(--border);}
@@ -4924,7 +4924,7 @@ export default function App(){
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
   // Admins (in admin mode) always see archived assets greyed out inline.
   // No toggle needed — library is one source of truth.
-  const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
+  const[viewMode,setViewMode]=useState<"grid"|"list">("list"); // admin-only; sales/public always see grid
   // Featured quotes powering the hero rotator. Fetched on mount and
   // refreshed after any save that could change the featured set
   // (asset edit, standalone quote create, rotation curation).
