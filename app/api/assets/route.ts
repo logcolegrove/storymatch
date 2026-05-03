@@ -325,14 +325,62 @@ export async function GET(req: NextRequest) {
   const ctx = await getCurrentUserOrg(req);
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabaseAdmin
-    .from("assets")
-    .select("*")
-    .eq("org_id", ctx.orgId)
-    .order("date_created", { ascending: false });
+  // Fetch assets + their quotes from the new top-level quotes
+  // table in parallel. The quotes table is the source of truth for
+  // pullQuote + additionalQuotes after Phase 2 — but we still fall
+  // back to the JSONB shape when the quotes table has no rows for
+  // an asset (covers the brief window between any legacy asset
+  // changes and the dual-write reaching that row).
+  const [assetsRes, quotesRes] = await Promise.all([
+    supabaseAdmin
+      .from("assets")
+      .select("*")
+      .eq("org_id", ctx.orgId)
+      .order("date_created", { ascending: false }),
+    supabaseAdmin
+      .from("quotes")
+      .select("asset_id, text, is_favorite, position_within_parent")
+      .eq("org_id", ctx.orgId)
+      .not("asset_id", "is", null)
+      .order("position_within_parent", { ascending: true, nullsFirst: false }),
+  ]);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json((data as AssetDB[]).map(dbToFe));
+  if (assetsRes.error) return NextResponse.json({ error: assetsRes.error.message }, { status: 500 });
+  if (quotesRes.error) {
+    // Quotes-fetch failure isn't fatal — log and fall through using
+    // the JSONB shape so users keep seeing their quotes.
+    console.error("[assets GET] quotes fetch failed, falling back to JSONB:", quotesRes.error);
+  }
+
+  // Group quotes by asset_id, already ordered by position.
+  const byAsset = new Map<string, { text: string; favorite: boolean }[]>();
+  for (const q of (quotesRes.data || [])) {
+    const aid = q.asset_id as string | null;
+    if (!aid) continue;
+    if (!byAsset.has(aid)) byAsset.set(aid, []);
+    byAsset.get(aid)!.push({
+      text: (q.text as string) || "",
+      favorite: !!q.is_favorite,
+    });
+  }
+
+  // Convert each row to FE shape, then override pullQuote /
+  // pullQuoteFavorite / additionalQuotes from the quotes-table data
+  // when present. If the quotes table has no rows for an asset, the
+  // dbToFe-derived JSONB values stay (transitional fallback).
+  const out = (assetsRes.data as AssetDB[]).map(r => {
+    const fe = dbToFe(r);
+    const fromTable = byAsset.get(r.id);
+    if (fromTable && fromTable.length > 0) {
+      const [primary, ...rest] = fromTable;
+      fe.pullQuote = primary.text;
+      fe.pullQuoteFavorite = !!primary.favorite;
+      fe.additionalQuotes = rest;
+    }
+    return fe;
+  });
+
+  return NextResponse.json(out);
 }
 
 // ───────────────────────────────────────────────────────────
