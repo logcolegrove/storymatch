@@ -637,20 +637,34 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 
 /* ── GRID ── */
 .lib-wrap{max-width:1360px;margin:0 auto;padding:20px 32px 60px;width:100%;}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;}
+/* Grid is 3-up at desktop, collapses to 2-up then 1-up. Multiples of 6
+   align cleanly at every breakpoint (lcm of 2 and 3). */
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:38px 22px;}
+@media (max-width:1100px){.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:32px 18px;}}
+@media (max-width:680px){.grid{grid-template-columns:1fr;gap:28px;}}
 
-/* ── THUMBNAIL CARD ── */
-.card{position:relative;border-radius:var(--r);overflow:hidden;background:#fff;cursor:pointer;transition:all .35s cubic-bezier(.4,0,.2,1);}
-.card:hover{transform:translateY(-4px);box-shadow:0 20px 50px rgba(0,0,0,.1);}
-.card-thumb{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;background:var(--bg3);}
-.card-thumb img{width:100%;height:100%;object-fit:cover;transition:transform .5s cubic-bezier(.4,0,.2,1);filter:brightness(.97);}
-.card:hover .card-thumb img{transform:scale(1.05);filter:brightness(1);}
+/* ── THUMBNAIL CARD — disconnected thumbnail + title.
+   No card chrome wraps the pair; the thumbnail is the visual element
+   and gets the shadow lift on hover. Title sits below on the page bg. */
+.card{position:relative;background:transparent;cursor:pointer;}
+.card-thumb{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;background:var(--bg3);border-radius:var(--r);box-shadow:0 1px 2px rgba(0,0,0,.04);transition:box-shadow .4s cubic-bezier(.4,0,.2,1);}
+.card:hover .card-thumb{box-shadow:0 18px 44px rgba(0,0,0,.13),0 6px 14px rgba(0,0,0,.06);}
+.card-thumb img{width:100%;height:100%;object-fit:cover;transition:transform .7s cubic-bezier(.2,.8,.2,1),filter .35s ease;filter:brightness(.97);}
+.card:hover .card-thumb img{transform:scale(1.045);filter:brightness(1.03);}
+
+/* Watch / Read corner badge — frosted glass, sits on the thumbnail,
+   doubles as duration / read-time. The only visible cue distinguishing
+   a video asset from a written case study at grid-glance scale. */
+.card-badge{position:absolute;bottom:8px;right:8px;background:rgba(20,20,28,.55);color:rgba(255,255,255,.94);font-size:10.5px;padding:3px 7px;border-radius:4px;font-weight:500;display:inline-flex;align-items:center;gap:4px;letter-spacing:.01em;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);font-family:var(--font);}
 /* .play-over / .play-circle / .card-overlay rules removed — overlays were
    misleading (clicking opens the landing page, not the video) and the CTA
    is now reached via the "watch →" affordance in the card body below. */
-.card-body{padding:12px 14px;}
-.card-headline{font-size:13.5px;font-weight:600;color:var(--t1);line-height:1.35;margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
-.card-co{font-size:11.5px;font-weight:500;color:var(--t3);display:flex;align-items:center;justify-content:space-between;}
+/* Title only — no client name, no "watch →" arrow, no governance dots
+   in grid view. Bigger editorial headline; status / cleared dots live
+   in list view where management actually happens. */
+.card-body{padding:14px 4px 0;}
+.card-headline{font-size:17px;font-weight:600;color:var(--t1);line-height:1.38;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;letter-spacing:-.012em;margin:0;}
+.card-co{display:none;}
 .card-co-name{display:flex;align-items:center;gap:7px;}
 .vdot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
 /* Cleared-status colors for the in-card dot — match the list-view cl-circle
@@ -1247,9 +1261,22 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
       <div className="card-thumb">
         {aiData&&<div className="card-rank">{aiData.rank}</div>}
         <img src={thumb} alt={asset.company} loading="lazy"/>
-        {/* Play overlay + bottom hover overlay removed — clicking opens the
-            landing page (not the video), and the CTA is already visible
-            below the thumbnail in the card body. */}
+        {/* Watch / Read badge — the only visible signal distinguishing
+            video from written case study at grid-glance scale. Frosted
+            glass over the thumbnail's bottom-right. */}
+        <div className="card-badge">
+          {isV ? (
+            <>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20"/></svg>
+              <span>Watch</span>
+            </>
+          ) : (
+            <>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span>Read</span>
+            </>
+          )}
+        </div>
       </div>
       <div className="card-body">
         <div className="card-headline" title={asset.headline||"Untitled"}>{asset.headline||"Untitled"}</div>
