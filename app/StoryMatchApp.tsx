@@ -4953,6 +4953,35 @@ export default function App(){
   // Suppress card click for ~150ms after a drop so the pointer-up
   // doesn't navigate to the asset detail.
   const cardDragJustEnded = React.useRef(false);
+
+  // ── Rotator drag state ───────────────────────────────────────
+  // Admin can drag the featured-quote rotator to a different slot
+  // in the grid sequence. Position is "after how many cards" — 3
+  // means after the first row of three cards (matches the original
+  // hard-coded behaviour). Persisted to localStorage per-admin.
+  const [rotatorAfterIdx, setRotatorAfterIdx] = React.useState<number>(() => {
+    if (typeof window === "undefined") return 3;
+    const raw = window.localStorage.getItem("storymatch.rotatorAfterIdx");
+    const n = raw == null ? NaN : parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 3;
+  });
+  const persistRotatorAfterIdx = React.useCallback((n: number) => {
+    setRotatorAfterIdx(n);
+    try { window.localStorage.setItem("storymatch.rotatorAfterIdx", String(n)); } catch {}
+  }, []);
+  type RotatorDrag = {
+    pointerX: number;
+    pointerY: number;
+    initialX: number;
+    initialY: number;
+    rotatorRect: DOMRect;
+    cardRects: DOMRect[];
+    insertIdx: number;
+  };
+  const [rotatorDrag, setRotatorDrag] = React.useState<RotatorDrag | null>(null);
+  const rotatorDragRef = React.useRef<RotatorDrag | null>(null);
+  React.useEffect(() => { rotatorDragRef.current = rotatorDrag; }, [rotatorDrag]);
+  const rotatorElRef = React.useRef<HTMLDivElement | null>(null);
   // Library bar: which dropdown is open (Filter, Sort, or +Add) and the
   // current sort. Null = nothing open.
   type SortBy = "custom" | "recent" | "oldest" | "az" | "za";
@@ -5646,10 +5675,12 @@ export default function App(){
     return best;
   }, []);
 
-  // Pointer-down on a visible card. Captures rects of every visible
-  // card so we can compute insert positions against a frozen layout.
-  // Threshold prevents accidental drags on a click — only starts
-  // after the pointer has moved 5px from the press location.
+  // Pointer-down on a visible card. Captures rects + lifts to the
+  // active drag pipeline IMMEDIATELY — a small in-place click
+  // without movement is treated as a no-op when pointerup fires
+  // (no reorder if insertIdx === fromIdx, and the card click handler
+  // gets suppressed by cardDragJustEnded only when there was a real
+  // drop). One synchronous step, no threshold dance.
   const onCardPointerDown = (assetId: string, fromIdx: number) => (e: React.PointerEvent) => {
     if (!isAdmin || !adminMode) return;
     if (e.button !== 0) return;
@@ -5657,41 +5688,21 @@ export default function App(){
     // dot menus, etc.). The card body is draggable; chrome is not.
     const target = e.target as HTMLElement;
     if (target.closest("input,button,a,textarea,select,.card-check,.card-share,.card-dots")) return;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const visibleIds = Array.from(cardElsRef.current.keys());
-    const onMoveBeforeThreshold = (mv: PointerEvent) => {
-      const dx = mv.clientX - startX;
-      const dy = mv.clientY - startY;
-      if (dx * dx + dy * dy < 25) return; // threshold ~5px
-      // Begin drag. Capture rects now (after threshold so layout
-      // hasn't shifted) and lift to the active drag pipeline.
-      const rects = visibleIds.map(id => {
-        const el = cardElsRef.current.get(id);
-        return el ? el.getBoundingClientRect() : new DOMRect();
-      });
-      const fromRect = rects[fromIdx] || new DOMRect();
-      setCardDrag({
-        assetId,
-        fromIdx,
-        pointerX: mv.clientX,
-        pointerY: mv.clientY,
-        initialX: startX,
-        initialY: startY,
-        width: fromRect.width,
-        height: fromRect.height,
-        rects,
-        insertIdx: fromIdx,
-      });
-      window.removeEventListener("pointermove", onMoveBeforeThreshold);
-      window.removeEventListener("pointerup", onUpBeforeThreshold);
-    };
-    const onUpBeforeThreshold = () => {
-      window.removeEventListener("pointermove", onMoveBeforeThreshold);
-      window.removeEventListener("pointerup", onUpBeforeThreshold);
-    };
-    window.addEventListener("pointermove", onMoveBeforeThreshold);
-    window.addEventListener("pointerup", onUpBeforeThreshold);
+    e.preventDefault();
+    const rects = Array.from(cardElsRef.current.values()).map(el => el.getBoundingClientRect());
+    const fromRect = rects[fromIdx] || new DOMRect();
+    setCardDrag({
+      assetId,
+      fromIdx,
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      initialX: e.clientX,
+      initialY: e.clientY,
+      width: fromRect.width,
+      height: fromRect.height,
+      rects,
+      insertIdx: fromIdx,
+    });
   };
 
   // While a card-drag is active, track the pointer + recompute the
@@ -5708,11 +5719,12 @@ export default function App(){
       const cur = cardDragRef.current;
       setCardDrag(null);
       if (!cur) return;
+      // Only suppress the upcoming click + perform reorder when the
+      // pointer actually moved AND landed on a different slot. A
+      // simple in-place click should still navigate to the asset.
+      if (cur.insertIdx === cur.fromIdx) return;
       cardDragJustEnded.current = true;
       setTimeout(() => { cardDragJustEnded.current = false; }, 200);
-      if (cur.insertIdx === cur.fromIdx) return;
-      // Build the new visible order by splicing the dragged id into
-      // the insert slot.
       const visibleIds = Array.from(cardElsRef.current.keys());
       const next = [...visibleIds];
       const [moved] = next.splice(cur.fromIdx, 1);
@@ -5731,6 +5743,68 @@ export default function App(){
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardDrag?.assetId]);
+
+  // ── Rotator drag handlers ──────────────────────────────────────
+  // Pointer down on the rotator's bounding box → capture all card
+  // rects (so we can compute drop targets relative to them) and the
+  // rotator's own rect (for the floating clone).
+  const onRotatorPointerDown = (e: React.PointerEvent) => {
+    if (!isAdmin || !adminMode) return;
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    // Pagination tiles, CTA, "Manage rotation" button — all interactive
+    // children. Don't start a drag from them.
+    if (target.closest("button,a,input,select,textarea")) return;
+    if (!rotatorElRef.current) return;
+    e.preventDefault();
+    const cardRects = Array.from(cardElsRef.current.values()).map(el => el.getBoundingClientRect());
+    setRotatorDrag({
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      initialX: e.clientX,
+      initialY: e.clientY,
+      rotatorRect: rotatorElRef.current.getBoundingClientRect(),
+      cardRects,
+      insertIdx: rotatorAfterIdx,
+    });
+  };
+
+  React.useEffect(() => {
+    if (!rotatorDrag) return;
+    const onMove = (e: PointerEvent) => {
+      const cur = rotatorDragRef.current;
+      if (!cur) return;
+      // Find the card whose vertical centre is closest to the
+      // pointer; if pointer is above the centre, rotator lands
+      // BEFORE it (so insertIdx = i). Otherwise AFTER (insertIdx = i+1).
+      let insertIdx = cur.cardRects.length;
+      let bestDist = Infinity;
+      for (let i = 0; i < cur.cardRects.length; i++) {
+        const r = cur.cardRects[i];
+        const cy = r.top + r.height / 2;
+        const d = Math.abs(e.clientY - cy);
+        if (d < bestDist) { bestDist = d; insertIdx = e.clientY < cy ? i : i + 1; }
+      }
+      setRotatorDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx });
+    };
+    const onUp = () => {
+      const cur = rotatorDragRef.current;
+      setRotatorDrag(null);
+      if (!cur) return;
+      if (cur.insertIdx !== rotatorAfterIdx) {
+        persistRotatorAfterIdx(cur.insertIdx);
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rotatorDrag?.initialY]);
 
   // Persist new positions after drop. Optimistically updates local
   // assets state, fires the bulk PATCH, and falls back if the
@@ -6435,8 +6509,12 @@ export default function App(){
                   //     feel natural (otherwise it's just one card +
                   //     a hero, which looks unbalanced).
                   const shouldShowRotator = !smResults && featuredQuotes.length > 0 && displayAssets.length >= 3;
-                  const headAssets = shouldShowRotator ? displayAssets.slice(0, 3) : displayAssets;
-                  const tailAssets = shouldShowRotator ? displayAssets.slice(3) : [];
+                  // Clamp the admin-chosen rotator slot to the
+                  // current asset count so it doesn't fall off the
+                  // end after assets are filtered out.
+                  const rotatorSlot = Math.min(Math.max(rotatorAfterIdx, 0), displayAssets.length);
+                  const headAssets = shouldShowRotator ? displayAssets.slice(0, rotatorSlot) : displayAssets;
+                  const tailAssets = shouldShowRotator ? displayAssets.slice(rotatorSlot) : [];
                   // Enrich featured quotes with their parent asset's
                   // headline + videoUrl so the CTA can route correctly.
                   const enriched: FeaturedQuote[] = featuredQuotes.map(q => {
@@ -6457,11 +6535,52 @@ export default function App(){
                   // Refresh the card-elements map every render so the
                   // drag-from-card logic can measure rects accurately.
                   cardElsRef.current = new Map();
+                  // While dragging, compute each card's new index in
+                  // the visible array so we can translate it from its
+                  // DOM position to its predicted post-drop position.
+                  // shiftFor: if pointer is moving the dragged card
+                  // forward (insertIdx > fromIdx), every card whose
+                  // DOM index is in (fromIdx, insertIdx] shifts back
+                  // by 1 to make room. Symmetric the other direction.
+                  const shiftFor = (idx: number, fromIdx: number, insertIdx: number) => {
+                    if (idx === fromIdx) return idx;
+                    if (insertIdx === fromIdx) return idx;
+                    if (insertIdx > fromIdx) {
+                      if (idx > fromIdx && idx <= insertIdx) return idx - 1;
+                    } else {
+                      if (idx >= insertIdx && idx < fromIdx) return idx + 1;
+                    }
+                    return idx;
+                  };
+                  // Distance the pointer has moved since drag start.
+                  // Tiny twitches shouldn't trigger the visual drag
+                  // mode (clone, hidden original). Beyond ~3px = real
+                  // drag.
+                  const pointerMoved = cardDrag
+                    ? Math.abs(cardDrag.pointerX - cardDrag.initialX) > 3
+                      || Math.abs(cardDrag.pointerY - cardDrag.initialY) > 3
+                    : false;
                   const renderGrid = (items: Asset[], offset: number) => (
                     <div className="grid">
                       {items.map((a, i) => {
                         const idx = offset + i;
-                        const isDragging = cardDrag?.assetId === a.id;
+                        const isDragging = cardDrag?.assetId === a.id && pointerMoved;
+                        // Compute shift offset for cards that need to
+                        // make room. Uses the cached rects from drag
+                        // start so the maths stays stable across the
+                        // re-renders triggered by setCardDrag.
+                        let dx = 0, dy = 0;
+                        if (cardDrag && pointerMoved && cardDrag.assetId !== a.id) {
+                          const newIdx = shiftFor(idx, cardDrag.fromIdx, cardDrag.insertIdx);
+                          if (newIdx !== idx) {
+                            const oldR = cardDrag.rects[idx];
+                            const newR = cardDrag.rects[newIdx];
+                            if (oldR && newR) {
+                              dx = newR.left - oldR.left;
+                              dy = newR.top - oldR.top;
+                            }
+                          }
+                        }
                         return (
                           <div
                             key={a.id}
@@ -6473,6 +6592,8 @@ export default function App(){
                             style={{
                               cursor: isAdmin && adminMode ? "grab" : undefined,
                               visibility: isDragging ? "hidden" : undefined,
+                              transform: dx || dy ? `translate(${dx}px, ${dy}px)` : undefined,
+                              transition: cardDrag ? "transform .25s cubic-bezier(.2,.7,.2,1)" : undefined,
                             }}
                           >
                             {renderAssetCard(a)}
@@ -6532,12 +6653,21 @@ export default function App(){
                     <>
                       {renderGrid(headAssets, 0)}
                       {shouldShowRotator && (
-                        <FeaturedQuoteRotator
-                          quotes={enriched}
-                          onCtaClick={onCtaClick}
-                          onCurate={isAdmin && adminMode ? () => setRotationPanelOpen(true) : undefined}
-                          intervalSec={rotatorIntervalSec}
-                        />
+                        <div
+                          ref={rotatorElRef}
+                          onPointerDown={isAdmin && adminMode ? onRotatorPointerDown : undefined}
+                          style={{
+                            cursor: isAdmin && adminMode ? "grab" : undefined,
+                            visibility: rotatorDrag ? "hidden" : undefined,
+                          }}
+                        >
+                          <FeaturedQuoteRotator
+                            quotes={enriched}
+                            onCtaClick={onCtaClick}
+                            onCurate={isAdmin && adminMode ? () => setRotationPanelOpen(true) : undefined}
+                            intervalSec={rotatorIntervalSec}
+                          />
+                        </div>
                       )}
                       {tailAssets.length > 0 && renderGrid(tailAssets, headAssets.length)}
                     </>
@@ -6595,41 +6725,110 @@ export default function App(){
             onOverride={overrideAndPublish}
           />
         )}
-        {/* Floating drag clone — renders the in-flight card following
-            the pointer. Pure visual; pointer events pass through so
-            the underlying drop logic can still measure rects. */}
-        {cardDrag && typeof document !== "undefined" && createPortal(
-          (() => {
-            const fromRect = cardDrag.rects[cardDrag.fromIdx];
-            if (!fromRect) return null;
-            const dx = cardDrag.pointerX - cardDrag.initialX;
-            const dy = cardDrag.pointerY - cardDrag.initialY;
-            const draggedAsset = displayAssets.find(a => a.id === cardDrag.assetId);
-            return (
-              <div
-                style={{
+        {/* Rotator drag — floating ghost + drop-line indicator. The
+            ghost is a simplified placeholder rather than a live
+            re-render of the rotator (re-rendering would create a
+            duplicate timer + state and look weird). */}
+        {rotatorDrag && typeof document !== "undefined" && createPortal(
+          <>
+            <div
+              style={{
+                position: "fixed",
+                left: rotatorDrag.rotatorRect.left + (rotatorDrag.pointerX - rotatorDrag.initialX),
+                top: rotatorDrag.rotatorRect.top + (rotatorDrag.pointerY - rotatorDrag.initialY),
+                width: rotatorDrag.rotatorRect.width,
+                height: rotatorDrag.rotatorRect.height,
+                pointerEvents: "none",
+                zIndex: 300,
+                opacity: 0.9,
+                transform: "rotate(.6deg)",
+                background: "#f3e3d9",
+                border: "1px solid rgba(0,0,0,.06)",
+                borderRadius: 14,
+                boxShadow: "0 24px 48px rgba(0,0,0,.22), 0 6px 16px rgba(0,0,0,.08)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontFamily: "var(--serif)",
+                fontStyle: "italic",
+                fontSize: 32,
+                color: "#A5563A",
+              }}
+            >
+              <span style={{ fontSize: 96, lineHeight: .6, marginRight: 20 }}>“</span>
+              <span style={{ fontSize: 22, color: "#3a2a22" }}>Featured rotation</span>
+            </div>
+            {/* Drop-line indicator — purple line where the rotator
+                will land if released here. */}
+            {(() => {
+              const cardRects = rotatorDrag.cardRects;
+              if (cardRects.length === 0) return null;
+              const i = rotatorDrag.insertIdx;
+              const lineY = i === 0
+                ? cardRects[0].top - 8
+                : i >= cardRects.length
+                  ? cardRects[cardRects.length - 1].bottom + 8
+                  : (cardRects[i - 1].bottom + cardRects[i].top) / 2;
+              const left = cardRects[0].left;
+              const right = cardRects.reduce((m, r) => Math.max(m, r.right), 0);
+              return (
+                <div style={{
                   position: "fixed",
-                  left: fromRect.left + dx,
-                  top: fromRect.top + dy,
-                  width: cardDrag.width,
+                  left,
+                  top: lineY - 2,
+                  width: right - left,
+                  height: 4,
+                  background: "var(--accent)",
+                  borderRadius: 2,
                   pointerEvents: "none",
-                  zIndex: 300,
-                  opacity: 0.92,
-                  transform: "rotate(1.5deg)",
-                  boxShadow: "0 24px 48px rgba(0,0,0,.18)",
-                  borderRadius: "var(--r)",
-                }}
-              >
-                {draggedAsset ? (
-                  draggedAsset.assetType === "Quote"
-                    ? <QCard asset={draggedAsset} onClick={() => {}} aiData={null} onCopyQuote={copyQuote} isSelected={false}/>
-                    : <TCard asset={draggedAsset} onClick={() => {}} aiData={null} onCopyQuote={copyQuote} isSelected={false}/>
-                ) : null}
-              </div>
-            );
-          })(),
+                  zIndex: 299,
+                  boxShadow: "0 0 0 4px rgba(109,40,217,.14)",
+                }}/>
+              );
+            })()}
+          </>,
           document.body,
         )}
+        {/* Floating drag clone — renders the in-flight card following
+            the pointer. Solid white background under the whole clone
+            so the title text doesn't bleed through onto the page.
+            Only renders after the pointer has actually moved (>3px),
+            so a click without movement doesn't briefly flash a clone. */}
+        {cardDrag && typeof document !== "undefined" && (() => {
+          const moved = Math.abs(cardDrag.pointerX - cardDrag.initialX) > 3
+            || Math.abs(cardDrag.pointerY - cardDrag.initialY) > 3;
+          if (!moved) return null;
+          const fromRect = cardDrag.rects[cardDrag.fromIdx];
+          if (!fromRect) return null;
+          const dx = cardDrag.pointerX - cardDrag.initialX;
+          const dy = cardDrag.pointerY - cardDrag.initialY;
+          const draggedAsset = displayAssets.find(a => a.id === cardDrag.assetId);
+          return createPortal(
+            <div
+              style={{
+                position: "fixed",
+                left: fromRect.left + dx,
+                top: fromRect.top + dy,
+                width: cardDrag.width,
+                pointerEvents: "none",
+                zIndex: 300,
+                opacity: 0.95,
+                transform: "rotate(1.5deg)",
+                background: "#fff",
+                borderRadius: "var(--r)",
+                boxShadow: "0 24px 48px rgba(0,0,0,.22), 0 6px 16px rgba(0,0,0,.08)",
+                padding: 6,
+              }}
+            >
+              {draggedAsset ? (
+                draggedAsset.assetType === "Quote"
+                  ? <QCard asset={draggedAsset} onClick={() => {}} aiData={null} onCopyQuote={copyQuote} isSelected={false}/>
+                  : <TCard asset={draggedAsset} onClick={() => {}} aiData={null} onCopyQuote={copyQuote} isSelected={false}/>
+              ) : null}
+            </div>,
+            document.body,
+          );
+        })()}
       </div>
     </React.Fragment>
   );
