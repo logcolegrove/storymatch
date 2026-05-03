@@ -732,6 +732,32 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lib-selectall:hover{color:var(--t1);}
 .lib-count{font-family:var(--font);font-size:12.5px;color:var(--t3);padding-left:14px;border-left:1px solid var(--border);}
 
+/* Right side of the lib bar: Filter / Sort / view toggle / + Add. */
+.lib-bar-r{display:flex;align-items:center;gap:10px;}
+.lib-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t1);font-family:var(--font);font-size:12.5px;font-weight:500;cursor:pointer;transition:border-color .12s,background .12s;}
+.lib-btn:hover{border-color:var(--border2);}
+.lib-btn.on{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
+.lib-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+.lib-btn.primary:hover{background:var(--accent2);border-color:var(--accent2);}
+.lib-btn .lib-btn-count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:8px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;margin-left:4px;}
+
+/* Popovers anchored under the lib-bar buttons. Position via .lib-btn-wrap
+   parent (relative). Opens with a quick fade. */
+.lib-btn-wrap{position:relative;}
+.lib-menu{position:absolute;top:calc(100% + 6px);right:0;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.1);min-width:200px;z-index:40;padding:6px;animation:libMenuIn .14s cubic-bezier(.4,0,.2,1);}
+@keyframes libMenuIn{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
+.lib-menu-section{padding:6px 8px 4px;font-size:10.5px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;}
+.lib-menu-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--t1);user-select:none;}
+.lib-menu-item:hover{background:var(--bg2);}
+.lib-menu-item.on{background:var(--accentLL);color:var(--accent);font-weight:600;}
+.lib-menu-item.disabled{color:var(--t4);cursor:not-allowed;}
+.lib-menu-item.disabled:hover{background:transparent;}
+.lib-menu-item .lib-menu-check{width:14px;height:14px;flex-shrink:0;color:var(--accent);visibility:hidden;}
+.lib-menu-item.on .lib-menu-check{visibility:visible;}
+.lib-menu-divider{height:1px;background:var(--border);margin:4px -6px;}
+.lib-menu-clear{padding:6px 10px;color:var(--t3);font-size:12px;cursor:pointer;border-top:1px solid var(--border);margin-top:4px;}
+.lib-menu-clear:hover{color:var(--accent);}
+
 /* ── LIST VIEW ── */
 /* Allow horizontal scroll instead of squishing rows when the viewport gets
    narrow. Rows have a min-width below so columns stay readable. */
@@ -4886,6 +4912,11 @@ export default function App(){
   // Admins (in admin mode) always see archived assets greyed out inline.
   // No toggle needed — library is one source of truth.
   const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
+  // Library bar: which dropdown is open (Filter, Sort, or +Add) and the
+  // current sort. Null = nothing open.
+  type SortBy = "recent" | "oldest" | "az" | "za";
+  const[sortBy,setSortBy]=useState<SortBy>("recent");
+  const[libMenuOpen,setLibMenuOpen]=useState<"filter"|"sort"|"add"|null>(null);
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
@@ -5516,6 +5547,21 @@ export default function App(){
     });
   }
   const anyFilter=filters.vertical.length>0||filters.assetType.length>0;
+  // Apply sort (skip when StoryMatch is showing AI-ranked results; their
+  // order is the relevance ranking and shouldn't be reshuffled).
+  if (!smResults) {
+    const cmpDate = (a: Asset, b: Asset) => {
+      const da = new Date(a.dateCreated || 0).getTime();
+      const db = new Date(b.dateCreated || 0).getTime();
+      return db - da;
+    };
+    const cmpHeadline = (a: Asset, b: Asset) =>
+      (a.headline || "").localeCompare(b.headline || "", undefined, { sensitivity: "base" });
+    if (sortBy === "recent") displayAssets = [...displayAssets].sort(cmpDate);
+    else if (sortBy === "oldest") displayAssets = [...displayAssets].sort((a, b) => -cmpDate(a, b));
+    else if (sortBy === "az") displayAssets = [...displayAssets].sort(cmpHeadline);
+    else if (sortBy === "za") displayAssets = [...displayAssets].sort((a, b) => -cmpHeadline(a, b));
+  }
   const detailAsset=route.page==="detail"?assets.find(a=>a.id===route.id)||null:null;
 
   if(route.page==="detail"){
@@ -5934,61 +5980,8 @@ export default function App(){
               </div>
             )}
 
-            {!smResults && (
-              <div
-                className="filters-wrap"
-                onClick={e=>{if(!(e.target as HTMLElement).closest('.filter-group'))setOpenFilter(null);}}
-              >
-                {([
-                  {k:"vertical" as keyof Filters,label:"Industry",opts:VERTICALS.filter(v=>v!=="All")},
-                  {k:"assetType" as keyof Filters,label:"Type",opts:ASSET_TYPES.filter(v=>v!=="All")}
-                ]).map(f=>{
-                  const sel=filters[f.k];
-                  const isOpen=openFilter===f.k;
-                  const display=sel.length===0?"All":sel.length===1?sel[0]:`${sel.length} selected`;
-                  return (
-                    <div className="filter-group" key={f.k}>
-                      <div className="filter-label">{f.label}</div>
-                      <div
-                        className={`filter-trigger ${isOpen?"open":""}`}
-                        onClick={()=>setOpenFilter(isOpen?null:f.k)}
-                      >
-                        {display}
-                        {sel.length>0 && <span className="f-count">{sel.length}</span>}
-                      </div>
-                      {isOpen && (
-                        <div className="filter-dd">
-                          {f.opts.map(opt=>{
-                            const on=sel.includes(opt);
-                            return (
-                              <div
-                                key={opt}
-                                className={`filter-dd-item ${on?"on":""}`}
-                                onClick={e=>{
-                                  e.stopPropagation();
-                                  setFilters(p=>{
-                                    const arr=on?p[f.k].filter(x=>x!==opt):[...p[f.k],opt];
-                                    return {...p,[f.k]:arr};
-                                  });
-                                }}
-                              >
-                                <span className="f-check"/>{opt}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {anyFilter && (
-                  <button
-                    className="fclear"
-                    onClick={()=>{setFilters({vertical:[],assetType:[]});setOpenFilter(null);}}
-                  >Clear</button>
-                )}
-              </div>
-            )}
+            {/* The standalone filters-wrap was consolidated into the
+                "Filter" popover in the lib-bar below. */}
 
             {/* ── Library control bar (Vimeo-style) ─────────────────────
                 Select-all + count on the left; grid/list view toggle on the
@@ -6015,39 +6008,154 @@ export default function App(){
                     })()
                   ) : null}
                   <span className="lib-count">
-                    {displayAssets.length} {displayAssets.length === 1 ? "item" : "items"}
+                    {displayAssets.length} {displayAssets.length === 1 ? "story" : "stories"}
                   </span>
                 </div>
-                {isAdmin && adminMode && (
-                  <div className="view-toggle" title="Toggle grid/list view">
+                <div className="lib-bar-r" onClick={(e) => {
+                  // Close any open lib menu when clicking outside the
+                  // button wrappers — keeps popover behaviour predictable.
+                  if (!(e.target as HTMLElement).closest(".lib-btn-wrap")) setLibMenuOpen(null);
+                }}>
+                  {/* Filter — opens a popover with Industry + Type
+                      checkboxes. Replaces the standalone filters bar. */}
+                  <div className="lib-btn-wrap">
                     <button
-                      className={`view-toggle-btn ${viewMode === "grid" ? "on" : ""}`}
-                      onClick={() => setViewMode("grid")}
-                      title="Grid view"
+                      className={`lib-btn${libMenuOpen === "filter" || anyFilter ? " on" : ""}`}
+                      onClick={() => setLibMenuOpen(libMenuOpen === "filter" ? null : "filter")}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="3" y="3" width="7" height="7" rx="1"/>
-                        <rect x="14" y="3" width="7" height="7" rx="1"/>
-                        <rect x="3" y="14" width="7" height="7" rx="1"/>
-                        <rect x="14" y="14" width="7" height="7" rx="1"/>
-                      </svg>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                      Filter
+                      {anyFilter && (
+                        <span className="lib-btn-count">{filters.vertical.length + filters.assetType.length}</span>
+                      )}
                     </button>
-                    <button
-                      className={`view-toggle-btn ${viewMode === "list" ? "on" : ""}`}
-                      onClick={() => setViewMode("list")}
-                      title="List view"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <line x1="8" y1="6" x2="21" y2="6"/>
-                        <line x1="8" y1="12" x2="21" y2="12"/>
-                        <line x1="8" y1="18" x2="21" y2="18"/>
-                        <circle cx="4" cy="6" r="1.5"/>
-                        <circle cx="4" cy="12" r="1.5"/>
-                        <circle cx="4" cy="18" r="1.5"/>
-                      </svg>
-                    </button>
+                    {libMenuOpen === "filter" && (
+                      <div className="lib-menu" style={{ minWidth: 240 }}>
+                        {([
+                          { k: "vertical" as keyof Filters, label: "Industry", opts: VERTICALS.filter(v => v !== "All") },
+                          { k: "assetType" as keyof Filters, label: "Type", opts: ASSET_TYPES.filter(v => v !== "All") },
+                        ]).map(f => (
+                          <React.Fragment key={f.k}>
+                            <div className="lib-menu-section">{f.label}</div>
+                            {f.opts.map(opt => {
+                              const sel = filters[f.k];
+                              const on = sel.includes(opt);
+                              return (
+                                <div
+                                  key={opt}
+                                  className={`lib-menu-item${on ? " on" : ""}`}
+                                  onClick={() => {
+                                    setFilters(p => ({
+                                      ...p,
+                                      [f.k]: on ? p[f.k].filter(x => x !== opt) : [...p[f.k], opt],
+                                    }));
+                                  }}
+                                >
+                                  <svg className="lib-menu-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                  {opt}
+                                </div>
+                              );
+                            })}
+                          </React.Fragment>
+                        ))}
+                        {anyFilter && (
+                          <div className="lib-menu-clear" onClick={() => setFilters({ vertical: [], assetType: [] })}>
+                            Clear filters
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                )}
+
+                  {/* Sort — small popover with the four sort options. */}
+                  <div className="lib-btn-wrap">
+                    <button
+                      className={`lib-btn${libMenuOpen === "sort" ? " on" : ""}`}
+                      onClick={() => setLibMenuOpen(libMenuOpen === "sort" ? null : "sort")}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
+                      Sort: {sortBy === "recent" ? "Recent" : sortBy === "oldest" ? "Oldest" : sortBy === "az" ? "A–Z" : "Z–A"}
+                    </button>
+                    {libMenuOpen === "sort" && (
+                      <div className="lib-menu">
+                        {([
+                          { k: "recent", label: "Recently added" },
+                          { k: "oldest", label: "Oldest first" },
+                          { k: "az", label: "Title A → Z" },
+                          { k: "za", label: "Title Z → A" },
+                        ] as { k: SortBy; label: string }[]).map(o => (
+                          <div
+                            key={o.k}
+                            className={`lib-menu-item${sortBy === o.k ? " on" : ""}`}
+                            onClick={() => { setSortBy(o.k); setLibMenuOpen(null); }}
+                          >
+                            <svg className="lib-menu-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            {o.label}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {isAdmin && adminMode && (
+                    <div className="view-toggle" title="Toggle grid/list view">
+                      <button
+                        className={`view-toggle-btn ${viewMode === "grid" ? "on" : ""}`}
+                        onClick={() => setViewMode("grid")}
+                        title="Grid view"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <rect x="3" y="3" width="7" height="7" rx="1"/>
+                          <rect x="14" y="3" width="7" height="7" rx="1"/>
+                          <rect x="3" y="14" width="7" height="7" rx="1"/>
+                          <rect x="14" y="14" width="7" height="7" rx="1"/>
+                        </svg>
+                      </button>
+                      <button
+                        className={`view-toggle-btn ${viewMode === "list" ? "on" : ""}`}
+                        onClick={() => setViewMode("list")}
+                        title="List view"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <line x1="8" y1="6" x2="21" y2="6"/>
+                          <line x1="8" y1="12" x2="21" y2="12"/>
+                          <line x1="8" y1="18" x2="21" y2="18"/>
+                          <circle cx="4" cy="6" r="1.5"/>
+                          <circle cx="4" cy="12" r="1.5"/>
+                          <circle cx="4" cy="18" r="1.5"/>
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* + Add — admin only. Opens a popover with the available
+                      creation paths. Currently just "Add a source" (jumps
+                      to the Sources panel). More entries land here as
+                      new asset types arrive (standalone quote, written
+                      case study, etc.). */}
+                  {isAdmin && adminMode && (
+                    <div className="lib-btn-wrap">
+                      <button
+                        className="lib-btn primary"
+                        onClick={() => setLibMenuOpen(libMenuOpen === "add" ? null : "add")}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add
+                      </button>
+                      {libMenuOpen === "add" && (
+                        <div className="lib-menu">
+                          <div
+                            className="lib-menu-item"
+                            onClick={() => { setAdminSection("import"); setLibMenuOpen(null); }}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                            Add a source
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
