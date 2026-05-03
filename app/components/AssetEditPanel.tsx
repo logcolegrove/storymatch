@@ -36,7 +36,12 @@ export interface EditableAsset {
   headline: string;
   pullQuote: string;
   pullQuoteFavorite?: boolean;
-  additionalQuotes?: { text: string; favorite?: boolean }[];
+  // Curation fields injected by /api/assets GET from the new quotes
+  // table. Read-only here; writes go through PATCH /api/quotes/{id}.
+  pullQuoteId?: string;
+  pullQuoteIsFeatured?: boolean;
+  pullQuoteWashToken?: string | null;
+  additionalQuotes?: { id?: string; text: string; favorite?: boolean; isFeatured?: boolean; washToken?: string | null }[];
   additionalClients?: { clientName: string; company: string; role?: string; vertical?: string; geography?: string; companySize?: string }[];
   transcript: string;
   transcriptSegments?: { startSeconds: number; text: string }[];
@@ -713,11 +718,20 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   const [transcript, setTranscript] = useState("");
   const [transcriptSegments, setTranscriptSegments] = useState<{ startSeconds: number; text: string }[]>([]);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
-  // Quotes are stored as { text, favorite } so each can be starred.
-  // The first entry maps to asset.pullQuote on save; the rest map to
-  // additionalQuotes. Old plain-string data from the server is coerced
-  // by dbToFe before reaching the panel.
-  type QuoteEntry = { text: string; favorite: boolean };
+  // Quotes carry text + favorite (existing star), plus curation fields
+  // sourced from the new quotes table: id (deterministic, used for
+  // PATCH /api/quotes/{id}), isFeatured (in-library hero rotator), and
+  // washToken (the rotator's pastel background). Curation fields may
+  // be undefined for quotes whose asset was edited before the
+  // dual-write deployed — in that case the Feature toggle disables
+  // until the next save establishes the row.
+  type QuoteEntry = {
+    id?: string;
+    text: string;
+    favorite: boolean;
+    isFeatured?: boolean;
+    washToken?: string | null;
+  };
   const [quotes, setQuotes] = useState<QuoteEntry[]>([]);
 
   // Add-quote sub-flow state
@@ -814,12 +828,23 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     setTranscriptExpanded(false);
     // Build the unified quotes array. Primary's favorite flag lives on
     // asset.pullQuoteFavorite; additional quotes carry their own.
+    // Curation fields (id, isFeatured, washToken) come from the new
+    // quotes table via the server merge in /api/assets GET.
     const primaryQuote: QuoteEntry | null = asset.pullQuote && asset.pullQuote.trim()
-      ? { text: asset.pullQuote, favorite: !!asset.pullQuoteFavorite }
+      ? {
+          id: asset.pullQuoteId,
+          text: asset.pullQuote,
+          favorite: !!asset.pullQuoteFavorite,
+          isFeatured: !!asset.pullQuoteIsFeatured,
+          washToken: asset.pullQuoteWashToken ?? null,
+        }
       : null;
     const extraQuotes: QuoteEntry[] = (asset.additionalQuotes || []).map(q => ({
+      id: q.id,
       text: q.text || "",
       favorite: !!q.favorite,
+      isFeatured: !!q.isFeatured,
+      washToken: q.washToken ?? null,
     })).filter(q => q.text.trim().length > 0);
     setQuotes(primaryQuote ? [primaryQuote, ...extraQuotes] : extraQuotes);
     // Reset all sub-flow state to a clean baseline whenever the target
@@ -1015,6 +1040,47 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
   };
   const removeQuote = (i: number) => {
     setQuotes(prev => prev.filter((_, idx) => idx !== i));
+  };
+
+  // ── Featured-in-library toggle ──────────────────────────────────
+  // Hits /api/quotes/{id} PATCH and optimistically flips local state.
+  // If the quote has no id yet (asset edited before the dual-write
+  // deployed) the button is disabled — admin needs to save the asset
+  // first to materialise the row.
+  const WASH_CYCLE = ["rose", "sage", "sand", "lavender", "cream", "mist"] as const;
+  const hashToWash = (id: string): typeof WASH_CYCLE[number] => {
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+    return WASH_CYCLE[Math.abs(h) % WASH_CYCLE.length];
+  };
+  const toggleQuoteFeatured = async (i: number) => {
+    const q = quotes[i];
+    if (!q || !q.id) return;
+    const next = !q.isFeatured;
+    // Auto-pick wash on first feature so the rotator has a colour
+    // immediately. Admin can override via the curation panel later.
+    const nextWash = next && !q.washToken ? hashToWash(q.id) : q.washToken;
+    setQuotes(prev => prev.map((x, idx) =>
+      idx === i ? { ...x, isFeatured: next, washToken: nextWash ?? null } : x
+    ));
+    try {
+      const headers: HeadersInit = { "Content-Type": "application/json" };
+      if (authHeaders) {
+        const auth = await authHeaders();
+        Object.assign(headers as Record<string, string>, auth);
+      }
+      await fetch(`/api/quotes/${q.id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ isFeatured: next, washToken: nextWash }),
+      });
+    } catch (e) {
+      console.error("[feature toggle] failed:", e);
+      // Roll back on failure
+      setQuotes(prev => prev.map((x, idx) =>
+        idx === i ? { ...x, isFeatured: q.isFeatured, washToken: q.washToken } : x
+      ));
+    }
   };
 
   const insertIdx = drag ? computeInsertIdxForDrag(drag) : null;
@@ -1301,6 +1367,30 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
                               aria-label={q.favorite ? "Unfavorite quote" : "Favorite quote"}
                               aria-pressed={q.favorite}
                             >★</button>
+                            {/* Feature toggle — promotes the quote to the
+                                library hero rotator. Disabled until the
+                                quote has a row in the new quotes table
+                                (i.e. asset has been saved at least once
+                                since dual-write deployed). */}
+                            <button
+                              type="button"
+                              className={`aep-quote-feature${q.isFeatured ? " on" : ""}`}
+                              onClick={() => toggleQuoteFeatured(i)}
+                              disabled={!q.id}
+                              title={
+                                !q.id
+                                  ? "Save this asset first to enable featuring"
+                                  : q.isFeatured
+                                  ? "Remove from library rotation"
+                                  : "Feature in library rotation"
+                              }
+                              aria-pressed={!!q.isFeatured}
+                            >
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill={q.isFeatured ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M5 3v18l7-5 7 5V3z"/>
+                              </svg>
+                              <span>{q.isFeatured ? "Featured" : "Feature"}</span>
+                            </button>
                             <button
                               type="button"
                               className="aep-quote-remove"
@@ -1721,6 +1811,15 @@ const css = `
 .aep-quote-favorite:hover{background:var(--bg2);color:#f59e0b;}
 .aep-quote-favorite.on{color:#f59e0b;}
 .aep-quote-favorite.on:hover{color:#d97706;}
+/* Feature toggle — promotes the quote into the library hero rotator.
+   Off state is a thin outline button, on state fills with the accent.
+   Disabled when the quote has no row in the new quotes table yet
+   (asset hasn't been saved since dual-write deployed). */
+.aep-quote-feature{display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--border);color:var(--t3);cursor:pointer;font-family:var(--font);font-size:11px;font-weight:600;line-height:1;padding:4px 9px;border-radius:99px;transition:all .15s;}
+.aep-quote-feature:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.aep-quote-feature.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.aep-quote-feature.on:hover{background:var(--accent2);border-color:var(--accent2);}
+.aep-quote-feature:disabled{opacity:.4;cursor:not-allowed;}
 .aep-quote-remove{background:none;border:none;color:var(--t4);cursor:pointer;font-size:18px;line-height:1;padding:2px 8px;border-radius:6px;}
 .aep-quote-remove:hover{background:var(--bg2);color:var(--red);}
 /* The actual quote textarea — no border, no bg, italic serif. Looks

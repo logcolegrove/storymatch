@@ -161,7 +161,18 @@ type AssetFE = {
   // Additional quotes beyond the primary pullQuote. Each entry stores
   // its own text + favorite flag. Old data may contain plain strings
   // — dbToFe coerces them to {text, favorite:false} on read.
-  additionalQuotes?: { text: string; favorite?: boolean }[];
+  // GET also injects per-quote curation fields (id, isFeatured,
+  // washToken) sourced from the new top-level quotes table so the
+  // FE can render Feature toggles + wash colors without a separate
+  // fetch. PUT writes ignore these fields — curation goes through
+  // /api/quotes/[id] PATCH.
+  additionalQuotes?: { id?: string; text: string; favorite?: boolean; isFeatured?: boolean; washToken?: string | null }[];
+  // Primary quote curation fields — same source as additionalQuotes
+  // entries' isFeatured/washToken, but for the index-0 quote which
+  // historically lives in its own pullQuote string.
+  pullQuoteId?: string;
+  pullQuoteIsFeatured?: boolean;
+  pullQuoteWashToken?: string | null;
   // Additional client/company pairs beyond the primary client. Each
   // carries its own role + filter metadata (vertical/geography/size)
   // so compilation videos can mix companies and verticals cleanly.
@@ -339,7 +350,7 @@ export async function GET(req: NextRequest) {
       .order("date_created", { ascending: false }),
     supabaseAdmin
       .from("quotes")
-      .select("asset_id, text, is_favorite, position_within_parent")
+      .select("id, asset_id, text, is_favorite, is_featured, wash_token, position_within_parent")
       .eq("org_id", ctx.orgId)
       .not("asset_id", "is", null)
       .order("position_within_parent", { ascending: true, nullsFirst: false }),
@@ -352,22 +363,31 @@ export async function GET(req: NextRequest) {
     console.error("[assets GET] quotes fetch failed, falling back to JSONB:", quotesRes.error);
   }
 
-  // Group quotes by asset_id, already ordered by position.
-  const byAsset = new Map<string, { text: string; favorite: boolean }[]>();
+  // Group quotes by asset_id, already ordered by position. We keep
+  // every curation field — id / favorite / featured / wash — so the
+  // FE can render the Feature toggle + wash color directly off the
+  // GET response without a follow-up fetch.
+  type QuoteSlim = { id: string; text: string; favorite: boolean; isFeatured: boolean; washToken: string | null };
+  const byAsset = new Map<string, QuoteSlim[]>();
   for (const q of (quotesRes.data || [])) {
     const aid = q.asset_id as string | null;
     if (!aid) continue;
     if (!byAsset.has(aid)) byAsset.set(aid, []);
     byAsset.get(aid)!.push({
+      id: q.id as string,
       text: (q.text as string) || "",
       favorite: !!q.is_favorite,
+      isFeatured: !!q.is_featured,
+      washToken: (q.wash_token as string | null) ?? null,
     });
   }
 
   // Convert each row to FE shape, then override pullQuote /
   // pullQuoteFavorite / additionalQuotes from the quotes-table data
-  // when present. If the quotes table has no rows for an asset, the
-  // dbToFe-derived JSONB values stay (transitional fallback).
+  // when present. Curation fields (id / isFeatured / washToken)
+  // come along for the ride. If the quotes table has no rows for an
+  // asset, the dbToFe-derived JSONB values stay (transitional
+  // fallback) and curation fields are left undefined.
   const out = (assetsRes.data as AssetDB[]).map(r => {
     const fe = dbToFe(r);
     const fromTable = byAsset.get(r.id);
@@ -375,7 +395,16 @@ export async function GET(req: NextRequest) {
       const [primary, ...rest] = fromTable;
       fe.pullQuote = primary.text;
       fe.pullQuoteFavorite = !!primary.favorite;
-      fe.additionalQuotes = rest;
+      fe.pullQuoteId = primary.id;
+      fe.pullQuoteIsFeatured = primary.isFeatured;
+      fe.pullQuoteWashToken = primary.washToken;
+      fe.additionalQuotes = rest.map(r => ({
+        id: r.id,
+        text: r.text,
+        favorite: r.favorite,
+        isFeatured: r.isFeatured,
+        washToken: r.washToken,
+      }));
     }
     return fe;
   });

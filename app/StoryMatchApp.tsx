@@ -7,6 +7,9 @@ import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
+import FeaturedQuoteRotator, { type FeaturedQuote } from "./components/FeaturedQuoteRotator";
+import StandaloneQuoteModal from "./components/StandaloneQuoteModal";
+import FeaturedRotationPanel from "./components/FeaturedRotationPanel";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -112,8 +115,15 @@ interface Asset {
   customFlags?: CustomFlag[];
   // Additional pull quotes beyond the primary `pullQuote`. Each carries
   // its own favorite flag. Old data may contain plain strings — server
-  // coerces to {text, favorite} on read.
-  additionalQuotes?: { text: string; favorite?: boolean }[];
+  // coerces to {text, favorite} on read. After the quotes-as-entity
+  // refactor, GET also injects per-quote curation fields (id,
+  // isFeatured, washToken) sourced from the new quotes table.
+  additionalQuotes?: { id?: string; text: string; favorite?: boolean; isFeatured?: boolean; washToken?: string | null }[];
+  // Primary quote curation — same source as additionalQuotes' fields
+  // but for the index-0 quote which lives in pullQuote.
+  pullQuoteId?: string;
+  pullQuoteIsFeatured?: boolean;
+  pullQuoteWashToken?: string | null;
   // Additional client/company entries beyond the primary, each with its
   // own role + filter metadata (vertical/geography/size). Used for
   // compilation videos featuring multiple speakers/companies.
@@ -4912,11 +4922,19 @@ export default function App(){
   // Admins (in admin mode) always see archived assets greyed out inline.
   // No toggle needed — library is one source of truth.
   const[viewMode,setViewMode]=useState<"grid"|"list">("grid"); // admin-only; sales/public always see grid
+  // Featured quotes powering the hero rotator. Fetched on mount and
+  // refreshed after any save that could change the featured set
+  // (asset edit, standalone quote create, rotation curation).
+  const[featuredQuotes,setFeaturedQuotes]=useState<FeaturedQuote[]>([]);
   // Library bar: which dropdown is open (Filter, Sort, or +Add) and the
   // current sort. Null = nothing open.
   type SortBy = "recent" | "oldest" | "az" | "za";
   const[sortBy,setSortBy]=useState<SortBy>("recent");
   const[libMenuOpen,setLibMenuOpen]=useState<"filter"|"sort"|"add"|null>(null);
+  // Modal state for standalone quote creation. Opened from the
+  // "+ Add" → "Standalone quote" menu entry.
+  const[standaloneQuoteOpen,setStandaloneQuoteOpen]=useState(false);
+  const[rotationPanelOpen,setRotationPanelOpen]=useState(false);
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
@@ -4970,6 +4988,23 @@ export default function App(){
       }catch(e){console.error("Failed to load assets",e);}
     })();
   },[]);
+
+  // Load featured quotes for the hero rotator. Refreshable via
+  // refreshFeaturedQuotes() after any save that could change the
+  // featured set.
+  const refreshFeaturedQuotes = useCallback(async () => {
+    try {
+      const headers = await authHeaders();
+      const r = await fetch("/api/quotes?featured=true", { headers });
+      if (!r.ok) throw new Error("Failed");
+      const data = await r.json() as FeaturedQuote[];
+      setFeaturedQuotes(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("Failed to load featured quotes", e);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { refreshFeaturedQuotes(); }, [refreshFeaturedQuotes]);
 
   // Load sources from the database on mount
   useEffect(()=>{
@@ -5231,6 +5266,10 @@ export default function App(){
       if(!r.ok)throw new Error("Save failed");
       setToast("Saved");
       reembedAsset(updated.id);
+      // The save may have toggled a Feature flag on a quote inside
+      // this asset. Refresh the rotator's data so the change shows
+      // up immediately.
+      refreshFeaturedQuotes();
     }catch(e){
       console.error("Asset save failed",e);
       setToast("Save failed");
@@ -6151,6 +6190,13 @@ export default function App(){
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                             Add a source
                           </div>
+                          <div
+                            className="lib-menu-item"
+                            onClick={() => { setStandaloneQuoteOpen(true); setLibMenuOpen(null); }}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21c3 0 7-1 7-8V5c0-1-1-2-2-2H4c-1 0-2 1-2 2v6c0 1 1 2 2 2h3"/><path d="M15 21c3 0 7-1 7-8V5c0-1-1-2-2-2h-4c-1 0-2 1-2 2v6c0 1 1 2 2 2h3"/></svg>
+                            Standalone quote
+                          </div>
                         </div>
                       )}
                     </div>
@@ -6187,8 +6233,47 @@ export default function App(){
                   knownCustomTags={knownCustomTags}
                 />
               ) : (
-                <div className="grid">
-                  {displayAssets.map(a=>{
+                (() => {
+                  // Split the grid: first row of cards, then the
+                  // featured-quote rotator (if any), then the rest.
+                  // The rotator only shows when:
+                  //   • we're not in StoryMatch results mode (those
+                  //     are AI-ranked and shouldn't be interrupted)
+                  //   • there's at least one featured quote
+                  //   • there are enough assets to make the break
+                  //     feel natural (otherwise it's just one card +
+                  //     a hero, which looks unbalanced).
+                  const shouldShowRotator = !smResults && featuredQuotes.length > 0 && displayAssets.length >= 3;
+                  const headAssets = shouldShowRotator ? displayAssets.slice(0, 3) : displayAssets;
+                  const tailAssets = shouldShowRotator ? displayAssets.slice(3) : [];
+                  // Enrich featured quotes with their parent asset's
+                  // headline + videoUrl so the CTA can route correctly.
+                  const enriched: FeaturedQuote[] = featuredQuotes.map(q => {
+                    if (!q.assetId) return q;
+                    const parent = assets.find(a => a.id === q.assetId);
+                    return parent
+                      ? { ...q, assetVideoUrl: parent.videoUrl, assetHeadline: parent.headline }
+                      : q;
+                  });
+                  const onCtaClick = (q: FeaturedQuote) => {
+                    if (q.kind === "static" && q.staticUrl) {
+                      window.open(q.staticUrl, "_blank", "noopener,noreferrer");
+                    } else if (q.assetId) {
+                      const parent = assets.find(a => a.id === q.assetId);
+                      if (parent) openAsset(parent);
+                    }
+                  };
+                  const renderGrid = (items: Asset[]) => (
+                    <div className="grid">
+                      {items.map(a=>{
+                        return renderAssetCard(a);
+                      })}
+                    </div>
+                  );
+                  // Inline helper so we don't repeat the giant per-card
+                  // computation block twice. Closes over the surrounding
+                  // scope (selectedIds, openAsset, etc.).
+                  function renderAssetCard(a: Asset) {
                     const ai=aiDataMap[a.id]||null;
                     const adminMgmt = isAdmin && adminMode;
                     const restore = adminMgmt ? restoreAsset : undefined;
@@ -6205,13 +6290,7 @@ export default function App(){
                     ] : undefined;
                     const cardSelected = selectedIds.has(a.id);
                     const cardToggle = adminMgmt ? toggleSelected : undefined;
-                    // Share link is for internal users only — admins in admin
-                    // mode and sales reps. Hidden in admin's Public preview
-                    // because that simulates the external customer view.
                     const share = ((isAdmin && adminMode) || org?.role === "sales") ? copyShareLink : undefined;
-                    // Cleared dot is admin-governance UI — only visible to
-                    // admins in admin mode. Sales/public never see it. Bundle
-                    // includes handlers so the dot can open the same popover.
                     const cardCleared = adminMgmt ? (() => {
                       const c = computeCleared(a, orgSettings);
                       return {
@@ -6231,8 +6310,21 @@ export default function App(){
                     return a.assetType==="Quote"
                       ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>
                       : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>;
-                  })}
-                </div>
+                  }
+                  return (
+                    <>
+                      {renderGrid(headAssets)}
+                      {shouldShowRotator && (
+                        <FeaturedQuoteRotator
+                          quotes={enriched}
+                          onCtaClick={onCtaClick}
+                          onCurate={isAdmin && adminMode ? () => setRotationPanelOpen(true) : undefined}
+                        />
+                      )}
+                      {tailAssets.length > 0 && renderGrid(tailAssets)}
+                    </>
+                  );
+                })()
               )}
             </div>
 
@@ -6261,6 +6353,20 @@ export default function App(){
           onClose={()=>setEditingAssetId(null)}
           authHeaders={authHeaders}
         />
+        {standaloneQuoteOpen && (
+          <StandaloneQuoteModal
+            authHeaders={authHeaders}
+            onClose={() => setStandaloneQuoteOpen(false)}
+            onCreated={() => { refreshFeaturedQuotes(); setToast("Quote added"); setTimeout(()=>setToast(null),1500); }}
+          />
+        )}
+        {rotationPanelOpen && (
+          <FeaturedRotationPanel
+            authHeaders={authHeaders}
+            onClose={() => setRotationPanelOpen(false)}
+            onChanged={refreshFeaturedQuotes}
+          />
+        )}
         {visOverride && (
           <VisibilityOverrideModal
             asset={visOverride.asset}
