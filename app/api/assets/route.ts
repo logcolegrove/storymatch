@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { applyPublicationRules, getOrgRulesContext, type AssetRuleInput } from "@/lib/publication-rules";
+import { syncAssetQuotes, type AssetQuoteInput } from "@/lib/quotes-dal";
 
 // ───────────────────────────────────────────────────────────
 // Helper: get the current user + their org from the auth header
@@ -363,6 +364,46 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ error: error.message, code: error.code, hint: error.hint }, { status: 500 });
   }
+
+  // ── Dual-write to the new quotes table for newly-imported assets.
+  // Same logic as PUT: failures here are logged but don't fail the
+  // request because JSONB is still authoritative.
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const dbRow = (data as AssetDB[])[i];
+    if (!it || !dbRow) continue;
+    const quotesIn: AssetQuoteInput[] = [];
+    if (typeof it.pullQuote === "string" && it.pullQuote.trim().length > 0) {
+      quotesIn.push({ text: it.pullQuote, favorite: !!it.pullQuoteFavorite });
+    }
+    if (Array.isArray(it.additionalQuotes)) {
+      for (const q of it.additionalQuotes) {
+        if (q && typeof q.text === "string" && q.text.trim().length > 0) {
+          quotesIn.push({ text: q.text, favorite: !!q.favorite });
+        }
+      }
+    }
+    if (quotesIn.length === 0) continue;
+    try {
+      const sync = await syncAssetQuotes(
+        {
+          assetId: dbRow.id,
+          orgId: ctx.orgId,
+          assetType: dbRow.asset_type,
+          attrName: dbRow.client_name || null,
+          attrTitle: dbRow.client_role || null,
+          attrOrg: dbRow.company || null,
+        },
+        quotesIn,
+      );
+      if (!sync.ok) {
+        console.error("[assets POST] quotes dual-write failed:", sync.error);
+      }
+    } catch (e) {
+      console.error("[assets POST] quotes dual-write threw:", e);
+    }
+  }
+
   return NextResponse.json((data as AssetDB[]).map(dbToFe));
 }
 
@@ -389,6 +430,47 @@ export async function PUT(req: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // ── Dual-write to the new quotes table ─────────────────────────
+  // Phase 1 of the quotes-as-entity refactor. JSONB stays canonical
+  // (reads still hit pull_quote + additional_quotes). This keeps a
+  // top-level row per quote in sync so the hero rotator + future
+  // standalone-quote flows have something to query against. Failures
+  // here are logged but do NOT fail the asset save — the JSONB is
+  // still authoritative for now.
+  try {
+    const quotesIn: AssetQuoteInput[] = [];
+    if (typeof body.pullQuote === "string" && body.pullQuote.trim().length > 0) {
+      quotesIn.push({
+        text: body.pullQuote,
+        favorite: !!body.pullQuoteFavorite,
+      });
+    }
+    if (Array.isArray(body.additionalQuotes)) {
+      for (const q of body.additionalQuotes) {
+        if (q && typeof q.text === "string" && q.text.trim().length > 0) {
+          quotesIn.push({ text: q.text, favorite: !!q.favorite });
+        }
+      }
+    }
+    const dbAsset = data as AssetDB;
+    const sync = await syncAssetQuotes(
+      {
+        assetId: dbAsset.id,
+        orgId: ctx.orgId,
+        assetType: dbAsset.asset_type,
+        attrName: dbAsset.client_name || null,
+        attrTitle: dbAsset.client_role || null,
+        attrOrg: dbAsset.company || null,
+      },
+      quotesIn,
+    );
+    if (!sync.ok) {
+      console.error("[assets PUT] quotes dual-write failed:", sync.error);
+    }
+  } catch (e) {
+    console.error("[assets PUT] quotes dual-write threw:", e);
+  }
 
   // Fire publication rules — re-evaluates the asset against the org's
   // configured trigger→action rules and may flip publication state. If
