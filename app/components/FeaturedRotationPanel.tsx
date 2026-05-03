@@ -16,7 +16,7 @@
 // /{id}, so the admin can just close the modal when done.
 
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 interface QuoteRow {
   id: string;
@@ -36,6 +36,10 @@ interface Props {
   authHeaders: () => Promise<HeadersInit> | HeadersInit;
   onClose: () => void;
   onChanged: () => void; // called after any persist so the parent can refresh featured-quotes
+  // Current rotator interval (seconds). Parent owns the value so the
+  // rotator picks up the change immediately. 0 = paused.
+  intervalSec: number;
+  onIntervalChange: (sec: number) => void;
 }
 
 const FEATURE_CAP = 12;
@@ -61,7 +65,7 @@ function washForId(id: string, override: string | null): string {
   return WASHES[WASH_NAMES[Math.abs(h) % WASH_NAMES.length]];
 }
 
-export default function FeaturedRotationPanel({ authHeaders, onClose, onChanged }: Props) {
+export default function FeaturedRotationPanel({ authHeaders, onClose, onChanged, intervalSec, onIntervalChange }: Props) {
   const [quotes, setQuotes] = useState<QuoteRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null); // quote id currently being persisted
@@ -140,30 +144,134 @@ export default function FeaturedRotationPanel({ authHeaders, onClose, onChanged 
     setQuotes(prev => prev.map(q => (q.id === id ? { ...q, ...patch } : q)));
   };
 
-  const moveUp = async (i: number) => {
-    if (i <= 0 || i >= featured.length) return;
-    const a = featured[i], b = featured[i - 1];
-    patchLocal(a.id, { featuredPosition: i - 1 });
-    patchLocal(b.id, { featuredPosition: i });
-    try {
-      await Promise.all([
-        persist(a.id, { featuredPosition: i - 1 }),
-        persist(b.id, { featuredPosition: i }),
-      ]);
-    } catch { /* error already surfaced via setErr */ }
+  // ── Pointer-driven drag-reorder ─────────────────────────────────
+  // Same pattern as AssetEditPanel: capture rects on drag start,
+  // float a clone with the pointer, shift other rows via transform
+  // to indicate the drop target. On pointerup, persist new positions.
+  type DragState = {
+    fromIdx: number;
+    pointerY: number;
+    pointerX: number;
+    initialY: number;
+    initialX: number;
+    rects: DOMRect[];
+    gap: number;
+    width: number;
+  };
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  useEffect(() => { dragRef.current = drag; }, [drag]);
+  const itemRefs = useRef<(HTMLLIElement | null)[]>([]);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const computeInsertIdx = (state: DragState): number => {
+    const others = state.rects
+      .map((r, i) => ({ i, mid: r.top + r.height / 2 }))
+      .filter(o => o.i !== state.fromIdx);
+    let slot = others.length;
+    for (let k = 0; k < others.length; k++) {
+      if (state.pointerY < others[k].mid) { slot = k; break; }
+    }
+    return slot;
+  };
+  const insertIdx = drag ? computeInsertIdx(drag) : null;
+
+  // Pointer move/up listeners — only active while dragging.
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const cur = dragRef.current;
+      if (!cur) return;
+      setDrag({ ...cur, pointerY: e.clientY, pointerX: e.clientX });
+    };
+    const onUp = () => {
+      const cur = dragRef.current;
+      setDrag(null);
+      if (!cur) return;
+      const target = computeInsertIdx(cur);
+      if (target === cur.fromIdx) return;
+      // Reorder featured array, then persist new positions.
+      const next = [...featured];
+      const [moved] = next.splice(cur.fromIdx, 1);
+      next.splice(target, 0, moved);
+      // Optimistic local: rewrite featuredPosition based on new index.
+      next.forEach((q, idx) => patchLocal(q.id, { featuredPosition: idx }));
+      // Persist all changed rows in parallel.
+      (async () => {
+        try {
+          await Promise.all(
+            next.map((q, idx) => persist(q.id, { featuredPosition: idx })),
+          );
+        } catch { /* surfaced via setErr */ }
+      })();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag?.fromIdx]);
+
+  const onRowPointerDown = (i: number) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    // Don't start a drag when the user pointed at an interactive
+    // child (Remove button etc.) — let the click do its job.
+    const target = e.target as HTMLElement;
+    if (target.closest("button")) return;
+    e.preventDefault();
+    const list = listRef.current;
+    if (!list) return;
+    const rects = itemRefs.current.map(el => el?.getBoundingClientRect() || new DOMRect());
+    const fromRect = rects[i];
+    if (!fromRect) return;
+    const gapStr = window.getComputedStyle(list).rowGap || "0";
+    const gap = parseFloat(gapStr) || 0;
+    setDrag({
+      fromIdx: i,
+      pointerY: e.clientY,
+      pointerX: e.clientX,
+      initialY: e.clientY,
+      initialX: e.clientX,
+      rects,
+      gap,
+      width: fromRect.width,
+    });
   };
 
-  const moveDown = async (i: number) => {
-    if (i < 0 || i >= featured.length - 1) return;
-    const a = featured[i], b = featured[i + 1];
-    patchLocal(a.id, { featuredPosition: i + 1 });
-    patchLocal(b.id, { featuredPosition: i });
-    try {
-      await Promise.all([
-        persist(a.id, { featuredPosition: i + 1 }),
-        persist(b.id, { featuredPosition: i }),
-      ]);
-    } catch { /* */ }
+  // Per-item visual offset during drag — items between original and
+  // target index slide up/down by (draggedHeight + gap).
+  const itemOffsetY = (i: number): number => {
+    if (!drag || insertIdx === null) return 0;
+    if (i === drag.fromIdx) return 0;
+    const draggedHeight = drag.rects[drag.fromIdx]?.height || 0;
+    const shift = draggedHeight + drag.gap;
+    if (insertIdx > drag.fromIdx) {
+      if (i > drag.fromIdx && i <= insertIdx) return -shift;
+    } else if (insertIdx < drag.fromIdx) {
+      if (i >= insertIdx && i < drag.fromIdx) return shift;
+    }
+    return 0;
+  };
+
+  // Floating-clone style that follows the pointer.
+  const cloneStyle = (): React.CSSProperties | undefined => {
+    if (!drag) return undefined;
+    const fromRect = drag.rects[drag.fromIdx];
+    if (!fromRect) return undefined;
+    const dx = drag.pointerX - drag.initialX;
+    const dy = drag.pointerY - drag.initialY;
+    return {
+      position: "fixed",
+      left: fromRect.left + dx,
+      top: fromRect.top + dy,
+      width: drag.width,
+      pointerEvents: "none",
+      zIndex: 300,
+    };
   };
 
   const removeFromRotation = async (id: string) => {
@@ -198,37 +306,79 @@ export default function FeaturedRotationPanel({ authHeaders, onClose, onChanged 
         {err && <div className="frp-error">{err}</div>}
 
         <div className="frp-body">
+          <div className="frp-speed">
+            <label className="frp-speed-label" htmlFor="frp-speed-select">Rotation speed</label>
+            <select
+              id="frp-speed-select"
+              className="frp-speed-select"
+              value={String(intervalSec)}
+              onChange={e => onIntervalChange(parseInt(e.target.value, 10))}
+            >
+              <option value="3">Fast — every 3s</option>
+              <option value="5">Brisk — every 5s</option>
+              <option value="7">Default — every 7s</option>
+              <option value="10">Calm — every 10s</option>
+              <option value="15">Slow — every 15s</option>
+              <option value="30">Very slow — every 30s</option>
+              <option value="0">Pause auto-rotate</option>
+            </select>
+          </div>
+
           <div className="frp-section-title">In rotation ({featured.length})</div>
           {loading ? (
             <div className="frp-empty">Loading…</div>
           ) : featured.length === 0 ? (
             <div className="frp-empty">No quotes featured yet. Pick from "Available" below to start the rotation.</div>
           ) : (
-            <ul className="frp-list">
-              {featured.map((q, i) => (
-                <li key={q.id} className={`frp-row${busy === q.id ? " frp-busy" : ""}`}>
-                  <div className="frp-monogram" style={{ background: washForId(q.id, q.washToken) }}>
-                    {initialsFor(q)}
-                  </div>
-                  <div className="frp-meta">
-                    <div className="frp-name">{q.attrName || "—"}</div>
-                    <div className="frp-org">{q.attrTitle ? `${q.attrTitle} · ` : ""}{q.attrOrg || ""}</div>
-                    <div className="frp-text">"{q.text}"</div>
-                  </div>
-                  <div className="frp-actions">
-                    <button type="button" className="frp-icon" onClick={() => moveUp(i)} disabled={i === 0 || busy != null} title="Move up">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
-                    </button>
-                    <button type="button" className="frp-icon" onClick={() => moveDown(i)} disabled={i === featured.length - 1 || busy != null} title="Move down">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                    </button>
-                    <button type="button" className="frp-remove" onClick={() => removeFromRotation(q.id)} disabled={busy != null}>
-                      Remove
-                    </button>
-                  </div>
-                </li>
-              ))}
+            <ul className="frp-list" ref={listRef}>
+              {featured.map((q, i) => {
+                const isDragging = drag?.fromIdx === i;
+                const offset = itemOffsetY(i);
+                return (
+                  <li
+                    key={q.id}
+                    ref={el => { itemRefs.current[i] = el; }}
+                    className={`frp-row frp-row-draggable${busy === q.id ? " frp-busy" : ""}${isDragging ? " is-dragging" : ""}`}
+                    onPointerDown={onRowPointerDown(i)}
+                    style={{
+                      transform: offset !== 0 ? `translateY(${offset}px)` : undefined,
+                      transition: isDragging ? "none" : "transform .22s cubic-bezier(.2,.7,.2,1)",
+                      visibility: isDragging ? "hidden" : undefined,
+                    }}
+                  >
+                    <div className="frp-monogram" style={{ background: washForId(q.id, q.washToken) }}>
+                      {initialsFor(q)}
+                    </div>
+                    <div className="frp-meta">
+                      <div className="frp-name">{q.attrName || "—"}</div>
+                      <div className="frp-org">{q.attrTitle ? `${q.attrTitle} · ` : ""}{q.attrOrg || ""}</div>
+                      <div className="frp-text">"{q.text}"</div>
+                    </div>
+                    <div className="frp-actions">
+                      <button type="button" className="frp-remove" onClick={() => removeFromRotation(q.id)} disabled={busy != null}>
+                        Remove
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
+          )}
+
+          {drag && featured[drag.fromIdx] && (
+            <div className="frp-drag-clone" style={cloneStyle()}>
+              <div className="frp-row frp-row-draggable" style={{ background: "#fff", boxShadow: "0 12px 28px rgba(0,0,0,.18)" }}>
+                <div className="frp-monogram" style={{ background: washForId(featured[drag.fromIdx].id, featured[drag.fromIdx].washToken) }}>
+                  {initialsFor(featured[drag.fromIdx])}
+                </div>
+                <div className="frp-meta">
+                  <div className="frp-name">{featured[drag.fromIdx].attrName || "—"}</div>
+                  <div className="frp-org">{featured[drag.fromIdx].attrTitle ? `${featured[drag.fromIdx].attrTitle} · ` : ""}{featured[drag.fromIdx].attrOrg || ""}</div>
+                  <div className="frp-text">"{featured[drag.fromIdx].text}"</div>
+                </div>
+                <div className="frp-actions"/>
+              </div>
+            </div>
           )}
 
           <div className="frp-section-title frp-section-title-spaced">Available ({available.length})</div>
@@ -281,6 +431,11 @@ const css = `
 
 .frp-body{flex:1;overflow-y:auto;padding:14px 26px 8px;}
 
+.frp-speed{display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;margin-bottom:6px;}
+.frp-speed-label{font-size:12.5px;font-weight:600;color:var(--t2);}
+.frp-speed-select{flex:1;height:32px;padding:0 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);outline:none;cursor:pointer;}
+.frp-speed-select:hover{border-color:var(--border2);}
+
 .frp-section-title{font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin:8px 0 10px;}
 .frp-section-title-spaced{margin-top:24px;border-top:1px solid var(--border);padding-top:18px;}
 
@@ -290,6 +445,13 @@ const css = `
 .frp-row{display:grid;grid-template-columns:42px 1fr auto;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff;transition:border-color .12s,background .12s;}
 .frp-row:hover{border-color:var(--border2);background:var(--bg);}
 .frp-row.frp-busy{opacity:.6;}
+/* Featured rows are click-and-drag — cursor signals the affordance,
+   active state hides the original while a floating clone follows
+   the pointer. */
+.frp-row-draggable{cursor:grab;user-select:none;}
+.frp-row-draggable:active{cursor:grabbing;}
+.frp-row-draggable.is-dragging{visibility:hidden;}
+.frp-drag-clone{will-change:transform;}
 
 .frp-monogram{width:42px;height:42px;border-radius:999px;display:grid;place-items:center;font-family:var(--serif);font-style:italic;font-weight:500;font-size:14px;color:var(--t1);}
 .frp-monogram-muted{opacity:.7;}

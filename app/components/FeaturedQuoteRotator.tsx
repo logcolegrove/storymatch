@@ -53,6 +53,9 @@ interface Props {
   // Admin-only: opens the rotation curation panel. When provided, a
   // small gear button appears in the rotator's top-right.
   onCurate?: () => void;
+  // Auto-advance interval in seconds. 0 (or any non-positive) freezes
+  // auto-advance. Default 7.
+  intervalSec?: number;
 }
 
 // ── Wash palette ─────────────────────────────────────────────────
@@ -86,11 +89,14 @@ function initialsFor(q: FeaturedQuote): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-// Optical-size bucket by character count. Matches the design spec.
+// Optical-size bucket by character count. Three sizes — default for
+// short pull-quotes, medium for the typical case, and a "long" only
+// for genuine paragraphs (>240ch). The long bucket previously kicked
+// in at >140ch and made even average quotes look lost in the panel.
 function sizeBucket(text: string): "default" | "medium" | "long" {
   const n = text.length;
-  if (n > 140) return "long";
-  if (n > 60) return "medium";
+  if (n > 240) return "long";
+  if (n > 80) return "medium";
   return "default";
 }
 
@@ -105,7 +111,7 @@ const STATIC_LABELS: Record<string, string> = {
   other: "",
 };
 
-export default function FeaturedQuoteRotator({ quotes, onCtaClick, onCurate }: Props) {
+export default function FeaturedQuoteRotator({ quotes, onCtaClick, onCurate, intervalSec = 7 }: Props) {
   const [active, setActive] = useState(0);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -132,9 +138,9 @@ export default function FeaturedQuoteRotator({ quotes, onCtaClick, onCurate }: P
 
   const startTimer = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
-    if (reduceMotion || quotes.length <= 1) return;
-    timerRef.current = setInterval(tick, 7000);
-  }, [tick, reduceMotion, quotes.length]);
+    if (reduceMotion || quotes.length <= 1 || intervalSec <= 0) return;
+    timerRef.current = setInterval(tick, intervalSec * 1000);
+  }, [tick, reduceMotion, quotes.length, intervalSec]);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -292,10 +298,12 @@ const css = `
    colour change reads as a deliberate beat on auto-advance. */
 .fqr-quote{position:relative;aspect-ratio:16/9;padding:54px 60px;display:flex;align-items:center;transition:background .6s ease;}
 .fqr-glyph{font-family:var(--serif);font-style:italic;font-weight:400;font-size:140px;line-height:.6;margin-right:24px;align-self:flex-start;margin-top:12px;flex-shrink:0;transition:color .6s ease;}
-.fqr-text{font-family:var(--serif);font-style:italic;font-weight:400;font-size:34px;line-height:1.18;letter-spacing:-.005em;text-wrap:pretty;max-width:22ch;transition:color .6s ease;}
-/* Optical-size buckets by character count */
-.fqr-q-medium .fqr-text{font-size:26px;line-height:1.22;}
-.fqr-q-long   .fqr-text{font-size:20px;line-height:1.4;}
+.fqr-text{font-family:var(--serif);font-style:italic;font-weight:400;font-size:36px;line-height:1.18;letter-spacing:-.005em;text-wrap:pretty;max-width:22ch;transition:color .6s ease;}
+/* Optical-size buckets by character count. Tuned so even longer
+   quotes still fill the panel comfortably — only true paragraphs
+   shrink to the smaller size. */
+.fqr-q-medium .fqr-text{font-size:30px;line-height:1.22;max-width:24ch;}
+.fqr-q-long   .fqr-text{font-size:24px;line-height:1.32;max-width:32ch;}
 
 /* Right — pagination + attribution + CTA */
 .fqr-meta{display:flex;flex-direction:column;justify-content:space-between;padding:28px 30px;border-left:1px solid var(--border);background:#fff;}

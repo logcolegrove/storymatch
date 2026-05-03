@@ -136,6 +136,9 @@ interface Asset {
   // from the captured VTT. Empty when the asset was synced before
   // segment capture was added — admin can manual-sync to backfill.
   transcriptSegments?: { startSeconds: number; text: string }[];
+  // Manual sort order — admin sets via drag-reorder. Null until
+  // ordered for the first time.
+  displayOrder?: number | null;
 }
 
 interface CustomFlag {
@@ -4926,15 +4929,52 @@ export default function App(){
   // refreshed after any save that could change the featured set
   // (asset edit, standalone quote create, rotation curation).
   const[featuredQuotes,setFeaturedQuotes]=useState<FeaturedQuote[]>([]);
+
+  // ── Grid/list drag-reorder state ─────────────────────────────────
+  // No visible drag handle — admins discover by clicking + holding any
+  // card. On drop, we persist new positions via /api/assets/reorder
+  // and force-switch sort to "custom" so the new order is preserved.
+  type CardDrag = {
+    assetId: string;
+    fromIdx: number;
+    pointerX: number;
+    pointerY: number;
+    initialX: number;
+    initialY: number;
+    width: number;
+    height: number;
+    rects: DOMRect[];      // rects of all visible cards at drag start
+    insertIdx: number;     // current target index
+  };
+  const [cardDrag, setCardDrag] = React.useState<CardDrag | null>(null);
+  const cardDragRef = React.useRef<CardDrag | null>(null);
+  React.useEffect(() => { cardDragRef.current = cardDrag; }, [cardDrag]);
+  const cardElsRef = React.useRef<Map<string, HTMLDivElement>>(new Map());
+  // Suppress card click for ~150ms after a drop so the pointer-up
+  // doesn't navigate to the asset detail.
+  const cardDragJustEnded = React.useRef(false);
   // Library bar: which dropdown is open (Filter, Sort, or +Add) and the
   // current sort. Null = nothing open.
-  type SortBy = "recent" | "oldest" | "az" | "za";
+  type SortBy = "custom" | "recent" | "oldest" | "az" | "za";
   const[sortBy,setSortBy]=useState<SortBy>("recent");
   const[libMenuOpen,setLibMenuOpen]=useState<"filter"|"sort"|"add"|null>(null);
   // Modal state for standalone quote creation. Opened from the
   // "+ Add" → "Standalone quote" menu entry.
   const[standaloneQuoteOpen,setStandaloneQuoteOpen]=useState(false);
   const[rotationPanelOpen,setRotationPanelOpen]=useState(false);
+  // Rotation speed in seconds. Persisted to localStorage so it
+  // sticks across reloads. 0 = paused. Default 7s matches the
+  // design spec.
+  const[rotatorIntervalSec,setRotatorIntervalSec]=useState<number>(() => {
+    if (typeof window === "undefined") return 7;
+    const raw = window.localStorage.getItem("storymatch.rotatorIntervalSec");
+    const n = raw == null ? NaN : parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 && n <= 600 ? n : 7;
+  });
+  const handleRotatorIntervalChange = useCallback((sec: number) => {
+    setRotatorIntervalSec(sec);
+    try { window.localStorage.setItem("storymatch.rotatorIntervalSec", String(sec)); } catch {}
+  }, []);
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
@@ -5586,6 +5626,146 @@ export default function App(){
     });
   }
   const anyFilter=filters.vertical.length>0||filters.assetType.length>0;
+
+  // ── Card drag handlers ──────────────────────────────────────────
+  // Computes which card index the pointer is currently over by
+  // measuring distance to each card's centre. Works for both 1D list
+  // and 2D grid layouts.
+  const computeCardInsertIdx = React.useCallback((rects: DOMRect[], px: number, py: number, fromIdx: number): number => {
+    let best = fromIdx;
+    let bestDist = Infinity;
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const dx = px - cx;
+      const dy = py - cy;
+      const d = dx * dx + dy * dy;
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return best;
+  }, []);
+
+  // Pointer-down on a visible card. Captures rects of every visible
+  // card so we can compute insert positions against a frozen layout.
+  // Threshold prevents accidental drags on a click — only starts
+  // after the pointer has moved 5px from the press location.
+  const onCardPointerDown = (assetId: string, fromIdx: number) => (e: React.PointerEvent) => {
+    if (!isAdmin || !adminMode) return;
+    if (e.button !== 0) return;
+    // Don't fight with interactive children (checkbox, action buttons,
+    // dot menus, etc.). The card body is draggable; chrome is not.
+    const target = e.target as HTMLElement;
+    if (target.closest("input,button,a,textarea,select,.card-check,.card-share,.card-dots")) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const visibleIds = Array.from(cardElsRef.current.keys());
+    const onMoveBeforeThreshold = (mv: PointerEvent) => {
+      const dx = mv.clientX - startX;
+      const dy = mv.clientY - startY;
+      if (dx * dx + dy * dy < 25) return; // threshold ~5px
+      // Begin drag. Capture rects now (after threshold so layout
+      // hasn't shifted) and lift to the active drag pipeline.
+      const rects = visibleIds.map(id => {
+        const el = cardElsRef.current.get(id);
+        return el ? el.getBoundingClientRect() : new DOMRect();
+      });
+      const fromRect = rects[fromIdx] || new DOMRect();
+      setCardDrag({
+        assetId,
+        fromIdx,
+        pointerX: mv.clientX,
+        pointerY: mv.clientY,
+        initialX: startX,
+        initialY: startY,
+        width: fromRect.width,
+        height: fromRect.height,
+        rects,
+        insertIdx: fromIdx,
+      });
+      window.removeEventListener("pointermove", onMoveBeforeThreshold);
+      window.removeEventListener("pointerup", onUpBeforeThreshold);
+    };
+    const onUpBeforeThreshold = () => {
+      window.removeEventListener("pointermove", onMoveBeforeThreshold);
+      window.removeEventListener("pointerup", onUpBeforeThreshold);
+    };
+    window.addEventListener("pointermove", onMoveBeforeThreshold);
+    window.addEventListener("pointerup", onUpBeforeThreshold);
+  };
+
+  // While a card-drag is active, track the pointer + recompute the
+  // insert index. On pointerup, commit the new order.
+  React.useEffect(() => {
+    if (!cardDrag) return;
+    const onMove = (e: PointerEvent) => {
+      const cur = cardDragRef.current;
+      if (!cur) return;
+      const insertIdx = computeCardInsertIdx(cur.rects, e.clientX, e.clientY, cur.fromIdx);
+      setCardDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx });
+    };
+    const onUp = () => {
+      const cur = cardDragRef.current;
+      setCardDrag(null);
+      if (!cur) return;
+      cardDragJustEnded.current = true;
+      setTimeout(() => { cardDragJustEnded.current = false; }, 200);
+      if (cur.insertIdx === cur.fromIdx) return;
+      // Build the new visible order by splicing the dragged id into
+      // the insert slot.
+      const visibleIds = Array.from(cardElsRef.current.keys());
+      const next = [...visibleIds];
+      const [moved] = next.splice(cur.fromIdx, 1);
+      next.splice(cur.insertIdx, 0, moved);
+      // Force the sort to "custom" so the new order is what shows.
+      setSortBy("custom");
+      void persistCardReorder(next);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardDrag?.assetId]);
+
+  // Persist new positions after drop. Optimistically updates local
+  // assets state, fires the bulk PATCH, and falls back if the
+  // request fails.
+  const persistCardReorder = React.useCallback(async (newOrderIds: string[]) => {
+    // Build {id, position} pairs only for the visible subset — other
+    // assets keep their existing displayOrder (or null).
+    const positions = newOrderIds.map((id, idx) => ({ id, position: idx }));
+    // Optimistic local update.
+    setAssets(prev => prev.map(a => {
+      const pos = newOrderIds.indexOf(a.id);
+      if (pos < 0) return a;
+      return { ...a, displayOrder: pos };
+    }));
+    try {
+      const headers: HeadersInit = { "Content-Type": "application/json" };
+      const auth = await authHeaders();
+      Object.assign(headers as Record<string, string>, auth);
+      const r = await fetch("/api/assets/reorder", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ positions }),
+      });
+      if (!r.ok && r.status !== 207) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e?.error || `Reorder failed (${r.status})`);
+      }
+    } catch (e) {
+      console.error("[card reorder] persist failed:", e);
+      setToast("Reorder didn't save");
+      setTimeout(() => setToast(null), 1800);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Apply sort (skip when StoryMatch is showing AI-ranked results; their
   // order is the relevance ranking and shouldn't be reshuffled).
   if (!smResults) {
@@ -5596,7 +5776,17 @@ export default function App(){
     };
     const cmpHeadline = (a: Asset, b: Asset) =>
       (a.headline || "").localeCompare(b.headline || "", undefined, { sensitivity: "base" });
-    if (sortBy === "recent") displayAssets = [...displayAssets].sort(cmpDate);
+    // Custom sort: use admin-set displayOrder; nulls (never reordered)
+    // sort to the end and tie-break on date_created desc.
+    const cmpCustom = (a: Asset, b: Asset) => {
+      const ao = a.displayOrder, bo = b.displayOrder;
+      if (ao == null && bo == null) return cmpDate(a, b);
+      if (ao == null) return 1;
+      if (bo == null) return -1;
+      return ao - bo;
+    };
+    if (sortBy === "custom") displayAssets = [...displayAssets].sort(cmpCustom);
+    else if (sortBy === "recent") displayAssets = [...displayAssets].sort(cmpDate);
     else if (sortBy === "oldest") displayAssets = [...displayAssets].sort((a, b) => -cmpDate(a, b));
     else if (sortBy === "az") displayAssets = [...displayAssets].sort(cmpHeadline);
     else if (sortBy === "za") displayAssets = [...displayAssets].sort((a, b) => -cmpHeadline(a, b));
@@ -6113,11 +6303,12 @@ export default function App(){
                       onClick={() => setLibMenuOpen(libMenuOpen === "sort" ? null : "sort")}
                     >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
-                      Sort: {sortBy === "recent" ? "Recent" : sortBy === "oldest" ? "Oldest" : sortBy === "az" ? "A–Z" : "Z–A"}
+                      Sort: {sortBy === "recent" ? "Recent" : sortBy === "oldest" ? "Oldest" : sortBy === "az" ? "A–Z" : sortBy === "za" ? "Z–A" : "Custom"}
                     </button>
                     {libMenuOpen === "sort" && (
                       <div className="lib-menu">
                         {([
+                          { k: "custom", label: "Custom (drag to reorder)" },
                           { k: "recent", label: "Recently added" },
                           { k: "oldest", label: "Oldest first" },
                           { k: "az", label: "Title A → Z" },
@@ -6263,16 +6454,42 @@ export default function App(){
                       if (parent) openAsset(parent);
                     }
                   };
-                  const renderGrid = (items: Asset[]) => (
+                  // Refresh the card-elements map every render so the
+                  // drag-from-card logic can measure rects accurately.
+                  cardElsRef.current = new Map();
+                  const renderGrid = (items: Asset[], offset: number) => (
                     <div className="grid">
-                      {items.map(a=>{
-                        return renderAssetCard(a);
+                      {items.map((a, i) => {
+                        const idx = offset + i;
+                        const isDragging = cardDrag?.assetId === a.id;
+                        return (
+                          <div
+                            key={a.id}
+                            ref={el => {
+                              if (el) cardElsRef.current.set(a.id, el);
+                              else cardElsRef.current.delete(a.id);
+                            }}
+                            onPointerDown={isAdmin && adminMode ? onCardPointerDown(a.id, idx) : undefined}
+                            style={{
+                              cursor: isAdmin && adminMode ? "grab" : undefined,
+                              visibility: isDragging ? "hidden" : undefined,
+                            }}
+                          >
+                            {renderAssetCard(a)}
+                          </div>
+                        );
                       })}
                     </div>
                   );
                   // Inline helper so we don't repeat the giant per-card
                   // computation block twice. Closes over the surrounding
                   // scope (selectedIds, openAsset, etc.).
+                  // Wraps openAsset so a card-click that's actually the
+                  // tail end of a drag-and-drop doesn't navigate.
+                  const safeOpenAsset = (a: Asset) => {
+                    if (cardDragJustEnded.current) return;
+                    openAsset(a);
+                  };
                   function renderAssetCard(a: Asset) {
                     const ai=aiDataMap[a.id]||null;
                     const adminMgmt = isAdmin && adminMode;
@@ -6308,20 +6525,21 @@ export default function App(){
                       };
                     })() : undefined;
                     return a.assetType==="Quote"
-                      ? <QCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>
-                      : <TCard key={a.id} asset={a} onClick={openAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>;
+                      ? <QCard key={a.id} asset={a} onClick={safeOpenAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>
+                      : <TCard key={a.id} asset={a} onClick={safeOpenAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>;
                   }
                   return (
                     <>
-                      {renderGrid(headAssets)}
+                      {renderGrid(headAssets, 0)}
                       {shouldShowRotator && (
                         <FeaturedQuoteRotator
                           quotes={enriched}
                           onCtaClick={onCtaClick}
                           onCurate={isAdmin && adminMode ? () => setRotationPanelOpen(true) : undefined}
+                          intervalSec={rotatorIntervalSec}
                         />
                       )}
-                      {tailAssets.length > 0 && renderGrid(tailAssets)}
+                      {tailAssets.length > 0 && renderGrid(tailAssets, headAssets.length)}
                     </>
                   );
                 })()
@@ -6365,6 +6583,8 @@ export default function App(){
             authHeaders={authHeaders}
             onClose={() => setRotationPanelOpen(false)}
             onChanged={refreshFeaturedQuotes}
+            intervalSec={rotatorIntervalSec}
+            onIntervalChange={handleRotatorIntervalChange}
           />
         )}
         {visOverride && (
@@ -6374,6 +6594,41 @@ export default function App(){
             onClose={() => setVisOverride(null)}
             onOverride={overrideAndPublish}
           />
+        )}
+        {/* Floating drag clone — renders the in-flight card following
+            the pointer. Pure visual; pointer events pass through so
+            the underlying drop logic can still measure rects. */}
+        {cardDrag && typeof document !== "undefined" && createPortal(
+          (() => {
+            const fromRect = cardDrag.rects[cardDrag.fromIdx];
+            if (!fromRect) return null;
+            const dx = cardDrag.pointerX - cardDrag.initialX;
+            const dy = cardDrag.pointerY - cardDrag.initialY;
+            const draggedAsset = displayAssets.find(a => a.id === cardDrag.assetId);
+            return (
+              <div
+                style={{
+                  position: "fixed",
+                  left: fromRect.left + dx,
+                  top: fromRect.top + dy,
+                  width: cardDrag.width,
+                  pointerEvents: "none",
+                  zIndex: 300,
+                  opacity: 0.92,
+                  transform: "rotate(1.5deg)",
+                  boxShadow: "0 24px 48px rgba(0,0,0,.18)",
+                  borderRadius: "var(--r)",
+                }}
+              >
+                {draggedAsset ? (
+                  draggedAsset.assetType === "Quote"
+                    ? <QCard asset={draggedAsset} onClick={() => {}} aiData={null} onCopyQuote={copyQuote} isSelected={false}/>
+                    : <TCard asset={draggedAsset} onClick={() => {}} aiData={null} onCopyQuote={copyQuote} isSelected={false}/>
+                ) : null}
+              </div>
+            );
+          })(),
+          document.body,
         )}
       </div>
     </React.Fragment>

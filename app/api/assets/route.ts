@@ -106,6 +106,10 @@ type AssetDB = {
   // Cleared on manual edits. Used by the rule engine to know when to
   // auto-restore a rule-drafted asset back to published.
   auto_status_by_rule: string | null;
+  // Manual ordering — set when admin drag-reorders cards in the
+  // library. Powers the "Custom" sort. Null = never reordered;
+  // sorts to the end of the Custom view (NULLS LAST).
+  display_order: number | null;
 };
 
 type AssetFE = {
@@ -181,6 +185,8 @@ type AssetFE = {
   // Empty when source had no captions or asset hasn't been synced since
   // segments were introduced.
   transcriptSegments?: { startSeconds: number; text: string }[];
+  // Manual sort order — null when admin hasn't drag-reordered yet.
+  displayOrder?: number | null;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -248,6 +254,7 @@ function dbToFe(r: AssetDB): AssetFE {
     transcriptSegments: Array.isArray(r.transcript_segments) ? (r.transcript_segments as { startSeconds: number; text: string }[]) : [],
     clientRole: r.client_role || "",
     pullQuoteFavorite: !!r.pull_quote_favorite,
+    displayOrder: r.display_order,
   };
 }
 
