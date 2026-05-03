@@ -118,7 +118,10 @@ export async function POST(req: NextRequest) {
     static_url: body.staticUrl?.trim() || null,
     stars,
     is_featured: !!body.isFeatured,
-    featured_position: body.isFeatured ? Date.now() : null,
+    // Position is null on first feature — quotes with null position
+    // sort to the end of the rotator (NULLS LAST). Admin can give it
+    // an explicit slot via the curation panel.
+    featured_position: null,
     featured_at: body.isFeatured ? new Date().toISOString() : null,
     wash_token: wash,
     is_favorite: false,

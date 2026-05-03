@@ -85,10 +85,11 @@ export async function PATCH(
   // ── Curation fields (always allowed) ───────────────────
   if (body.isFeatured !== undefined) {
     updates.is_featured = !!body.isFeatured;
-    // First time being featured? Stamp featured_at + a default position.
+    // First time being featured: stamp featured_at. Position stays
+    // null until admin explicitly orders it via the curation panel —
+    // null sorts to the end of the rotator (NULLS LAST).
     if (body.isFeatured && !existing.is_featured) {
       updates.featured_at = new Date().toISOString();
-      if (existing.featured_position == null) updates.featured_position = Date.now();
     }
     // Unfeaturing → clear ordering data so the slot is freed cleanly.
     if (!body.isFeatured) {

@@ -1069,14 +1069,19 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
         const auth = await authHeaders();
         Object.assign(headers as Record<string, string>, auth);
       }
-      await fetch(`/api/quotes/${q.id}`, {
+      const r = await fetch(`/api/quotes/${q.id}`, {
         method: "PATCH",
         headers,
         body: JSON.stringify({ isFeatured: next, washToken: nextWash }),
       });
+      // fetch only throws on network errors — 4xx/5xx come back with
+      // r.ok === false. Treat those as failures and roll back.
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err?.error || `Feature toggle failed (${r.status})`);
+      }
     } catch (e) {
       console.error("[feature toggle] failed:", e);
-      // Roll back on failure
       setQuotes(prev => prev.map((x, idx) =>
         idx === i ? { ...x, isFeatured: q.isFeatured, washToken: q.washToken } : x
       ));
