@@ -5713,17 +5713,20 @@ export default function App(){
     e.preventDefault();
     const sx = window.scrollX;
     const sy = window.scrollY;
-    // Doc-space rects: same shape as viewport rects but with scroll
-    // baked in. left/top become absolute document coordinates.
-    const viewportEls = Array.from(cardElsRef.current.values());
-    const viewportRects = viewportEls.map(el => el.getBoundingClientRect());
+    // Pull viewport rects directly from the live DOM via the
+    // `data-card-asset-id` attribute. Doing it this way (instead of
+    // reading cardElsRef) bypasses any ref-map staleness after a
+    // window resize — the FIRST drag after resize was failing
+    // because cardElsRef can lag for one frame post-resize, which
+    // gave the dragged card a stale rect (insertIdx was glued to
+    // fromIdx so no shift happened and the drop never registered).
+    const cardEls = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-card-asset-id]"),
+    );
+    const viewportRects = cardEls.map(el => el.getBoundingClientRect());
     const rects = viewportRects.map(r => new DOMRect(r.left + sx, r.top + sy, r.width, r.height));
     // Always measure the dragged card directly from the event
-    // target. cardElsRef can lag for one frame after a window
-    // resize (refs re-fire on commit), so on the first drag
-    // immediately after a resize, viewportRects[fromIdx] could
-    // point at the wrong card or hold stale dimensions — which
-    // poisoned grabOffset and made the clone jump off-screen.
+    // target as a final guard against any rect[fromIdx] mismatch.
     const grabEl = e.currentTarget as HTMLElement;
     const fromViewportRect = grabEl.getBoundingClientRect();
     const fromRect = rects[fromIdx] || new DOMRect(fromViewportRect.left + sx, fromViewportRect.top + sy, fromViewportRect.width, fromViewportRect.height);
@@ -5819,7 +5822,9 @@ export default function App(){
     if (target.closest("button,a,input,select,textarea")) return;
     if (!rotatorElRef.current) return;
     e.preventDefault();
-    const cardRects = Array.from(cardElsRef.current.values()).map(el => el.getBoundingClientRect());
+    const cardRects = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-card-asset-id]"),
+    ).map(el => el.getBoundingClientRect());
     setRotatorDrag({
       pointerX: e.clientX,
       pointerY: e.clientY,
@@ -6666,6 +6671,7 @@ export default function App(){
                               if (el) cardElsRef.current.set(a.id, el);
                               else cardElsRef.current.delete(a.id);
                             }}
+                            data-card-asset-id={a.id}
                             onPointerDown={isAdmin && adminMode ? onCardPointerDown(a.id, idx) : undefined}
                             style={{
                               cursor: isAdmin && adminMode ? "grab" : undefined,
