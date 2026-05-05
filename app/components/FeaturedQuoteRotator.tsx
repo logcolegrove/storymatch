@@ -182,21 +182,11 @@ export default function FeaturedQuoteRotator({ quotes, onCtaClick, onCurate, int
   const q = quotes[active] || quotes[0];
   const wash = WASHES[washForQuote(q)];
   const bucket = sizeBucket(q.text);
-  const counter = `${String(active + 1).padStart(2, "0")} / ${String(quotes.length).padStart(2, "0")}`;
-  const hoverName = hoverIdx != null && hoverIdx !== active ? `→ ${quotes[hoverIdx].attrName || ""}` : " ";
+  const hoverName = hoverIdx != null && hoverIdx !== active ? `→ ${quotes[hoverIdx].attrName || ""}` : " ";
 
   return (
     <>
       <style>{css}</style>
-      <div className="fqr-eye">
-        <span>Featured quote · {counter}</span>
-        {onCurate && (
-          <button type="button" className="fqr-curate" onClick={onCurate} title="Manage featured quotes">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            <span>Manage rotation</span>
-          </button>
-        )}
-      </div>
       <div
         className="fqr-hero"
         ref={containerRef}
@@ -281,17 +271,31 @@ export default function FeaturedQuoteRotator({ quotes, onCtaClick, onCurate, int
             </div>
           </div>
         </div>
+        {onCurate && (
+          <button
+            type="button"
+            className="fqr-curate-btn"
+            onClick={onCurate}
+            title="Manage featured quotes"
+            aria-label="Manage featured quotes"
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        )}
       </div>
     </>
   );
 }
 
 const css = `
-.fqr-eye{display:flex;align-items:baseline;justify-content:space-between;font-family:var(--font);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);font-weight:600;margin:38px 0 14px;}
-.fqr-curate{display:inline-flex;align-items:center;gap:6px;background:none;border:1px solid var(--border);color:var(--t3);font-family:var(--font);font-size:11px;font-weight:500;letter-spacing:0;text-transform:none;padding:5px 10px;border-radius:6px;cursor:pointer;transition:all .12s;}
-.fqr-curate:hover{border-color:var(--accent);color:var(--accent);}
-
-.fqr-hero{display:grid;grid-template-columns:1.55fr 1fr;border-radius:14px;overflow:hidden;border:1px solid rgba(0,0,0,.06);background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.04);position:relative;outline:none;margin-bottom:42px;}
+.fqr-hero{display:grid;grid-template-columns:1.55fr 1fr;border-radius:14px;overflow:hidden;border:1px solid rgba(0,0,0,.06);background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.04);position:relative;outline:none;margin:38px 0 42px;}
+/* Manage rotation gear — absolute bottom-right of the rotator,
+   admin-only, fades in on hover so it doesn't compete with the
+   editorial typography. */
+.fqr-curate-btn{position:absolute;bottom:14px;right:16px;width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,.85);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:var(--t3);cursor:pointer;display:grid;place-items:center;opacity:.55;transition:opacity .15s,color .15s,border-color .15s;z-index:6;}
+.fqr-hero:hover .fqr-curate-btn{opacity:1;}
+.fqr-curate-btn:hover{color:var(--accent);border-color:var(--accent);}
 .fqr-hero:focus-visible{box-shadow:0 0 0 3px rgba(109,40,217,.25),0 1px 2px rgba(0,0,0,.04);}
 
 /* Left — quote panel. Wash background transitions over 600ms so the

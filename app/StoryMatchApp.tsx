@@ -4982,6 +4982,22 @@ export default function App(){
   const rotatorDragRef = React.useRef<RotatorDrag | null>(null);
   React.useEffect(() => { rotatorDragRef.current = rotatorDrag; }, [rotatorDrag]);
   const rotatorElRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Track grid column count so the rotator can only sit at row
+  // boundaries (multiples of cols). Without this, the rotator can
+  // land mid-row and leave weird empty grid cells next to it.
+  const computeGridCols = (): number => {
+    if (typeof window === "undefined") return 3;
+    if (window.innerWidth <= 680) return 1;
+    if (window.innerWidth <= 1100) return 2;
+    return 3;
+  };
+  const [gridCols, setGridCols] = React.useState<number>(computeGridCols);
+  React.useEffect(() => {
+    const onResize = () => setGridCols(computeGridCols());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   // Library bar: which dropdown is open (Filter, Sort, or +Add) and the
   // current sort. Null = nothing open.
   type SortBy = "custom" | "recent" | "oldest" | "az" | "za";
@@ -5709,11 +5725,33 @@ export default function App(){
   // insert index. On pointerup, commit the new order.
   React.useEffect(() => {
     if (!cardDrag) return;
+    // Auto-scroll while pointer near top/bottom of viewport. Runs
+    // on a 16ms tick so it stays smooth without flooring CPU.
+    let lastPointerY = cardDrag.pointerY;
+    const AUTOSCROLL_ZONE = 100;
+    const AUTOSCROLL_MAX = 14; // px per tick at the edge
+    const scrollTimer = window.setInterval(() => {
+      const vh = window.innerHeight;
+      let dy = 0;
+      if (lastPointerY < AUTOSCROLL_ZONE) {
+        const intensity = (AUTOSCROLL_ZONE - lastPointerY) / AUTOSCROLL_ZONE;
+        dy = -AUTOSCROLL_MAX * intensity;
+      } else if (lastPointerY > vh - AUTOSCROLL_ZONE) {
+        const intensity = (lastPointerY - (vh - AUTOSCROLL_ZONE)) / AUTOSCROLL_ZONE;
+        dy = AUTOSCROLL_MAX * intensity;
+      }
+      if (dy !== 0) window.scrollBy(0, dy);
+    }, 16);
     const onMove = (e: PointerEvent) => {
       const cur = cardDragRef.current;
       if (!cur) return;
-      const insertIdx = computeCardInsertIdx(cur.rects, e.clientX, e.clientY, cur.fromIdx);
-      setCardDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx });
+      lastPointerY = e.clientY;
+      // Refresh rects on every move — captures live viewport
+      // positions even if the user has scrolled (or auto-scroll
+      // has scrolled for them) since drag start.
+      const freshRects = Array.from(cardElsRef.current.values()).map(el => el.getBoundingClientRect());
+      const insertIdx = computeCardInsertIdx(freshRects, e.clientX, e.clientY, cur.fromIdx);
+      setCardDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx, rects: freshRects });
     };
     const onUp = () => {
       const cur = cardDragRef.current;
@@ -5737,6 +5775,7 @@ export default function App(){
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
     return () => {
+      window.clearInterval(scrollTimer);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
@@ -5771,21 +5810,39 @@ export default function App(){
 
   React.useEffect(() => {
     if (!rotatorDrag) return;
+    // Auto-scroll near viewport edges, same pattern as card drag.
+    let lastY = rotatorDrag.pointerY;
+    const ZONE = 100, MAX = 14;
+    const scrollTimer = window.setInterval(() => {
+      const vh = window.innerHeight;
+      let dy = 0;
+      if (lastY < ZONE) dy = -MAX * (ZONE - lastY) / ZONE;
+      else if (lastY > vh - ZONE) dy = MAX * (lastY - (vh - ZONE)) / ZONE;
+      if (dy !== 0) window.scrollBy(0, dy);
+    }, 16);
     const onMove = (e: PointerEvent) => {
+      lastY = e.clientY;
       const cur = rotatorDragRef.current;
       if (!cur) return;
+      // Refresh card rects every move so scroll doesn't break the
+      // drop maths.
+      const fresh = Array.from(cardElsRef.current.values()).map(el => el.getBoundingClientRect());
       // Find the card whose vertical centre is closest to the
       // pointer; if pointer is above the centre, rotator lands
       // BEFORE it (so insertIdx = i). Otherwise AFTER (insertIdx = i+1).
-      let insertIdx = cur.cardRects.length;
+      let insertIdx = fresh.length;
       let bestDist = Infinity;
-      for (let i = 0; i < cur.cardRects.length; i++) {
-        const r = cur.cardRects[i];
+      for (let i = 0; i < fresh.length; i++) {
+        const r = fresh[i];
         const cy = r.top + r.height / 2;
         const d = Math.abs(e.clientY - cy);
         if (d < bestDist) { bestDist = d; insertIdx = e.clientY < cy ? i : i + 1; }
       }
-      setRotatorDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx });
+      // Snap to a row boundary. The rotator is full-width and can
+      // only sit between complete rows of cards.
+      insertIdx = Math.round(insertIdx / gridCols) * gridCols;
+      insertIdx = Math.max(0, Math.min(insertIdx, fresh.length));
+      setRotatorDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx, cardRects: fresh });
     };
     const onUp = () => {
       const cur = rotatorDragRef.current;
@@ -5799,6 +5856,7 @@ export default function App(){
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
     return () => {
+      window.clearInterval(scrollTimer);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
@@ -6509,10 +6567,12 @@ export default function App(){
                   //     feel natural (otherwise it's just one card +
                   //     a hero, which looks unbalanced).
                   const shouldShowRotator = !smResults && featuredQuotes.length > 0 && displayAssets.length >= 3;
-                  // Clamp the admin-chosen rotator slot to the
-                  // current asset count so it doesn't fall off the
-                  // end after assets are filtered out.
-                  const rotatorSlot = Math.min(Math.max(rotatorAfterIdx, 0), displayAssets.length);
+                  // Snap the admin-chosen rotator slot to a row
+                  // boundary so the rotator only sits BETWEEN full
+                  // rows of cards — never mid-row, which would
+                  // leave empty cells. Then clamp to the asset count.
+                  const snapToRow = (n: number) => Math.round(n / gridCols) * gridCols;
+                  const rotatorSlot = Math.min(Math.max(snapToRow(rotatorAfterIdx), 0), displayAssets.length);
                   const headAssets = shouldShowRotator ? displayAssets.slice(0, rotatorSlot) : displayAssets;
                   const tailAssets = shouldShowRotator ? displayAssets.slice(rotatorSlot) : [];
                   // Enrich featured quotes with their parent asset's
