@@ -6595,27 +6595,9 @@ export default function App(){
                   // Refresh the card-elements map every render so the
                   // drag-from-card logic can measure rects accurately.
                   cardElsRef.current = new Map();
-                  // While dragging, compute each card's new index in
-                  // the visible array so we can translate it from its
-                  // DOM position to its predicted post-drop position.
-                  // shiftFor: if pointer is moving the dragged card
-                  // forward (insertIdx > fromIdx), every card whose
-                  // DOM index is in (fromIdx, insertIdx] shifts back
-                  // by 1 to make room. Symmetric the other direction.
-                  const shiftFor = (idx: number, fromIdx: number, insertIdx: number) => {
-                    if (idx === fromIdx) return idx;
-                    if (insertIdx === fromIdx) return idx;
-                    if (insertIdx > fromIdx) {
-                      if (idx > fromIdx && idx <= insertIdx) return idx - 1;
-                    } else {
-                      if (idx >= insertIdx && idx < fromIdx) return idx + 1;
-                    }
-                    return idx;
-                  };
-                  // Distance the pointer has moved since drag start.
-                  // Tiny twitches shouldn't trigger the visual drag
-                  // mode (clone, hidden original). Beyond ~3px = real
-                  // drag.
+                  // The dragged card needs to be hidden (clone takes
+                  // its place) only after a real movement — otherwise
+                  // a static click flashes empty space.
                   const pointerMoved = cardDrag
                     ? Math.abs(cardDrag.pointerX - cardDrag.initialX) > 3
                       || Math.abs(cardDrag.pointerY - cardDrag.initialY) > 3
@@ -6625,22 +6607,6 @@ export default function App(){
                       {items.map((a, i) => {
                         const idx = offset + i;
                         const isDragging = cardDrag?.assetId === a.id && pointerMoved;
-                        // Compute shift offset for cards that need to
-                        // make room. Uses the cached rects from drag
-                        // start so the maths stays stable across the
-                        // re-renders triggered by setCardDrag.
-                        let dx = 0, dy = 0;
-                        if (cardDrag && pointerMoved && cardDrag.assetId !== a.id) {
-                          const newIdx = shiftFor(idx, cardDrag.fromIdx, cardDrag.insertIdx);
-                          if (newIdx !== idx) {
-                            const oldR = cardDrag.rects[idx];
-                            const newR = cardDrag.rects[newIdx];
-                            if (oldR && newR) {
-                              dx = newR.left - oldR.left;
-                              dy = newR.top - oldR.top;
-                            }
-                          }
-                        }
                         return (
                           <div
                             key={a.id}
@@ -6652,8 +6618,6 @@ export default function App(){
                             style={{
                               cursor: isAdmin && adminMode ? "grab" : undefined,
                               visibility: isDragging ? "hidden" : undefined,
-                              transform: dx || dy ? `translate(${dx}px, ${dy}px)` : undefined,
-                              transition: cardDrag ? "transform .25s cubic-bezier(.2,.7,.2,1)" : undefined,
                             }}
                           >
                             {renderAssetCard(a)}
