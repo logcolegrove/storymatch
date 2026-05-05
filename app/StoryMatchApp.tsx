@@ -4943,8 +4943,15 @@ export default function App(){
     initialY: number;
     width: number;
     height: number;
-    rects: DOMRect[];      // rects of all visible cards at drag start
+    rects: DOMRect[];      // rects of all visible cards at drag start (DOC space)
     insertIdx: number;     // current target index
+    // Offset from the card's top-left to the pointer at the moment
+    // of grab, in viewport space. Used to position the floating
+    // clone — keeps the clone glued to the cursor regardless of
+    // scroll (auto-scroll fires no pointermove, so any scroll-
+    // dependent formula drifts).
+    grabOffsetX: number;
+    grabOffsetY: number;
   };
   const [cardDrag, setCardDrag] = React.useState<CardDrag | null>(null);
   const cardDragRef = React.useRef<CardDrag | null>(null);
@@ -5708,10 +5715,10 @@ export default function App(){
     const sy = window.scrollY;
     // Doc-space rects: same shape as viewport rects but with scroll
     // baked in. left/top become absolute document coordinates.
-    const rects = Array.from(cardElsRef.current.values()).map(el => {
-      const r = el.getBoundingClientRect();
-      return new DOMRect(r.left + sx, r.top + sy, r.width, r.height);
-    });
+    const viewportEls = Array.from(cardElsRef.current.values());
+    const viewportRects = viewportEls.map(el => el.getBoundingClientRect());
+    const rects = viewportRects.map(r => new DOMRect(r.left + sx, r.top + sy, r.width, r.height));
+    const fromViewportRect = viewportRects[fromIdx] || new DOMRect();
     const fromRect = rects[fromIdx] || new DOMRect();
     setCardDrag({
       assetId,
@@ -5724,6 +5731,8 @@ export default function App(){
       height: fromRect.height,
       rects,
       insertIdx: fromIdx,
+      grabOffsetX: e.clientX - fromViewportRect.left,
+      grabOffsetY: e.clientY - fromViewportRect.top,
     });
   };
 
@@ -6863,19 +6872,18 @@ export default function App(){
           const moved = Math.abs(cardDrag.pointerX - cardDrag.initialX) > 3
             || Math.abs(cardDrag.pointerY - cardDrag.initialY) > 3;
           if (!moved) return null;
-          const fromRect = cardDrag.rects[cardDrag.fromIdx];
-          if (!fromRect) return null;
-          const viewportLeft = fromRect.left - window.scrollX;
-          const viewportTop = fromRect.top - window.scrollY;
-          const dx = cardDrag.pointerX - cardDrag.initialX;
-          const dy = cardDrag.pointerY - cardDrag.initialY;
+          // Clone stays glued to the cursor by subtracting the
+          // fixed grab offset captured at drag start. This is
+          // viewport-anchored, so auto-scroll (which doesn't fire
+          // pointermove) can never make the clone separate from
+          // the cursor.
           const draggedAsset = displayAssets.find(a => a.id === cardDrag.assetId);
           return createPortal(
             <div
               style={{
                 position: "fixed",
-                left: viewportLeft + dx,
-                top: viewportTop + dy,
+                left: cardDrag.pointerX - cardDrag.grabOffsetX,
+                top: cardDrag.pointerY - cardDrag.grabOffsetY,
                 width: cardDrag.width,
                 pointerEvents: "none",
                 zIndex: 300,
