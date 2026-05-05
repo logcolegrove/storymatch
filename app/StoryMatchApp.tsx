@@ -2322,11 +2322,25 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
 
     let flagged = false;
     let thresholdLabel = "";
-    // Compute the date when the rolling rule will flag this asset (if active).
-    // For absolute-date rules there's no future "expiration date" — a video
-    // is either before or after the cutoff, so effectiveExpiration is null.
     let effectiveExpiration: string | undefined;
-    if (orgSettings.freshnessWarnBeforeDate) {
+
+    // Per-asset expiration date — the UI labels this "Set custom
+    // expiration", which means this asset expires on the chosen date,
+    // overriding any org-level rule. Past date = already expired
+    // (flag fires). Future date = fresh until then. The "Never flag"
+    // preset stores a date 100 years out, so it just naturally never
+    // hits expiration.
+    const exceptionUntil = asset.freshnessExceptionUntil ? new Date(asset.freshnessExceptionUntil) : null;
+    const exceptionValid = exceptionUntil !== null && !Number.isNaN(exceptionUntil.getTime());
+
+    if (exceptionValid) {
+      effectiveExpiration = exceptionUntil.toISOString();
+      if (exceptionUntil.getTime() <= Date.now()) {
+        flagged = true;
+        const dateStr = exceptionUntil.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+        thresholdLabel = `expired on ${dateStr}`;
+      }
+    } else if (orgSettings.freshnessWarnBeforeDate) {
       const cutoff = new Date(orgSettings.freshnessWarnBeforeDate);
       if (!Number.isNaN(cutoff.getTime()) && pub < cutoff) {
         flagged = true;
@@ -2341,34 +2355,19 @@ function computeCleared(asset: Asset, orgSettings: OrgSettings): { level: Cleare
           ? `over ${months / 12}-year threshold`
           : `over ${months}-month threshold`;
       }
-      // Effective expiration = publish + threshold months
       const exp = new Date(pub);
       exp.setMonth(exp.getMonth() + orgSettings.freshnessWarnAfterMonths);
       effectiveExpiration = exp.toISOString();
     }
 
-    // Per-asset freshness exception silences the org-level flag while active.
-    // Active = until date is in the future (NULL means no exception is set).
-    const exceptionUntil = asset.freshnessExceptionUntil ? new Date(asset.freshnessExceptionUntil) : null;
-    const exceptionActive = exceptionUntil !== null && !Number.isNaN(exceptionUntil.getTime()) && exceptionUntil.getTime() > Date.now();
-
-    // No-rule case: no org freshness rule AND no per-asset expiration.
-    // Don't show a colored dot — there's nothing to judge against, so
-    // green/yellow/red would all be misleading.
+    // No-rule case: no org freshness rule AND no per-asset date.
+    // Don't show a coloured dot — there's nothing to judge against.
     const noRuleApplied =
       !orgSettings.freshnessWarnAfterMonths &&
       !orgSettings.freshnessWarnBeforeDate &&
-      !exceptionActive;
+      !exceptionValid;
 
-    if (flagged && exceptionActive) {
-      reasons.push({
-        signal: "freshness",
-        level: "green",
-        label: `${ageLabel} — exception active`,
-        flagDetail: `Org rule says: ${thresholdLabel}`,
-        effectiveExpiration,
-      });
-    } else if (flagged) {
+    if (flagged) {
       reasons.push({
         signal: "freshness",
         level: "yellow",

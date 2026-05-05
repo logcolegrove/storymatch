@@ -37,14 +37,23 @@ export type AssetRuleInput = {
   auto_status_by_rule: string | null;
 };
 
-// Decide whether the asset is currently "expired" by org rule, accounting
-// for any per-asset freshness exception (sentinel/never overrides org rule).
+// Decide whether the asset is currently "expired."
+//
+// Per-asset expiration date (the "Set custom expiration" admin UI)
+// overrides the org rule entirely:
+//   • Past date  → expired (flag fires)
+//   • Future date → fresh until then (no flag, org rule ignored)
+//   • "Never flag" preset stores a date 100 years out, which is
+//     just a far-future date that naturally never expires.
+//
+// When no per-asset date is set, the org-level rule applies as
+// before.
 function isExpired(asset: AssetRuleInput, org: OrgRulesContext): boolean {
-  // Active per-asset exception suppresses the org rule.
-  const exceptionActive =
-    !!asset.freshness_exception_until &&
-    new Date(asset.freshness_exception_until).getTime() > Date.now();
-  if (exceptionActive) return false;
+  if (asset.freshness_exception_until) {
+    const t = new Date(asset.freshness_exception_until).getTime();
+    if (Number.isNaN(t)) return false;
+    return t <= Date.now();
+  }
 
   if (org.freshness_warn_before_date) {
     const cutoff = new Date(org.freshness_warn_before_date);
