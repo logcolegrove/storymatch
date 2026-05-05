@@ -5691,21 +5691,27 @@ export default function App(){
     return best;
   }, []);
 
-  // Pointer-down on a visible card. Captures rects + lifts to the
-  // active drag pipeline IMMEDIATELY — a small in-place click
-  // without movement is treated as a no-op when pointerup fires
-  // (no reorder if insertIdx === fromIdx, and the card click handler
-  // gets suppressed by cardDragJustEnded only when there was a real
-  // drop). One synchronous step, no threshold dance.
+  // Pointer-down on a visible card. Capture rects in DOCUMENT
+  // coordinates (viewport rect + scroll offset at drag start) so they
+  // stay stable when the user scrolls — every pointer event then
+  // converts back to doc coords for comparison. This avoids two bugs:
+  // (1) drag breaking after scroll, (2) cumulative drift if we tried
+  // to re-measure rects mid-drag (they'd report already-shifted
+  // positions).
   const onCardPointerDown = (assetId: string, fromIdx: number) => (e: React.PointerEvent) => {
     if (!isAdmin || !adminMode) return;
     if (e.button !== 0) return;
-    // Don't fight with interactive children (checkbox, action buttons,
-    // dot menus, etc.). The card body is draggable; chrome is not.
     const target = e.target as HTMLElement;
     if (target.closest("input,button,a,textarea,select,.card-check,.card-share,.card-dots")) return;
     e.preventDefault();
-    const rects = Array.from(cardElsRef.current.values()).map(el => el.getBoundingClientRect());
+    const sx = window.scrollX;
+    const sy = window.scrollY;
+    // Doc-space rects: same shape as viewport rects but with scroll
+    // baked in. left/top become absolute document coordinates.
+    const rects = Array.from(cardElsRef.current.values()).map(el => {
+      const r = el.getBoundingClientRect();
+      return new DOMRect(r.left + sx, r.top + sy, r.width, r.height);
+    });
     const fromRect = rects[fromIdx] || new DOMRect();
     setCardDrag({
       assetId,
@@ -5746,12 +5752,13 @@ export default function App(){
       const cur = cardDragRef.current;
       if (!cur) return;
       lastPointerY = e.clientY;
-      // Refresh rects on every move — captures live viewport
-      // positions even if the user has scrolled (or auto-scroll
-      // has scrolled for them) since drag start.
-      const freshRects = Array.from(cardElsRef.current.values()).map(el => el.getBoundingClientRect());
-      const insertIdx = computeCardInsertIdx(freshRects, e.clientX, e.clientY, cur.fromIdx);
-      setCardDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx, rects: freshRects });
+      // Convert pointer to doc coords (it's already in viewport
+      // coords from the event). insertIdx is computed against the
+      // stable doc-space rects so scroll doesn't break the math.
+      const docX = e.clientX + window.scrollX;
+      const docY = e.clientY + window.scrollY;
+      const insertIdx = computeCardInsertIdx(cur.rects, docX, docY, cur.fromIdx);
+      setCardDrag({ ...cur, pointerX: e.clientX, pointerY: e.clientY, insertIdx });
     };
     const onUp = () => {
       const cur = cardDragRef.current;
@@ -6595,9 +6602,22 @@ export default function App(){
                   // Refresh the card-elements map every render so the
                   // drag-from-card logic can measure rects accurately.
                   cardElsRef.current = new Map();
-                  // The dragged card needs to be hidden (clone takes
-                  // its place) only after a real movement — otherwise
-                  // a static click flashes empty space.
+                  // Shift cards out of the dragged card's way as the
+                  // pointer moves. Each non-dragged card translates
+                  // from its original position to the position of
+                  // whichever card it would push into. Doc-space
+                  // rects (captured at drag start) stay constant, so
+                  // the maths can't drift across re-renders.
+                  const shiftFor = (idx: number, fromIdx: number, insertIdx: number) => {
+                    if (idx === fromIdx) return idx;
+                    if (insertIdx === fromIdx) return idx;
+                    if (insertIdx > fromIdx) {
+                      if (idx > fromIdx && idx <= insertIdx) return idx - 1;
+                    } else {
+                      if (idx >= insertIdx && idx < fromIdx) return idx + 1;
+                    }
+                    return idx;
+                  };
                   const pointerMoved = cardDrag
                     ? Math.abs(cardDrag.pointerX - cardDrag.initialX) > 3
                       || Math.abs(cardDrag.pointerY - cardDrag.initialY) > 3
@@ -6607,6 +6627,22 @@ export default function App(){
                       {items.map((a, i) => {
                         const idx = offset + i;
                         const isDragging = cardDrag?.assetId === a.id && pointerMoved;
+                        // Compute translate offset for non-dragged
+                        // cards. Doc-space deltas are equivalent to
+                        // viewport-space deltas (no rotation), so the
+                        // CSS transform works directly.
+                        let dx = 0, dy = 0;
+                        if (cardDrag && pointerMoved && cardDrag.assetId !== a.id) {
+                          const newIdx = shiftFor(idx, cardDrag.fromIdx, cardDrag.insertIdx);
+                          if (newIdx !== idx) {
+                            const oldR = cardDrag.rects[idx];
+                            const newR = cardDrag.rects[newIdx];
+                            if (oldR && newR) {
+                              dx = newR.left - oldR.left;
+                              dy = newR.top - oldR.top;
+                            }
+                          }
+                        }
                         return (
                           <div
                             key={a.id}
@@ -6618,6 +6654,8 @@ export default function App(){
                             style={{
                               cursor: isAdmin && adminMode ? "grab" : undefined,
                               visibility: isDragging ? "hidden" : undefined,
+                              transform: dx || dy ? `translate(${dx}px, ${dy}px)` : undefined,
+                              transition: cardDrag ? "transform .25s cubic-bezier(.2,.7,.2,1)" : undefined,
                             }}
                           >
                             {renderAssetCard(a)}
