@@ -6855,13 +6855,18 @@ export default function App(){
             the pointer. Solid white background under the whole clone
             so the title text doesn't bleed through onto the page.
             Only renders after the pointer has actually moved (>3px),
-            so a click without movement doesn't briefly flash a clone. */}
+            so a click without movement doesn't briefly flash a clone.
+            Rects are stored in DOCUMENT coordinates (so scroll
+            doesn't break the drop maths), but `position: fixed` is
+            in VIEWPORT space — convert back here. */}
         {cardDrag && typeof document !== "undefined" && (() => {
           const moved = Math.abs(cardDrag.pointerX - cardDrag.initialX) > 3
             || Math.abs(cardDrag.pointerY - cardDrag.initialY) > 3;
           if (!moved) return null;
           const fromRect = cardDrag.rects[cardDrag.fromIdx];
           if (!fromRect) return null;
+          const viewportLeft = fromRect.left - window.scrollX;
+          const viewportTop = fromRect.top - window.scrollY;
           const dx = cardDrag.pointerX - cardDrag.initialX;
           const dy = cardDrag.pointerY - cardDrag.initialY;
           const draggedAsset = displayAssets.find(a => a.id === cardDrag.assetId);
@@ -6869,8 +6874,8 @@ export default function App(){
             <div
               style={{
                 position: "fixed",
-                left: fromRect.left + dx,
-                top: fromRect.top + dy,
+                left: viewportLeft + dx,
+                top: viewportTop + dy,
                 width: cardDrag.width,
                 pointerEvents: "none",
                 zIndex: 300,
