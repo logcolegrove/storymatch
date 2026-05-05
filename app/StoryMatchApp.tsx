@@ -5718,8 +5718,15 @@ export default function App(){
     const viewportEls = Array.from(cardElsRef.current.values());
     const viewportRects = viewportEls.map(el => el.getBoundingClientRect());
     const rects = viewportRects.map(r => new DOMRect(r.left + sx, r.top + sy, r.width, r.height));
-    const fromViewportRect = viewportRects[fromIdx] || new DOMRect();
-    const fromRect = rects[fromIdx] || new DOMRect();
+    // Always measure the dragged card directly from the event
+    // target. cardElsRef can lag for one frame after a window
+    // resize (refs re-fire on commit), so on the first drag
+    // immediately after a resize, viewportRects[fromIdx] could
+    // point at the wrong card or hold stale dimensions — which
+    // poisoned grabOffset and made the clone jump off-screen.
+    const grabEl = e.currentTarget as HTMLElement;
+    const fromViewportRect = grabEl.getBoundingClientRect();
+    const fromRect = rects[fromIdx] || new DOMRect(fromViewportRect.left + sx, fromViewportRect.top + sy, fromViewportRect.width, fromViewportRect.height);
     setCardDrag({
       assetId,
       fromIdx,
