@@ -12,7 +12,8 @@
 // Spec finalised in storymatch-results-mockup.html v6.
 
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export interface StoryMatchCardProps {
   rank: number;
@@ -77,6 +78,8 @@ function barColor(score: number): string {
 
 export default function StoryMatchCard(props: StoryMatchCardProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number } | null>(null);
+  const badgeRef = useRef<HTMLButtonElement | null>(null);
   const {
     rank, thumbnail, title, metaParts, isVideo, durationLabel, readLabel,
     reasoning, factorScores, lowestFactorNote, talkingPoints = [], quotes = [],
@@ -84,6 +87,28 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
   } = props;
 
   const matchTier = tierClass(relevanceScore);
+
+  // Position the popover via portal in viewport space, anchored just
+  // under the badge. Recompute on scroll/resize so it follows.
+  useEffect(() => {
+    if (!popoverOpen) { setPopoverPos(null); return; }
+    const update = () => {
+      const el = badgeRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setPopoverPos({
+        top: r.bottom + 8,
+        right: window.innerWidth - r.right,
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [popoverOpen]);
 
   return (
     <>
@@ -98,8 +123,11 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
             </div>
           )}
           <div className="smc-rank">{rank}</div>
-          {/* Match badge — tier-coloured, click to toggle popover. */}
+          {/* Match badge — tier-coloured, click to toggle popover.
+              The popover renders via portal (below) so it escapes
+              the card's overflow:hidden and never gets clipped. */}
           <button
+            ref={badgeRef}
             type="button"
             className={`smc-match smc-match-${matchTier}`}
             onClick={(e) => { e.stopPropagation(); setPopoverOpen(o => !o); }}
@@ -110,9 +138,10 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
             <span className="smc-match-num">{relevanceScore}%</span>
             <span>match</span>
           </button>
-          {popoverOpen && factorScores && (
+          {popoverOpen && factorScores && popoverPos && typeof document !== "undefined" && createPortal(
             <div
               className="smc-pop"
+              style={{ position: "fixed", top: popoverPos.top, right: popoverPos.right }}
               onMouseEnter={() => setPopoverOpen(true)}
               onMouseLeave={() => setPopoverOpen(false)}
               onClick={e => e.stopPropagation()}
@@ -122,7 +151,8 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
               <PopRow label="Pain points addressed" weight={FACTOR_WEIGHTS.painPoints} score={factorScores.painPoints}/>
               <PopRow label="Specific quote match" weight={FACTOR_WEIGHTS.quoteMatch} score={factorScores.quoteMatch}/>
               {lowestFactorNote && <div className="smc-pop-note">{lowestFactorNote}</div>}
-            </div>
+            </div>,
+            document.body,
           )}
           {(durationLabel || readLabel) && (
             <div className="smc-thumb-badge">
@@ -279,8 +309,9 @@ const css = `
 .smc-foot-btn{background:none;border:none;color:var(--t3);font-family:var(--font);font-size:12px;font-weight:500;padding:6px 10px;border-radius:6px;cursor:pointer;transition:all .12s;letter-spacing:-.005em;}
 .smc-foot-btn:hover{background:var(--bg2);color:var(--t1);}
 
-/* Match-badge popover */
-.smc-pop{position:absolute;top:50px;right:14px;width:320px;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 20px 50px rgba(0,0,0,.16);padding:18px 20px;z-index:10;font-family:var(--font);}
+/* Match-badge popover — rendered via portal, position:fixed in
+   viewport space so it escapes any parent overflow clipping. */
+.smc-pop{width:320px;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 20px 50px rgba(0,0,0,.16);padding:18px 20px;z-index:1000;font-family:var(--font);}
 .smc-pop-title{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);font-weight:700;margin-bottom:14px;}
 .smc-pop-factor{margin-bottom:14px;}
 .smc-pop-factor:last-child{margin-bottom:0;}

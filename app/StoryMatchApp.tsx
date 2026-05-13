@@ -6303,14 +6303,15 @@ export default function App(){
                 {((isAdmin && adminMode) || org?.role === "sales") && (
                   <button
                     className={`sm-btn ${smOpen||smLoading||smResults?"active":""}`}
-                    onClick={()=>{if(smResults){clearSm();}else{setSmOpen(!smOpen);}}}
+                    onClick={()=>setSmOpen(o => !o)}
+                    title={smResults ? "Open StoryMatch — your previous query stays so you can refine or start a new search" : "Find proof points with AI"}
                   >
-                    {smResults?"✕ Clear":"✦ StoryMatch"}
+                    ✦ StoryMatch
                   </button>
                 )}
               </div>
 
-              {((isAdmin && adminMode) || org?.role === "sales") && (smOpen||smLoading) && !smResults && (
+              {((isAdmin && adminMode) || org?.role === "sales") && (smOpen||smLoading) && (
                 <div className="sm-dropdown-wrap">
                   <div className="sm-dropdown">
                     <div className="sm-inner">
@@ -6368,7 +6369,7 @@ export default function App(){
                 </div>
               )}
 
-              {smOpen && !smResults && !smLoading && (
+              {smOpen && !smLoading && (
                 <div className="sm-scrim" onClick={()=>setSmOpen(false)}/>
               )}
             </div>
