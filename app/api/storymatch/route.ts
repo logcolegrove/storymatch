@@ -62,18 +62,57 @@ type CandidateAsset = {
   transcript: string | null;
 };
 
+// ── Match factor weights ─────────────────────────────────────
+// Org similarity is the highest-weighted because a story from a
+// peer organisation lands harder than one from a different kind of
+// customer — even if topic + quotes are great. These are tunable.
+const FACTOR_WEIGHTS = {
+  orgSimilarity: 0.45,
+  painPoints: 0.35,
+  quoteMatch: 0.20,
+} as const;
+
+interface FactorScores {
+  orgSimilarity: number; // 0-100
+  painPoints: number;    // 0-100
+  quoteMatch: number;    // 0-100
+}
+
+interface TalkingPoint {
+  topic: string;
+  text: string;
+}
+
 interface RawAIMatch {
   id: string;
-  reasoning: string;       // Contains placeholders like {SPEAKER}, {COMPANY}
+  reasoning: string;          // 1-2 sentence why-this-match, may use placeholders
+  factorScores?: FactorScores;
+  lowestFactorNote?: string;  // 1-sentence explanation of weakest factor
+  talkingPoints?: TalkingPoint[];
   quotes: string[];
-  relevanceScore: number;
+  relevanceScore?: number;    // legacy field — recomputed from factor weights
 }
 
 interface AIMatch {
   id: string;
-  reasoning: string;       // Placeholders substituted with real values
-  quotes: string[];        // Validated as verbatim substrings
-  relevanceScore: number;
+  reasoning: string;
+  factorScores: FactorScores;
+  lowestFactorNote: string;
+  talkingPoints: TalkingPoint[];
+  quotes: string[];
+  relevanceScore: number;     // weighted from factorScores
+}
+
+function clamp100(n: unknown): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return 50;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+function weightedRelevance(f: FactorScores): number {
+  return Math.round(
+    f.orgSimilarity * FACTOR_WEIGHTS.orgSimilarity
+    + f.painPoints * FACTOR_WEIGHTS.painPoints
+    + f.quoteMatch * FACTOR_WEIGHTS.quoteMatch,
+  );
 }
 
 // ───────────────────────────────────────────────────────────
@@ -165,18 +204,30 @@ async function synthesizeMatches(
 ): Promise<AIMatch[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    // Fallback: top 5 by vector similarity, no AI reasoning
-    return candidates.slice(0, 5).map((c) => ({
-      id: c.id,
-      reasoning: substitutePlaceholders(
-        `{SPEAKER} at {COMPANY} is a strong semantic match for "${query}".`,
-        c
-      ),
-      quotes: c.pull_quote && c.transcript && isQuoteInTranscript(c.pull_quote, c.transcript)
-        ? [c.pull_quote]
-        : [],
-      relevanceScore: Math.round(c.similarity * 100),
-    }));
+    // Fallback: top 5 by vector similarity, no AI reasoning. Build
+    // a minimal factor-score shape so the FE renders consistently.
+    return candidates.slice(0, 5).map((c) => {
+      const sim = Math.round(c.similarity * 100);
+      const factorScores: FactorScores = {
+        orgSimilarity: sim,
+        painPoints: sim,
+        quoteMatch: sim,
+      };
+      return {
+        id: c.id,
+        reasoning: substitutePlaceholders(
+          `{SPEAKER} at {COMPANY} is a strong semantic match for the request.`,
+          c,
+        ),
+        factorScores,
+        lowestFactorNote: "",
+        talkingPoints: [] as TalkingPoint[],
+        quotes: c.pull_quote && c.transcript && isQuoteInTranscript(c.pull_quote, c.transcript)
+          ? [c.pull_quote]
+          : [],
+        relevanceScore: weightedRelevance(factorScores),
+      } satisfies AIMatch;
+    });
   }
 
   const candidateText = candidates
@@ -198,26 +249,35 @@ ${c.transcript || "(no transcript available)"}
     })
     .join("\n\n");
 
-  const systemPrompt = `You are a sales enablement assistant for StoryMatch, a B2B testimonial intelligence platform. Your job is to match a salesperson's request to the most relevant customer testimonials.
+  const systemPrompt = `You are a sales enablement assistant for StoryMatch, a B2B testimonial intelligence platform. Match the salesperson's request to the most relevant customer testimonials and return a structured response the UI will render.
 
 ABSOLUTE RULES:
 
-1. **Use placeholders, not names.** When writing reasoning, NEVER type a person's name or a company's name. Instead use these placeholders:
+1. **Use placeholders, not names.** When writing reasoning, talking-point text, or the lowest-factor note, NEVER type a person's name or a company's name. Instead use these placeholders:
    - {SPEAKER} for the person speaking in the testimonial
    - {COMPANY} for their organization
    - {CHALLENGE} for the challenge they describe
    - {OUTCOME} for the outcome they achieved
    - {VERTICAL} for the industry
    - {GEOGRAPHY} for the region
-   These will be substituted with actual values server-side.
+   These get substituted with actual values server-side. Quotes are verbatim and DO contain real names — that's fine.
 
-2. **Each candidate's reasoning uses ONLY that candidate's data.** When writing the reasoning for ID X, only reference facts from candidate X's transcript and metadata. Never blend information across candidates.
+2. **Each candidate's content uses ONLY that candidate's data.** Never blend information across candidates.
 
-3. **Quotes must be VERBATIM substrings of that candidate's transcript.** Copy character-for-character. Don't fix transcription errors, don't paraphrase, don't combine sentences. If you can't find a relevant exact quote in that candidate's transcript, return an empty quotes array.
+3. **Quotes must be VERBATIM substrings of that candidate's transcript.** Copy character-for-character. Don't fix transcription errors, don't paraphrase. Empty array if no exact quote applies.
 
-4. **Reason from evidence.** Every claim in the reasoning must trace to text actually in the candidate's transcript or metadata. Don't embellish.
+4. **Talking points are PARAPHRASED claims, not quotes.** Each talking point has a short topic header (2-4 words like "Time savings", "Migration support", "Peer reference") and a 1-2 sentence paraphrased summary written in third person about {COMPANY}. NOT a verbatim quote. Example: "Time savings — {COMPANY} got twelve hours a week back on reconciliation."
 
-5. **Better fewer strong matches than many weak ones.**
+5. **Reasoning is 1-2 sentences MAX.** Punchy, sales-coach voice. Highlight the 1-2 most important phrases with **markdown bold** — the UI renders those as accent chips.
+
+6. **Reason from evidence.** Every claim must trace to text actually in the candidate's transcript or metadata.
+
+7. **Better fewer strong matches than many weak ones.**
+
+SCORING — each candidate gets three independent factor scores 0-100:
+   - orgSimilarity: how closely THIS candidate's organisation matches the salesperson's described prospect (type, size, geography, vertical). 80+ = peer-org. 50-70 = same world but different size/geo. <50 = different category.
+   - painPoints: how directly this story addresses the SPECIFIC concerns or pain points the salesperson named. 80+ = the story is about exactly that pain. 50-70 = related but tangential. <50 = doesn't really tackle it.
+   - quoteMatch: do verbatim quotes exist that DIRECTLY answer the salesperson's request? 80+ = multiple strong quotes. 50-70 = one decent quote. <50 = no verbatim line lands the point.
 
 Return ONLY valid JSON. No preamble, no markdown fences.`;
 
@@ -227,22 +287,30 @@ Below are candidate testimonials, pre-filtered by semantic similarity. Pick the 
 
 ${candidateText}
 
-Return ONLY a JSON object:
+Return ONLY a JSON object in this shape:
 {
   "matches": [
     {
       "id": "exact ID string of the chosen candidate",
-      "reasoning": "2-3 sentences using {SPEAKER}, {COMPANY}, etc. placeholders — never write actual names",
-      "quotes": ["verbatim substring from this candidate's transcript", "another verbatim substring"],
-      "relevanceScore": 0-100
+      "reasoning": "1-2 sentences with {SPEAKER}, {COMPANY}, etc. placeholders. Highlight 1-2 key phrases with **markdown bold**.",
+      "factorScores": {
+        "orgSimilarity": 0-100,
+        "painPoints": 0-100,
+        "quoteMatch": 0-100
+      },
+      "lowestFactorNote": "One short sentence in plain English explaining the lowest-scoring factor. Use placeholders for names. e.g. '{COMPANY} is larger than the prospect, which is the biggest reason this isn't a stronger match.'",
+      "talkingPoints": [
+        {
+          "topic": "Short 2-4 word topic header",
+          "text": "1-2 sentence paraphrased summary about {COMPANY}. NOT a verbatim quote."
+        }
+      ],
+      "quotes": ["verbatim substring from this candidate's transcript", "another verbatim substring"]
     }
   ]
 }
 
-If no candidates fit, return {"matches": []}.
-
-Example reasoning format:
-"{SPEAKER} at {COMPANY} describes the same challenge your prospect faces — a slow legacy system. They explain how moving to the new platform let their team {OUTCOME}, which directly addresses the salesperson's request."`;
+Aim for 2-3 talking points per match and 1-2 verbatim quotes. If no candidates fit, return {"matches": []}.`;
 
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -253,7 +321,7 @@ Example reasoning format:
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
-      max_tokens: 3000,
+      max_tokens: 4500,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
     }),
@@ -292,13 +360,16 @@ Example reasoning format:
       continue;
     }
 
-    // Step 1: Substitute placeholders with database values
-    let reasoning = substitutePlaceholders(m.reasoning || "", candidate);
+    // Substitute placeholders + correct any cross-candidate name leakage.
+    const sanitize = (text: string) => {
+      const subbed = substitutePlaceholders(text || "", candidate);
+      return correctMisattributedNames(subbed, candidate, candidates);
+    };
 
-    // Step 2: Option C — if Claude typed any OTHER candidate's name, correct it
-    reasoning = correctMisattributedNames(reasoning, candidate, candidates);
+    const reasoning = sanitize(m.reasoning || "");
+    const lowestFactorNote = sanitize(m.lowestFactorNote || "");
 
-    // Step 3: Validate quotes against THIS candidate's transcript
+    // Validate verbatim quotes against THIS candidate's transcript only.
     const transcript = candidate.transcript || "";
     const verifiedQuotes = (m.quotes || []).filter((q) =>
       isQuoteInTranscript(q, transcript)
@@ -310,11 +381,34 @@ Example reasoning format:
       );
     }
 
+    // Talking points are paraphrased prose — no transcript validation,
+    // but we DO run them through placeholder substitution + name
+    // correction so any speaker/company refs come from the DB.
+    const talkingPoints: TalkingPoint[] = (Array.isArray(m.talkingPoints) ? m.talkingPoints : [])
+      .filter((tp): tp is TalkingPoint => !!tp && typeof tp.topic === "string" && typeof tp.text === "string")
+      .map(tp => ({
+        topic: tp.topic.trim().slice(0, 40),  // hard cap on topic length
+        text: sanitize(tp.text),
+      }))
+      .filter(tp => tp.topic.length > 0 && tp.text.length > 0)
+      .slice(0, 4);  // cap at 4 to keep cards scannable
+
+    // Clamp factor scores to 0-100, fall back to neutral 50 on bad data.
+    const factorScores: FactorScores = {
+      orgSimilarity: clamp100(m.factorScores?.orgSimilarity),
+      painPoints: clamp100(m.factorScores?.painPoints),
+      quoteMatch: clamp100(m.factorScores?.quoteMatch),
+    };
+    const relevanceScore = weightedRelevance(factorScores);
+
     validated.push({
       id: m.id,
       reasoning,
+      factorScores,
+      lowestFactorNote,
+      talkingPoints,
       quotes: verifiedQuotes,
-      relevanceScore: typeof m.relevanceScore === "number" ? m.relevanceScore : 50,
+      relevanceScore,
     });
   }
 

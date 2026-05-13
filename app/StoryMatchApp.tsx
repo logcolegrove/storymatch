@@ -10,6 +10,7 @@ import AccountMenu from "./components/AccountMenu";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./components/FeaturedQuoteRotator";
 import StandaloneQuoteModal from "./components/StandaloneQuoteModal";
 import FeaturedRotationPanel from "./components/FeaturedRotationPanel";
+import StoryMatchCard from "./components/StoryMatchCard";
 
 // Helper: build auth header for API requests.
 // IMPORTANT: we deliberately avoid supabaseBrowser.auth.getSession() here because
@@ -240,11 +241,25 @@ interface Enrichment {
 
 interface AIMatchResult {
   id: string;
-  reasoning: string;
-  quotes: string[];
-  relevanceScore?: number;
+  reasoning: string;                  // 1-2 sentences, may contain **bold** markdown
+  factorScores?: {
+    orgSimilarity: number;            // 0-100
+    painPoints: number;               // 0-100
+    quoteMatch: number;               // 0-100
+  };
+  lowestFactorNote?: string;          // plain-English explanation of weakest factor
+  talkingPoints?: { topic: string; text: string }[];
+  quotes: string[];                   // verbatim only
+  relevanceScore?: number;            // server-computed weighted sum
   rank: number;
 }
+
+// Weights mirror /api/storymatch — kept FE-side for the popover labels.
+const STORYMATCH_FACTOR_WEIGHTS = {
+  orgSimilarity: 45,
+  painPoints: 35,
+  quoteMatch: 20,
+} as const;
 
 interface Filters {
   vertical: string[];
@@ -6563,7 +6578,7 @@ export default function App(){
                     {smResults?"Try broadening your search":"Adjust filters"}
                   </p>
                 </div>
-              ) : (isAdmin && adminMode && viewMode === "list") ? (
+              ) : (isAdmin && adminMode && viewMode === "list" && !smResults) ? (
                 <ListView
                   assets={displayAssets}
                   selectedIds={selectedIds}
@@ -6642,17 +6657,22 @@ export default function App(){
                     ? Math.abs(cardDrag.pointerX - cardDrag.initialX) > 3
                       || Math.abs(cardDrag.pointerY - cardDrag.initialY) > 3
                     : false;
+                  // When StoryMatch results are active, switch the grid
+                  // to 2-up (the bigger result cards need more room),
+                  // disable card drag-reorder (AI ranking is the
+                  // order — admin reordering doesn't make sense), and
+                  // render StoryMatchCard instead of TCard/QCard.
+                  const isSmActive = !!smResults;
                   const renderGrid = (items: Asset[], offset: number) => (
-                    <div className="grid">
+                    <div
+                      className="grid"
+                      style={isSmActive ? { gridTemplateColumns: "repeat(2, minmax(0, 1fr))" } : undefined}
+                    >
                       {items.map((a, i) => {
                         const idx = offset + i;
-                        const isDragging = cardDrag?.assetId === a.id && pointerMoved;
-                        // Compute translate offset for non-dragged
-                        // cards. Doc-space deltas are equivalent to
-                        // viewport-space deltas (no rotation), so the
-                        // CSS transform works directly.
+                        const isDragging = !isSmActive && cardDrag?.assetId === a.id && pointerMoved;
                         let dx = 0, dy = 0;
-                        if (cardDrag && pointerMoved && cardDrag.assetId !== a.id) {
+                        if (!isSmActive && cardDrag && pointerMoved && cardDrag.assetId !== a.id) {
                           const newIdx = shiftFor(idx, cardDrag.fromIdx, cardDrag.insertIdx);
                           if (newIdx !== idx) {
                             const oldR = cardDrag.rects[idx];
@@ -6671,12 +6691,12 @@ export default function App(){
                               else cardElsRef.current.delete(a.id);
                             }}
                             data-card-asset-id={a.id}
-                            onPointerDown={isAdmin && adminMode ? onCardPointerDown(a.id, idx) : undefined}
+                            onPointerDown={!isSmActive && isAdmin && adminMode ? onCardPointerDown(a.id, idx) : undefined}
                             style={{
-                              cursor: isAdmin && adminMode ? "grab" : undefined,
+                              cursor: !isSmActive && isAdmin && adminMode ? "grab" : undefined,
                               visibility: isDragging ? "hidden" : undefined,
                               transform: dx || dy ? `translate(${dx}px, ${dy}px)` : undefined,
-                              transition: cardDrag ? "transform .25s cubic-bezier(.2,.7,.2,1)" : undefined,
+                              transition: !isSmActive && cardDrag ? "transform .25s cubic-bezier(.2,.7,.2,1)" : undefined,
                             }}
                           >
                             {renderAssetCard(a)}
@@ -6697,6 +6717,50 @@ export default function App(){
                   function renderAssetCard(a: Asset) {
                     const ai=aiDataMap[a.id]||null;
                     const adminMgmt = isAdmin && adminMode;
+                    // StoryMatch results render through the rich card
+                    // component instead of the regular TCard/QCard.
+                    if (smResults && ai) {
+                      const vid = extractVid(a.videoUrl);
+                      let thumb: string | null = a.thumbnail || null;
+                      if (!thumb && vid?.p === "yt") thumb = ytThumb(vid.id);
+                      const metaParts: string[] = [];
+                      if (a.company) metaParts.push(a.company);
+                      if (a.vertical) metaParts.push(a.vertical);
+                      if (a.companySize) metaParts.push(a.companySize);
+                      const isVideoAsset = a.assetType === "Video Testimonial";
+                      return (
+                        <StoryMatchCard
+                          key={a.id}
+                          rank={ai.rank}
+                          thumbnail={thumb}
+                          title={a.headline || "Untitled"}
+                          metaParts={metaParts}
+                          isVideo={isVideoAsset}
+                          durationLabel={undefined}
+                          readLabel={undefined}
+                          reasoning={ai.reasoning}
+                          factorScores={ai.factorScores}
+                          lowestFactorNote={ai.lowestFactorNote}
+                          talkingPoints={ai.talkingPoints}
+                          quotes={ai.quotes}
+                          relevanceScore={ai.relevanceScore ?? 50}
+                          onOpen={() => safeOpenAsset(a)}
+                          onShare={() => copyShareLink(a)}
+                          onCopySummary={() => {
+                            const summary = [
+                              a.headline,
+                              ai.reasoning ? ai.reasoning.replace(/\*\*/g, "") : "",
+                              ...(ai.talkingPoints || []).map(tp => `• ${tp.topic}: ${tp.text}`),
+                              ...(ai.quotes || []).map(q => `"${q}"`),
+                            ].filter(Boolean).join("\n\n");
+                            try { navigator.clipboard?.writeText(summary); } catch {}
+                            setToast("Summary copied");
+                            setTimeout(() => setToast(null), 1500);
+                          }}
+                          onCopyQuote={(q) => copyQuote(q)}
+                        />
+                      );
+                    }
                     const restore = adminMgmt ? restoreAsset : undefined;
                     const cardMenu: MenuItem[] | undefined = adminMgmt ? [
                       { label: "Open", onClick: () => openAsset(a) },
