@@ -50,10 +50,52 @@ export interface EditableAsset {
   videoUrl?: string;
   approvalStatus?: string;
   approvalNote?: string | null;
+  // Values for admin-defined custom fields, keyed by FieldDef.key.
+  // System fields (vertical, geography, etc.) stay in their dedicated
+  // properties above — this map is only for admin-added fields.
+  customFieldValues?: Record<string, unknown>;
+}
+
+// Field-schema types — kept in sync with /lib/field-defs.ts. Imported
+// values would pull supabaseAdmin into the client bundle, so we
+// duplicate the shape here. The Manage Fields panel writes the
+// canonical schema through /api/org/fields.
+export type FieldType = "text" | "select" | "multi_select" | "number" | "date";
+export interface FieldDef {
+  id: string;
+  key: string;
+  label: string;
+  type: FieldType;
+  options?: string[];
+  showInFilters: boolean;
+  position: number;
+  system: boolean;
+  systemColumn?: string;
 }
 
 const VERTICALS = ["Logistics", "Healthcare", "Manufacturing", "Financial Services", "Retail", "Education", "Real Estate", "Technology"];
 const ASSET_TYPES = ["Video Testimonial", "Written Case Study", "Quote"];
+
+// Drop values for fields that no longer exist in the org's schema.
+// Also drops empty strings / empty arrays so the JSONB column stays
+// compact. Called only on save — in-flight edits keep their keys so
+// admin can edit a field, delete it, and undo cleanly.
+function pruneCustomFieldValues(
+  values: Record<string, unknown>,
+  fieldDefs: FieldDef[] | undefined,
+): Record<string, unknown> {
+  if (!fieldDefs || fieldDefs.length === 0) return values || {};
+  const customKeys = new Set(fieldDefs.filter(f => !f.system).map(f => f.key));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(values || {})) {
+    if (!customKeys.has(k)) continue;
+    if (v === undefined || v === null) continue;
+    if (typeof v === "string" && v.trim().length === 0) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 interface Props {
   asset: EditableAsset | null; // null = closed
@@ -65,6 +107,11 @@ interface Props {
   // Accepts the parent's authHeaders signature — Promise<HeadersInit>
   // covers Record/Headers/array shapes so we don't have to retype it.
   authHeaders?: () => Promise<HeadersInit> | HeadersInit;
+  // Org's field schema. Used to render dynamic inputs for any custom
+  // (non-system) field admins have added. System fields keep their
+  // hardcoded UI (vertical/geography/size inside ClientList, assetType
+  // up top). Empty/missing array = no custom fields yet.
+  fieldDefs?: FieldDef[];
 }
 
 type AddMode = "closed" | "chooser" | "ai" | "manual";
@@ -704,7 +751,127 @@ function ClientList({ clients, onChange }: { clients: ClientRow[]; onChange: (ne
   );
 }
 
-export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onClose, authHeaders }: Props) {
+// ─── CUSTOM FIELDS SECTION ────────────────────────────────────────
+// Renders one input per non-system field def, hydrated from + writing
+// back into a flat key→value map. Multi-select renders as a stack of
+// checkable chips so admins can pick more than one option without
+// hunting through a multi-select dropdown.
+interface CustomFieldsSectionProps {
+  defs: FieldDef[];
+  values: Record<string, unknown>;
+  onChange: (next: Record<string, unknown>) => void;
+}
+
+function CustomFieldsSection({ defs, values, onChange }: CustomFieldsSectionProps) {
+  // Position is server-authoritative; mirror that order here. System
+  // fields are excluded — they already have hardcoded UI elsewhere.
+  const visible = defs
+    .filter(d => !d.system)
+    .slice()
+    .sort((a, b) => a.position - b.position);
+  if (visible.length === 0) return null;
+
+  const setOne = (key: string, value: unknown) => {
+    onChange({ ...values, [key]: value });
+  };
+
+  return (
+    <div className="aep-section">
+      <div className="aep-section-head-row">
+        <span className="aep-section-head">Custom fields</span>
+      </div>
+      {visible.map(def => (
+        <div key={def.id} className="aep-fld">
+          <label>{def.label}</label>
+          <CustomFieldInput def={def} value={values[def.key]} onChange={(v) => setOne(def.key, v)}/>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CustomFieldInput({ def, value, onChange }: {
+  def: FieldDef;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  if (def.type === "text") {
+    return (
+      <input
+        className="aep-in"
+        type="text"
+        value={typeof value === "string" ? value : ""}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+  if (def.type === "number") {
+    return (
+      <input
+        className="aep-in"
+        type="number"
+        value={typeof value === "number" ? value : typeof value === "string" ? value : ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === "") onChange("");
+          else {
+            const n = Number(v);
+            onChange(Number.isFinite(n) ? n : v);
+          }
+        }}
+      />
+    );
+  }
+  if (def.type === "date") {
+    return (
+      <input
+        className="aep-in"
+        type="date"
+        value={typeof value === "string" ? value : ""}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+  if (def.type === "select") {
+    const opts = def.options || [];
+    return (
+      <select
+        className="aep-sel"
+        value={typeof value === "string" ? value : ""}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">—</option>
+        {opts.map(o => (<option key={o} value={o}>{o}</option>))}
+      </select>
+    );
+  }
+  // multi_select — render the option list as toggleable chips so admins
+  // see all choices at once without opening a dropdown.
+  const selected: string[] = Array.isArray(value) ? (value as unknown[]).filter(v => typeof v === "string") as string[] : [];
+  const opts = def.options || [];
+  const toggle = (o: string) => {
+    const has = selected.includes(o);
+    onChange(has ? selected.filter(x => x !== o) : [...selected, o]);
+  };
+  return (
+    <div className="aep-multichip-list">
+      {opts.length === 0 && <div className="aep-empty" style={{ fontSize: 11.5 }}>No options yet — add them in Manage Fields.</div>}
+      {opts.map(o => {
+        const on = selected.includes(o);
+        return (
+          <button
+            key={o}
+            type="button"
+            className={`aep-multichip${on ? " on" : ""}`}
+            onClick={() => toggle(o)}
+          >{o}</button>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onClose, authHeaders, fieldDefs }: Props) {
   // ── Form state — unified quotes array is the source of truth in UI.
   const [headline, setHeadline] = useState("");
   const [description, setDescription] = useState("");
@@ -733,6 +900,12 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
     washToken?: string | null;
   };
   const [quotes, setQuotes] = useState<QuoteEntry[]>([]);
+
+  // Admin-defined custom field values, keyed by FieldDef.key. Stored as
+  // a flat map (unknown values; per-field type narrows on render) so
+  // adding/renaming/deleting fields in the Manage Fields panel doesn't
+  // require migrations here — unknown keys round-trip untouched.
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, unknown>>({});
 
   // Add-quote sub-flow state
   const [addMode, setAddMode] = useState<AddMode>("closed");
@@ -847,6 +1020,14 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
       washToken: q.washToken ?? null,
     })).filter(q => q.text.trim().length > 0);
     setQuotes(primaryQuote ? [primaryQuote, ...extraQuotes] : extraQuotes);
+    // Hydrate custom field values from the asset. Always store as an
+    // object — missing/null assets get an empty map so the form has
+    // somewhere to write into when admin types in a fresh field.
+    setCustomFieldValues(
+      asset.customFieldValues && typeof asset.customFieldValues === "object"
+        ? { ...asset.customFieldValues }
+        : {}
+    );
     // Reset all sub-flow state to a clean baseline whenever the target
     // asset swaps out (so the AI panel doesn't carry suggestions from
     // the previous asset, etc.).
@@ -1002,6 +1183,12 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
       pullQuote,
       pullQuoteFavorite,
       additionalQuotes,
+      // Only persist values for fields that still exist in the org's
+      // schema. Stale keys (left over from a deleted custom field) get
+      // pruned on save so the JSONB column stays clean. If the schema
+      // hasn't loaded yet (fieldDefs missing) we pass through unchanged
+      // — don't want to inadvertently nuke values on a slow page-load.
+      customFieldValues: pruneCustomFieldValues(customFieldValues, fieldDefs),
     });
   };
   // Persist only if there are actual edits, then close. All close
@@ -1313,6 +1500,18 @@ export default function AssetEditPanel({ asset, onSave, onDelete, onPreview, onC
               />
             )}
           </div>
+
+          {/* ── 2.5 Custom fields ── admin-defined fields beyond the
+              hardcoded basics. Rendered only when the org has at least
+              one non-system field defined. Each input shape follows
+              the field's type (text / number / date / select / multi). */}
+          {fieldDefs && fieldDefs.some(f => !f.system) && (
+            <CustomFieldsSection
+              defs={fieldDefs}
+              values={customFieldValues}
+              onChange={setCustomFieldValues}
+            />
+          )}
 
           {/* ── 3. Pull quotes ── blog-style callouts (no nested cards). */}
           <div className="aep-section">
@@ -1722,6 +1921,14 @@ const css = `
 .aep-title-in{font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:-.2px;}
 .aep-in:focus,.aep-sel:focus,.aep-tx:focus{outline:none;border-color:var(--accent);}
 .aep-tx{min-height:120px;resize:vertical;line-height:1.5;}
+
+/* Custom-field multi-select — same chip-pill shape as the Manage
+   Fields options list, but here they're checkable. Selected chip
+   gets accent fill so the on/off state reads at a glance. */
+.aep-multichip-list{display:flex;flex-wrap:wrap;gap:6px;}
+.aep-multichip{font-family:var(--font);font-size:12px;font-weight:500;padding:5px 11px;border-radius:999px;border:1px solid var(--border);background:#fff;color:var(--t2);cursor:pointer;transition:all .12s;}
+.aep-multichip:hover{border-color:var(--border2);color:var(--t1);}
+.aep-multichip.on{background:var(--accentL);border-color:var(--accent);color:var(--accent);font-weight:600;}
 /* Transcript label row — label on the left, expand button on the right. */
 .aep-transcript-label-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .aep-transcript-expand{display:inline-flex;align-items:center;gap:6px;background:none;border:1px solid var(--border);color:var(--t2);padding:5px 10px;border-radius:6px;font-family:var(--font);font-size:11.5px;font-weight:600;cursor:pointer;transition:all .12s;}

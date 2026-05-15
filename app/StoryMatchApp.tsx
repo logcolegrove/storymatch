@@ -140,6 +140,11 @@ interface Asset {
   // Manual sort order — admin sets via drag-reorder. Null until
   // ordered for the first time.
   displayOrder?: number | null;
+  // Per-asset values for admin-defined custom fields. Keyed by FieldDef.key.
+  // System fields (vertical/geography/companySize/assetType/clientStatus)
+  // still use their dedicated columns and don't appear here. Empty object
+  // when no custom fields are set.
+  customFieldValues?: Record<string, unknown>;
 }
 
 interface CustomFlag {
@@ -261,10 +266,11 @@ const STORYMATCH_FACTOR_WEIGHTS = {
   quoteMatch: 20,
 } as const;
 
-interface Filters {
-  vertical: string[];
-  assetType: string[];
-}
+// Library filter map. Keys are FieldDef.key values; selected entries
+// hold an array of chosen option strings. Empty / absent entry = no
+// constraint on that field. The popover renders one section per
+// fieldDef where showInFilters && (type === "select" || "multi_select").
+type Filters = Record<string, string[]>;
 
 interface Route {
   page: "home" | "detail" | "shares";
@@ -274,8 +280,10 @@ interface Route {
 // ─── DATA ────────────────────────────────────────────────────────────────────
 // (SEED data now lives in Supabase — see prisma/seed-assets.sql)
 
-const VERTICALS: string[] = ["All","Logistics","Healthcare","Manufacturing","Financial Services","Retail","Education","Real Estate","Technology"];
-const ASSET_TYPES: string[] = ["All","Video Testimonial","Written Case Study","Quote"];
+// (VERTICALS / ASSET_TYPES constants removed — the library filter
+// popover is now driven by /api/org/fields. Per-form fallback lists
+// for vertical/asset_type still live inside AssetEditPanel for the
+// hardcoded inputs that haven't been migrated to dynamic fields yet.)
 const VERT_CLR: Record<string, string> = {Logistics:"#2563eb",Healthcare:"#059669",Manufacturing:"#d97706","Financial Services":"#7c3aed",Retail:"#db2777",Education:"#0891b2","Real Estate":"#65a30d",Technology:"#4f46e5"};
 const CTA_MAP: Record<string, string> = {"Video Testimonial":"watch","Written Case Study":"read","Quote":"quote"};
 
@@ -423,6 +431,54 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .rules-cancel{padding:7px 14px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
 .rules-cancel:hover{border-color:var(--border2);color:var(--t1);}
 .rules-save:disabled{opacity:.4;cursor:not-allowed;}
+
+/* ── Fields admin panel ── */
+/* Same panel shell as RulesPanel — head with title + sub, then a
+   stacked list of field cards, then a docked "+ Add field" row. Each
+   field card is a self-contained editor: name, type, show-in-filters,
+   and (for select types) an options chip list. System fields are
+   visually distinct (.field-card.system) and disable destructive
+   controls — admins can rename + reorder + hide but never delete a
+   field that's backed by a typed column. */
+.fields-panel{padding:0;display:flex;flex-direction:column;height:100%;overflow-y:auto;}
+.fields-panel .ap-head{padding:18px 20px 14px;border-bottom:1px solid var(--border);}
+.fields-panel .ap-head h3{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);margin:0;}
+.fields-list{display:flex;flex-direction:column;gap:10px;padding:18px 20px;}
+.field-card{border:1px solid var(--border);border-radius:10px;background:#fff;overflow:hidden;transition:all .15s;}
+.field-card.system{background:var(--bg);}
+.field-card-head{display:flex;align-items:center;gap:8px;padding:12px 14px;}
+.field-card-move{display:flex;flex-direction:column;gap:1px;}
+.field-move-btn{background:none;border:none;color:var(--t4);cursor:pointer;padding:1px 4px;border-radius:3px;display:grid;place-items:center;}
+.field-move-btn:hover:not(:disabled){color:var(--t1);background:var(--bg2);}
+.field-move-btn:disabled{opacity:.3;cursor:not-allowed;}
+.field-card-icon{width:24px;height:24px;border-radius:6px;background:var(--bg2);color:var(--t2);display:grid;place-items:center;flex-shrink:0;}
+.field-card-label{flex:1;font-size:13px;font-weight:600;color:var(--t1);background:transparent;border:1px solid transparent;outline:none;font-family:var(--font);padding:4px 6px;border-radius:5px;min-width:0;}
+.field-card-label:hover{background:var(--bg2);}
+.field-card-label:focus{background:#fff;border-color:var(--accent);}
+.field-card-lock{font-size:9.5px;color:var(--t4);text-transform:uppercase;letter-spacing:.6px;font-weight:700;background:var(--bg2);padding:2px 6px;border-radius:4px;flex-shrink:0;}
+.field-card-body{padding:0 14px 12px 14px;display:flex;flex-direction:column;gap:10px;}
+.field-card-row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--t2);}
+.field-card-type-tag{font-size:11px;color:var(--t2);font-weight:600;background:var(--bg2);padding:3px 8px;border-radius:5px;}
+.field-card-actions{padding:8px 14px;border-top:1px solid var(--border);background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.field-card-key{font-size:10.5px;color:var(--t4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.field-card-key code{font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--t3);background:var(--bg2);padding:1px 5px;border-radius:3px;}
+.field-card-delete{background:none;border:none;color:#dc2626;cursor:pointer;font-size:11.5px;font-weight:600;padding:4px 8px;border-radius:4px;flex-shrink:0;font-family:var(--font);}
+.field-card-delete:hover{background:#fee2e2;}
+.field-options{display:flex;flex-direction:column;gap:6px;}
+.field-options-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+.field-options-chip-list{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.field-options-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 4px 3px 9px;border-radius:99px;background:var(--bg2);font-size:11.5px;color:var(--t1);}
+.field-options-chip-remove{background:none;border:none;color:var(--t4);cursor:pointer;padding:0 4px;font-size:13px;line-height:1;border-radius:50%;}
+.field-options-chip-remove:hover{color:#dc2626;background:#fff;}
+.field-options-input{font-family:var(--font);font-size:11.5px;padding:4px 8px;border:1px solid var(--border);border-radius:99px;background:#fff;color:var(--t1);width:120px;}
+.field-options-input:focus{outline:none;border-color:var(--accent);}
+.field-add-row{padding:14px 20px 28px;border-top:1px solid var(--border);background:var(--bg);position:relative;}
+.field-add-btn{display:inline-flex;align-items:center;gap:6px;background:none;border:1px dashed var(--border2);color:var(--t3);padding:8px 14px;border-radius:8px;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .12s;}
+.field-add-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
+.field-add-pop{position:absolute;bottom:calc(100% - 8px);left:20px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);padding:4px;display:flex;flex-direction:column;gap:1px;z-index:5;min-width:170px;}
+.field-add-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border:none;background:none;border-radius:5px;font-family:var(--font);font-size:12.5px;color:var(--t1);cursor:pointer;text-align:left;}
+.field-add-item:hover{background:var(--bg2);}
+.field-add-item svg{flex-shrink:0;color:var(--t3);}
 
 /* Assets list */
 .asset-list{display:flex;flex-direction:column;gap:6px;}
@@ -4140,6 +4196,363 @@ function DefaultApprovalSelect({ settings, onSave }: { settings: OrgSettings; on
   );
 }
 
+// ─── FIELDS PANEL ─────────────────────────────────────────────────────────
+// Per-org field schema editor. The schema is one JSONB array on the
+// organizations row; the panel reads/writes the whole array through
+// /api/org/fields. Every change PUTs the full array — small payload,
+// no need for diff endpoints. System fields (vertical, geography,
+// company_size, asset_type, client_status) are flagged system:true on
+// the server; the panel surfaces them with a "System" badge and hides
+// destructive controls so they stay backed by their typed columns.
+
+type FieldType = "text" | "select" | "multi_select" | "number" | "date";
+interface FieldDef {
+  id: string;
+  key: string;
+  label: string;
+  type: FieldType;
+  options?: string[];
+  showInFilters: boolean;
+  position: number;
+  system: boolean;
+  systemColumn?: string;
+}
+
+const FIELD_TYPE_LABELS: Record<FieldType, string> = {
+  text: "Text",
+  select: "Single choice",
+  multi_select: "Multi-choice",
+  number: "Number",
+  date: "Date",
+};
+
+function buildFieldId(): string {
+  return "f-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+}
+
+// Make a JSONB-safe key out of a label. Must start with a letter and
+// only contain [a-zA-Z0-9_]. Matches the server's validateFieldDef regex.
+function slugifyFieldKey(label: string): string {
+  const slug = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!slug) return "field_" + Math.random().toString(36).slice(2, 7);
+  if (!/^[a-z]/.test(slug)) return "f_" + slug;
+  return slug;
+}
+
+function FieldTypeIcon({ type }: { type: FieldType }) {
+  if (type === "text") return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/></svg>);
+  if (type === "select") return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="1.5" fill="currentColor"/><line x1="11" y1="6" x2="20" y2="6"/><circle cx="6" cy="12" r="1.5" fill="currentColor"/><line x1="11" y1="12" x2="20" y2="12"/><circle cx="6" cy="18" r="1.5" fill="currentColor"/><line x1="11" y1="18" x2="20" y2="18"/></svg>);
+  if (type === "multi_select") return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="6" height="6" rx="1"/><polyline points="3.8 7 5 8.2 7.4 5.8"/><rect x="3" y="14" width="6" height="6" rx="1"/><polyline points="3.8 17 5 18.2 7.4 15.8"/><line x1="12" y1="7" x2="20" y2="7"/><line x1="12" y1="17" x2="20" y2="17"/></svg>);
+  if (type === "number") return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>);
+  return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>);
+}
+
+interface FieldsPanelProps {
+  fields: FieldDef[];
+  onChange: (next: FieldDef[]) => void;
+  onError: (msg: string) => void;
+  authHeaders: () => Promise<HeadersInit>;
+}
+
+function FieldsPanel({ fields, onChange, onError, authHeaders }: FieldsPanelProps) {
+  // Persist + propagate. The server returns the canonical reindexed
+  // array (positions normalized 0..n-1), so we trust its response over
+  // our optimistic copy. Caller still gets an optimistic update via
+  // onChange so the UI doesn't flicker between save round-trips.
+  const persist = async (next: FieldDef[]) => {
+    onChange(next);
+    try {
+      const r = await fetch("/api/org/fields", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+        body: JSON.stringify({ fields: next }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        onError(body.error || "Couldn't save field");
+        return;
+      }
+      const data = await r.json() as { fields: FieldDef[] };
+      if (Array.isArray(data.fields)) onChange(data.fields);
+    } catch (e) {
+      console.error("[FieldsPanel] save failed", e);
+      onError("Network error");
+    }
+  };
+
+  const renameField = (id: string, label: string) => {
+    persist(fields.map(f => f.id === id ? { ...f, label } : f));
+  };
+  const setShowInFilters = (id: string, on: boolean) => {
+    persist(fields.map(f => f.id === id ? { ...f, showInFilters: on } : f));
+  };
+  const setOptions = (id: string, options: string[]) => {
+    persist(fields.map(f => f.id === id ? { ...f, options } : f));
+  };
+  const setCustomType = (id: string, type: FieldType) => {
+    persist(fields.map(f => {
+      if (f.id !== id || f.system) return f;
+      const next = { ...f, type };
+      if (type === "select" || type === "multi_select") {
+        next.options = next.options || [];
+      } else {
+        delete next.options;
+      }
+      return next;
+    }));
+  };
+  const moveField = (id: string, dir: -1 | 1) => {
+    const idx = fields.findIndex(f => f.id === id);
+    if (idx < 0) return;
+    const target = idx + dir;
+    if (target < 0 || target >= fields.length) return;
+    const next = [...fields];
+    const [m] = next.splice(idx, 1);
+    next.splice(target, 0, m);
+    next.forEach((f, i) => { f.position = i; });
+    persist(next);
+  };
+  const deleteField = (id: string) => {
+    const f = fields.find(x => x.id === id);
+    if (!f || f.system) return;
+    if (!confirm(`Delete the "${f.label}" field? Values already stored on assets are hidden but not erased.`)) return;
+    persist(fields.filter(x => x.id !== id));
+  };
+  const addField = (type: FieldType) => {
+    const defaultLabel = type === "text" ? "New text field"
+      : type === "select" ? "New choice field"
+      : type === "multi_select" ? "New multi-choice field"
+      : type === "number" ? "New number field"
+      : "New date field";
+    // Ensure key uniqueness against existing fields.
+    const existing = new Set(fields.map(f => f.key));
+    let base = slugifyFieldKey(defaultLabel);
+    let key = base;
+    let n = 2;
+    while (existing.has(key)) { key = `${base}_${n++}`; }
+    const def: FieldDef = {
+      id: buildFieldId(),
+      key,
+      label: defaultLabel,
+      type,
+      ...(type === "select" || type === "multi_select" ? { options: [] } : {}),
+      showInFilters: false,
+      position: fields.length,
+      system: false,
+    };
+    persist([...fields, def]);
+  };
+
+  return (
+    <div className="fields-panel">
+      <div className="ap-head">
+        <h3>Fields</h3>
+        <p className="ap-sub">Customize the data captured for every asset. System fields can be renamed, reordered, and hidden but not removed.</p>
+      </div>
+      <div className="fields-list">
+        {fields.map((f, i) => (
+          <FieldCard
+            key={f.id}
+            field={f}
+            isFirst={i === 0}
+            isLast={i === fields.length - 1}
+            onMoveUp={() => moveField(f.id, -1)}
+            onMoveDown={() => moveField(f.id, 1)}
+            onRename={(label) => renameField(f.id, label)}
+            onSetType={(type) => setCustomType(f.id, type)}
+            onSetShowInFilters={(on) => setShowInFilters(f.id, on)}
+            onSetOptions={(opts) => setOptions(f.id, opts)}
+            onDelete={() => deleteField(f.id)}
+          />
+        ))}
+      </div>
+      <div className="field-add-row">
+        <FieldAddMenu onAdd={addField}/>
+      </div>
+    </div>
+  );
+}
+
+interface FieldCardProps {
+  field: FieldDef;
+  isFirst: boolean;
+  isLast: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onRename: (label: string) => void;
+  onSetType: (type: FieldType) => void;
+  onSetShowInFilters: (on: boolean) => void;
+  onSetOptions: (opts: string[]) => void;
+  onDelete: () => void;
+}
+
+function FieldCard({ field, isFirst, isLast, onMoveUp, onMoveDown, onRename, onSetType, onSetShowInFilters, onSetOptions, onDelete }: FieldCardProps) {
+  // Local label buffer — flushes to onRename on blur / Enter. Avoids a
+  // network roundtrip on every keystroke.
+  const [localLabel, setLocalLabel] = useState(field.label);
+  useEffect(() => { setLocalLabel(field.label); }, [field.label]);
+  const supportsOptions = field.type === "select" || field.type === "multi_select";
+
+  return (
+    <div className={`field-card${field.system ? " system" : ""}`}>
+      <div className="field-card-head">
+        <div className="field-card-move">
+          <button
+            type="button"
+            className="field-move-btn"
+            onClick={onMoveUp}
+            disabled={isFirst}
+            title="Move up"
+          ><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+          <button
+            type="button"
+            className="field-move-btn"
+            onClick={onMoveDown}
+            disabled={isLast}
+            title="Move down"
+          ><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+        </div>
+        <div className="field-card-icon" title={FIELD_TYPE_LABELS[field.type]}><FieldTypeIcon type={field.type}/></div>
+        <input
+          className="field-card-label"
+          value={localLabel}
+          onChange={(e) => setLocalLabel(e.target.value)}
+          onBlur={() => {
+            const trimmed = localLabel.trim();
+            if (trimmed && trimmed !== field.label) onRename(trimmed);
+            else setLocalLabel(field.label);
+          }}
+          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+        />
+        {field.system && <span className="field-card-lock" title="System field — backed by a typed column. Can be renamed, reordered, and hidden but not removed.">System</span>}
+      </div>
+      <div className="field-card-body">
+        <div className="field-card-row">
+          <span>Type</span>
+          {field.system ? (
+            <span className="field-card-type-tag">{FIELD_TYPE_LABELS[field.type]}</span>
+          ) : (
+            <select
+              className="rules-select rule-inline-select"
+              value={field.type}
+              onChange={(e) => onSetType(e.target.value as FieldType)}
+            >
+              <option value="text">Text</option>
+              <option value="select">Single choice</option>
+              <option value="multi_select">Multi-choice</option>
+              <option value="number">Number</option>
+              <option value="date">Date</option>
+            </select>
+          )}
+        </div>
+        <div className="field-card-row">
+          <span>Show in filters</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={field.showInFilters}
+            className={`rule-toggle${field.showInFilters ? " on" : ""}`}
+            onClick={() => onSetShowInFilters(!field.showInFilters)}
+            title={field.showInFilters ? "Hide from library filters" : "Show in library filters"}
+          ><span className="rule-toggle-thumb"/></button>
+        </div>
+        {supportsOptions && (
+          <FieldOptionsEditor
+            options={field.options || []}
+            onChange={onSetOptions}
+          />
+        )}
+      </div>
+      {!field.system && (
+        <div className="field-card-actions">
+          <span className="field-card-key" title={`Key (immutable): ${field.key}`}>Key: <code>{field.key}</code></span>
+          <button type="button" className="field-card-delete" onClick={onDelete}>Delete</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FieldOptionsEditor({ options, onChange }: { options: string[]; onChange: (next: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+  const commit = () => {
+    const v = draft.trim();
+    setDraft("");
+    if (!v) return;
+    if (options.includes(v)) return;
+    onChange([...options, v]);
+  };
+  return (
+    <div className="field-options">
+      <div className="field-options-label">Options</div>
+      <div className="field-options-chip-list">
+        {options.map((o, i) => (
+          <span key={`${o}-${i}`} className="field-options-chip">
+            {o}
+            <button
+              type="button"
+              className="field-options-chip-remove"
+              onClick={() => onChange(options.filter((_, j) => j !== i))}
+              title="Remove option"
+              aria-label={`Remove ${o}`}
+            >×</button>
+          </span>
+        ))}
+        <input
+          className="field-options-input"
+          placeholder="Add option…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commit(); } }}
+          onBlur={commit}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FieldAddMenu({ onAdd }: { onAdd: (type: FieldType) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = React.useRef<HTMLDivElement>(null);
+  // Close popover on any outside click. Picker is small enough that
+  // keyboard nav isn't worth wiring up — keystroke-light flow lives in
+  // the rename flow once the field is created.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const t = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
+  }, [open]);
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
+      <button
+        type="button"
+        className="field-add-btn"
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="rule-add-plus">+</span>
+        Add field
+      </button>
+      {open && (
+        <div className="field-add-pop">
+          {(["text","select","multi_select","number","date"] as FieldType[]).map(t => (
+            <button
+              key={t}
+              type="button"
+              className="field-add-item"
+              onClick={() => { onAdd(t); setOpen(false); }}
+            >
+              <FieldTypeIcon type={t}/> {FIELD_TYPE_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SourcesPanel({sources,assets,onAddSource,onRemoveSource,onAddAssets,onUpdateAssets,onUpdateSource,onRefresh}: SourcesPanelProps) {
   // Sync reports now live on each source row server-side (source.pendingSyncReport).
   // Per-source UI state for which row is expanded, plus syncing-now indicators.
@@ -4926,7 +5339,7 @@ export default function App(){
     }
     return Array.from(seen.values());
   }, [assets]);
-  const[filters,setFilters]=useState<Filters>({vertical:[],assetType:[]});
+  const[filters,setFilters]=useState<Filters>({});
   const[openFilter,setOpenFilter]=useState<string|null>(null);
   const[search,setSearch]=useState("");
   const[route,setRoute]=useState<Route>({page:"home",id:null});
@@ -5058,6 +5471,13 @@ export default function App(){
     publicationRules:{},
   });
 
+  // Per-org field schema. Loaded once on mount; the Manage Fields panel
+  // writes through /api/org/fields and reflects the canonical
+  // server-reindexed array back through setFieldDefs. AssetEditPanel
+  // and the library filter popover read from this same array, so any
+  // edit propagates everywhere without a refetch.
+  const[fieldDefs,setFieldDefs]=useState<FieldDef[]>([]);
+
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
   const[smQuery,setSmQuery]=useState("");
@@ -5136,6 +5556,20 @@ export default function App(){
         const data=await r.json() as OrgSettings;
         setOrgSettings(data);
       }catch(e){console.error("Failed to load org settings",e);}
+    })();
+  },[]);
+
+  // Load the org's field schema on mount. Server auto-seeds defaults
+  // for new orgs so first read always returns a populated array.
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const headers=await authHeaders();
+        const r=await fetch("/api/org/fields",{headers});
+        if(!r.ok)return;
+        const data=await r.json() as { fields: FieldDef[] };
+        if(Array.isArray(data.fields))setFieldDefs(data.fields);
+      }catch(e){console.error("Failed to load field defs",e);}
     })();
   },[]);
 
@@ -5685,13 +6119,31 @@ export default function App(){
     displayAssets=assets.filter(a=>{
       if(a.status === "deleted") return false; // soft-deleted: hidden everywhere
       if(!showAllStatuses && a.status !== "published") return false;
-      if(filters.vertical.length>0&&!filters.vertical.includes(a.vertical))return false;
-      if(filters.assetType.length>0&&!filters.assetType.includes(a.assetType))return false;
+      // Every field with an active filter must pass. System fields read
+      // from the asset's mapped property (FieldDef.key is camelCase and
+      // already aligns with the FE Asset shape — e.g. "companySize");
+      // custom fields read from asset.customFieldValues. multi_select
+      // matches if any selected option appears in the asset's array.
+      for(const def of fieldDefs){
+        const sel=filters[def.key];
+        if(!sel||sel.length===0)continue;
+        const v=def.system
+          ?(a as unknown as Record<string,unknown>)[def.key]
+          :(a.customFieldValues||{})[def.key];
+        if(def.type==="multi_select"){
+          const arr=Array.isArray(v)?(v as unknown[]).filter(x=>typeof x==="string") as string[]:[];
+          if(!sel.some(s=>arr.includes(s)))return false;
+        }else{
+          const s=typeof v==="string"?v:typeof v==="number"?String(v):"";
+          if(!sel.includes(s))return false;
+        }
+      }
       if(search){const s=search.toLowerCase();if(!(a.company||"").toLowerCase().includes(s)&&!(a.clientName||"").toLowerCase().includes(s)&&!(a.vertical||"").toLowerCase().includes(s)&&!(a.headline||"").toLowerCase().includes(s))return false;}
       return true;
     });
   }
-  const anyFilter=filters.vertical.length>0||filters.assetType.length>0;
+  const anyFilter=Object.values(filters).some(v=>Array.isArray(v)&&v.length>0);
+  const totalFilterCount=Object.values(filters).reduce((acc,v)=>acc+(Array.isArray(v)?v.length:0),0);
 
   // ── Card drag handlers ──────────────────────────────────────────
   // Computes which card index the pointer is currently over by
@@ -6079,6 +6531,19 @@ export default function App(){
                 </svg>
                 Rules
               </button>
+              <button
+                className={`rail-btn ${adminSection==="fields"?"on":""}`}
+                onClick={()=>setAdminSection(adminSection==="fields"?null:"fields")}
+                title="Fields — customize the data captured for every asset"
+              >
+                {/* Stacked list bars — represents structured data fields */}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="5" width="18" height="3" rx="1"/>
+                  <rect x="3" y="11" width="18" height="3" rx="1"/>
+                  <rect x="3" y="17" width="12" height="3" rx="1"/>
+                </svg>
+                Fields
+              </button>
               <button className="rail-btn disabled" title="Embed (coming soon)">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <polyline points="16 18 22 12 16 6"/>
@@ -6240,6 +6705,14 @@ export default function App(){
                     }
                     setTimeout(()=>setToast(null),2000);
                   }}
+                />
+              )}
+              {adminSection==="fields" && (
+                <FieldsPanel
+                  fields={fieldDefs}
+                  onChange={setFieldDefs}
+                  onError={(msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); }}
+                  authHeaders={authHeaders}
                 />
               )}
               {adminSection==="rules" && (
@@ -6420,8 +6893,14 @@ export default function App(){
                   // button wrappers — keeps popover behaviour predictable.
                   if (!(e.target as HTMLElement).closest(".lib-btn-wrap")) setLibMenuOpen(null);
                 }}>
-                  {/* Filter — opens a popover with Industry + Type
-                      checkboxes. Replaces the standalone filters bar. */}
+                  {/* Filter — opens a popover with one section per field
+                      def where showInFilters is on. Only select /
+                      multi_select fields have option lists; text /
+                      number / date fields don't render here (no
+                      checkable options to offer). The whole shape is
+                      driven by the org's field schema, so adding a
+                      filterable custom field surfaces it here without
+                      any code change. */}
                   <div className="lib-btn-wrap">
                     <button
                       className={`lib-btn${libMenuOpen === "filter" || anyFilter ? " on" : ""}`}
@@ -6430,45 +6909,58 @@ export default function App(){
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                       Filter
                       {anyFilter && (
-                        <span className="lib-btn-count">{filters.vertical.length + filters.assetType.length}</span>
+                        <span className="lib-btn-count">{totalFilterCount}</span>
                       )}
                     </button>
-                    {libMenuOpen === "filter" && (
-                      <div className="lib-menu" style={{ minWidth: 240 }}>
-                        {([
-                          { k: "vertical" as keyof Filters, label: "Industry", opts: VERTICALS.filter(v => v !== "All") },
-                          { k: "assetType" as keyof Filters, label: "Type", opts: ASSET_TYPES.filter(v => v !== "All") },
-                        ]).map(f => (
-                          <React.Fragment key={f.k}>
-                            <div className="lib-menu-section">{f.label}</div>
-                            {f.opts.map(opt => {
-                              const sel = filters[f.k];
-                              const on = sel.includes(opt);
-                              return (
-                                <div
-                                  key={opt}
-                                  className={`lib-menu-item${on ? " on" : ""}`}
-                                  onClick={() => {
-                                    setFilters(p => ({
-                                      ...p,
-                                      [f.k]: on ? p[f.k].filter(x => x !== opt) : [...p[f.k], opt],
-                                    }));
-                                  }}
-                                >
-                                  <svg className="lib-menu-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                                  {opt}
-                                </div>
-                              );
-                            })}
-                          </React.Fragment>
-                        ))}
-                        {anyFilter && (
-                          <div className="lib-menu-clear" onClick={() => setFilters({ vertical: [], assetType: [] })}>
-                            Clear filters
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    {libMenuOpen === "filter" && (() => {
+                      // Compute the filterable defs once per render.
+                      // Sort by FieldDef.position so the popover order
+                      // matches the Manage Fields panel order.
+                      const filterable = fieldDefs
+                        .filter(d => d.showInFilters && (d.type === "select" || d.type === "multi_select") && Array.isArray(d.options) && d.options.length > 0)
+                        .slice()
+                        .sort((a, b) => a.position - b.position);
+                      return (
+                        <div className="lib-menu" style={{ minWidth: 240 }}>
+                          {filterable.length === 0 && (
+                            <div className="lib-menu-section" style={{ color: "var(--t3)", fontWeight: 500 }}>No filterable fields yet. Toggle &ldquo;Show in filters&rdquo; on a field in Manage Fields.</div>
+                          )}
+                          {filterable.map(def => (
+                            <React.Fragment key={def.id}>
+                              <div className="lib-menu-section">{def.label}</div>
+                              {(def.options || []).map(opt => {
+                                const sel = filters[def.key] || [];
+                                const on = sel.includes(opt);
+                                return (
+                                  <div
+                                    key={opt}
+                                    className={`lib-menu-item${on ? " on" : ""}`}
+                                    onClick={() => {
+                                      setFilters(p => {
+                                        const prev = p[def.key] || [];
+                                        const next = on ? prev.filter(x => x !== opt) : [...prev, opt];
+                                        const out = { ...p };
+                                        if (next.length === 0) delete out[def.key];
+                                        else out[def.key] = next;
+                                        return out;
+                                      });
+                                    }}
+                                  >
+                                    <svg className="lib-menu-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                    {opt}
+                                  </div>
+                                );
+                              })}
+                            </React.Fragment>
+                          ))}
+                          {anyFilter && (
+                            <div className="lib-menu-clear" onClick={() => setFilters({})}>
+                              Clear filters
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Sort — small popover with the four sort options. */}
@@ -6848,6 +7340,7 @@ export default function App(){
           onPreview={(id)=>{const a=assets.find(x=>x.id===id);if(a){setEditingAssetId(null);openAsset(a);}}}
           onClose={()=>setEditingAssetId(null)}
           authHeaders={authHeaders}
+          fieldDefs={fieldDefs}
         />
         {standaloneQuoteOpen && (
           <StandaloneQuoteModal

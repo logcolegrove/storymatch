@@ -110,6 +110,12 @@ type AssetDB = {
   // library. Powers the "Custom" sort. Null = never reordered;
   // sorts to the end of the Custom view (NULLS LAST).
   display_order: number | null;
+  // Per-asset values for admin-defined custom fields. Key is the
+  // FieldDef.key; value type follows the field's type. Existing
+  // system fields (vertical, geography, company_size, asset_type,
+  // client_status) still use their dedicated columns and don't
+  // appear here. Empty object when no custom fields are set.
+  custom_field_values: Record<string, unknown> | null;
 };
 
 type AssetFE = {
@@ -187,6 +193,9 @@ type AssetFE = {
   transcriptSegments?: { startSeconds: number; text: string }[];
   // Manual sort order — null when admin hasn't drag-reordered yet.
   displayOrder?: number | null;
+  // Custom-field values keyed by FieldDef.key. See the DB shape note
+  // on AssetDB.custom_field_values for what does / doesn't live here.
+  customFieldValues?: Record<string, unknown>;
 };
 
 function dbToFe(r: AssetDB): AssetFE {
@@ -255,6 +264,9 @@ function dbToFe(r: AssetDB): AssetFE {
     clientRole: r.client_role || "",
     pullQuoteFavorite: !!r.pull_quote_favorite,
     displayOrder: r.display_order,
+    customFieldValues: (r.custom_field_values && typeof r.custom_field_values === "object")
+      ? r.custom_field_values as Record<string, unknown>
+      : {},
   };
 }
 
@@ -332,6 +344,15 @@ function feToDb(a: Partial<AssetFE> & { id: string }, orgId: string, currentUser
       o.freshness_exception_set_by_email = currentUserEmail || null;
       o.freshness_exception_set_at = new Date().toISOString();
     }
+  }
+  // Admin-defined custom field values. Pass through as JSONB; the
+  // /api/org/fields schema is the source of truth for which keys are
+  // valid, but the assets table itself is shape-agnostic. Null/undefined
+  // are coerced to {} so the column never goes back to NULL once set.
+  if (a.customFieldValues !== undefined) {
+    o.custom_field_values = (a.customFieldValues && typeof a.customFieldValues === "object")
+      ? a.customFieldValues
+      : {};
   }
   return o;
 }
