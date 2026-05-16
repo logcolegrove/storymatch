@@ -7,6 +7,7 @@ import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
 import FeedbackView from "./components/FeedbackView";
 import RateAssetModal from "./components/RateAssetModal";
+import FiltersModal from "./components/FiltersModal";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./components/FeaturedQuoteRotator";
@@ -276,6 +277,10 @@ const STORYMATCH_FACTOR_WEIGHTS = {
 // constraint on that field. The popover renders one section per
 // fieldDef where showInFilters && (type === "select" || "multi_select").
 type Filters = Record<string, string[]>;
+
+// Sort modes available in the library. "custom" = admin drag-reorder.
+// "az" / "za" = title alphabetical. "recent" / "oldest" = date created.
+type SortBy = "custom" | "recent" | "oldest" | "az" | "za";
 
 interface Route {
   page: "home" | "detail" | "shares" | "feedback";
@@ -830,6 +835,15 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lib-btn.primary:hover{background:var(--accent2);border-color:var(--accent2);}
 .lib-btn .lib-btn-count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:8px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;margin-left:4px;}
 
+/* Rippling-style Filters button — filled primary pill with a
+   circular count badge. Always visually prominent (it's the primary
+   library-shaping control), darkens slightly when filters are
+   active, count badge appears alongside the label. */
+.lib-filters-btn{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 14px 0 12px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;transition:background .12s,box-shadow .12s;letter-spacing:-.005em;box-shadow:0 1px 2px rgba(0,0,0,.06);}
+.lib-filters-btn:hover{background:var(--accent2);box-shadow:0 4px 12px rgba(109,40,217,.25);}
+.lib-filters-btn.on{background:var(--accent2);}
+.lib-filters-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:99px;background:rgba(255,255,255,.22);color:#fff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:2px;}
+
 /* Popovers anchored under the lib-bar buttons. Position via .lib-btn-wrap
    parent (relative). Opens with a quick fade. */
 .lib-btn-wrap{position:relative;}
@@ -851,6 +865,11 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Allow horizontal scroll instead of squishing rows when the viewport gets
    narrow. Rows have a min-width below so columns stay readable. */
 .lv{width:100%;border:1px solid var(--border);border-radius:var(--r2);background:#fff;overflow-x:auto;}
+/* Resizable column widths are stored on the wrapper as CSS custom
+   properties; the head + every row read from the same vars so widths
+   stay in sync without prop drilling. Defaults below match the
+   previous grid-template-columns sizes. */
+.lv{--lv-grid:72px 320px 130px 200px 90px;}
 /* Five columns: thumb | title | vertical | merged-status | actions.
    The merged-status column groups Publication + Cleared into one block.
    min-width on both head + row prevents horizontal squish — when the
@@ -858,8 +877,27 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Six grid tracks: thumb | title | vertical | visibility | status | actions.
    Visibility is content-sized (just the dropdown), Status takes the remaining
    space so the cleared trigger has room to breathe. */
-.lv-head{display:grid;grid-template-columns:72px minmax(200px,2fr) minmax(110px,1fr) 110px minmax(150px,1fr) 90px;gap:14px;padding:11px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:920px;}
-.lv-row{display:grid;grid-template-columns:72px minmax(200px,2fr) minmax(110px,1fr) 110px minmax(150px,1fr) 90px;gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:920px;}
+.lv-head{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:920px;}
+.lv-row{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:920px;}
+/* Header cells are click-to-sort buttons. The right edge has a thin
+   drag handle to resize the column. Both behaviors coexist — clicks
+   on the label open the menu; pointer events on the handle drive
+   resize. */
+.lv-h-cell{position:relative;display:flex;align-items:center;height:42px;}
+.lv-h-btn{display:inline-flex;align-items:center;gap:5px;background:none;border:none;padding:0;cursor:pointer;color:var(--t3);font:inherit;text-transform:inherit;letter-spacing:inherit;}
+.lv-h-btn:hover{color:var(--t1);}
+.lv-h-btn .lv-h-caret{opacity:0;transition:opacity .12s;}
+.lv-h-btn:hover .lv-h-caret,.lv-h-btn.sorting .lv-h-caret{opacity:1;}
+.lv-h-resize{position:absolute;top:8px;bottom:8px;right:-7px;width:14px;cursor:col-resize;display:flex;align-items:center;justify-content:center;z-index:5;}
+.lv-h-resize::after{content:"";width:2px;height:18px;background:transparent;border-radius:1px;transition:background .12s;}
+.lv-h-resize:hover::after,.lv-h-resize.dragging::after{background:var(--accent);}
+.lv-h-menu{position:absolute;top:calc(100% - 6px);left:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px;min-width:170px;z-index:30;}
+.lv-h-menu-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;cursor:pointer;font-size:12.5px;color:var(--t1);text-transform:none;font-weight:500;letter-spacing:0;}
+.lv-h-menu-item:hover{background:var(--bg2);}
+.lv-h-menu-divider{height:1px;background:var(--border);margin:4px 0;}
+.lv-hidden-toolbar{padding:6px 14px;font-size:11.5px;color:var(--t3);background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.lv-hidden-restore{background:none;border:none;color:var(--accent);font-family:var(--font);font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:4px;cursor:pointer;}
+.lv-hidden-restore:hover{background:var(--accentLL);}
 /* Merged status cell — Publication on the left (content-sized, only as
    wide as its longest option), Cleared dot/text on the right (takes
    remaining space). Both content-sized prevents inconsistent dropdown
@@ -2170,6 +2208,10 @@ interface ListViewProps {
   onCopyShareLink: (a: Asset) => void;
   // Opens the in-context rating modal for this asset.
   onRate: (a: Asset) => void;
+  // Sort change driven by the column-header dropdowns. ListView
+  // doesn't own the sort state; it just dispatches the change.
+  sortBy?: SortBy;
+  onSortChange?: (next: SortBy) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
   orgSettings: OrgSettings;
   // Distinct (color, label) tags used elsewhere in the org — surfaced in
@@ -3382,25 +3424,204 @@ function PublicationSelectCell({
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, orgSettings, knownCustomTags }: ListViewProps) {
+// Column descriptors — drives header rendering, per-row cells, and
+// the resize/sort/hide state. `key` doubles as the CSS-var suffix
+// (--lvw-<key>) so column widths can be flipped via inline style on
+// the wrapper. `sortable` columns get Sort asc/desc in their header
+// menu; `hideable` controls whether the menu shows the Hide option.
+type ListViewColumnKey = "thumb" | "title" | "vis" | "status" | "actions";
+
+interface ListViewColumn {
+  key: ListViewColumnKey;
+  label: string;
+  defaultWidth: number;
+  minWidth: number;
+  sortable: boolean;
+  hideable: boolean;
+  // Maps "asc" / "desc" intent to the parent's SortBy values. Only
+  // present for sortable columns.
+  sortAscKey?: SortBy;
+  sortDescKey?: SortBy;
+}
+
+const LIST_VIEW_COLUMNS: ListViewColumn[] = [
+  { key: "thumb", label: "", defaultWidth: 72, minWidth: 56, sortable: false, hideable: false },
+  { key: "title", label: "Title", defaultWidth: 320, minWidth: 160, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
+  { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: false, hideable: true },
+  { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: false, hideable: true },
+  { key: "actions", label: "Actions", defaultWidth: 90, minWidth: 80, sortable: false, hideable: false },
+];
+
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, orgSettings, knownCustomTags }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
+
+  // Per-column state — widths + which columns are hidden. Both
+  // persist to localStorage so admins keep their layout across
+  // sessions. Defaults match LIST_VIEW_COLUMNS' defaultWidth.
+  const [widths, setWidths] = useState<Record<ListViewColumnKey, number>>(() => {
+    const init: Record<string, number> = {};
+    for (const c of LIST_VIEW_COLUMNS) init[c.key] = c.defaultWidth;
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("storymatch.lv.widths");
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, number>;
+          for (const c of LIST_VIEW_COLUMNS) {
+            const v = parsed[c.key];
+            if (typeof v === "number" && v >= c.minWidth) init[c.key] = v;
+          }
+        }
+      } catch { /* ignore parse errors — fall back to defaults */ }
+    }
+    return init as Record<ListViewColumnKey, number>;
+  });
+  const [hidden, setHidden] = useState<Set<ListViewColumnKey>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const raw = localStorage.getItem("storymatch.lv.hidden");
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw) as string[];
+      return new Set(arr.filter(k => LIST_VIEW_COLUMNS.some(c => c.key === k && c.hideable)) as ListViewColumnKey[]);
+    } catch { return new Set(); }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem("storymatch.lv.widths", JSON.stringify(widths)); } catch { /* quota etc — non-fatal */ }
+  }, [widths]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem("storymatch.lv.hidden", JSON.stringify(Array.from(hidden))); } catch { /* non-fatal */ }
+  }, [hidden]);
+
+  const visibleColumns = LIST_VIEW_COLUMNS.filter(c => !hidden.has(c.key));
+
+  // Compose the grid-template-columns string from visible columns'
+  // current widths. Set on the wrapper as a CSS custom property so
+  // both the header row and every data row read the same template
+  // — guarantees alignment even when columns are hidden / resized.
+  const gridTemplate = visibleColumns.map(c => `${widths[c.key]}px`).join(" ");
+  const styleVars = { ["--lv-grid" as string]: gridTemplate } as React.CSSProperties;
+
+  // Pointer-driven column resize. Captures start width + start X on
+  // mousedown, listens on the document for move/up so the drag
+  // continues even when the cursor leaves the tiny handle.
+  const [resizingKey, setResizingKey] = useState<ListViewColumnKey | null>(null);
+  const beginResize = (key: ListViewColumnKey, e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const col = LIST_VIEW_COLUMNS.find(c => c.key === key);
+    if (!col) return;
+    const startX = e.clientX;
+    const startW = widths[key];
+    setResizingKey(key);
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const next = Math.max(col.minWidth, Math.min(600, startW + dx));
+      setWidths(prev => ({ ...prev, [key]: next }));
+    };
+    const onUp = () => {
+      setResizingKey(null);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  };
+
+  // Header dropdown state — which column's menu is open. Null = none.
+  const [openHeaderMenu, setOpenHeaderMenu] = useState<ListViewColumnKey | null>(null);
+  useEffect(() => {
+    if (!openHeaderMenu) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest(".lv-h-cell")) setOpenHeaderMenu(null);
+    };
+    const tm = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+    return () => { clearTimeout(tm); document.removeEventListener("mousedown", onDoc); };
+  }, [openHeaderMenu]);
+
+  const hiddenHideable = LIST_VIEW_COLUMNS.filter(c => c.hideable && hidden.has(c.key));
 
   if (assets.length === 0) {
     return <div className="lv"><div className="lv-empty">No assets to show.</div></div>;
   }
   return (
-    <div className="lv">
+    <div className="lv" style={styleVars as React.CSSProperties}>
+      {hiddenHideable.length > 0 && (
+        <div className="lv-hidden-toolbar">
+          <span>Hidden:</span>
+          {hiddenHideable.map(c => (
+            <button
+              key={c.key}
+              type="button"
+              className="lv-hidden-restore"
+              onClick={() => setHidden(h => { const n = new Set(h); n.delete(c.key); return n; })}
+            >+ {c.label}</button>
+          ))}
+        </div>
+      )}
       <div className="lv-head">
-        {/* Master checkbox lives in the library control bar above; this column
-            is intentionally empty here so it aligns with the per-row checkbox. */}
-        <div></div>
-        <div>Title</div>
-        <div>Vertical</div>
-        {/* Visibility = the publication dropdown column (Public / Private / Archive). */}
-        <div>Visibility</div>
-        {/* Status = the cleared indicators column (approval + flags + freshness). */}
-        <div>Status</div>
-        <div style={{ textAlign: "right" }}>Actions</div>
+        {visibleColumns.map(col => {
+          if (col.key === "thumb") {
+            // The thumb column has no label and no menu — it's just
+            // there so the per-row thumbnail aligns with the head.
+            return <div key={col.key} className="lv-h-cell"/>;
+          }
+          const isSorting = !!col.sortable && (sortBy === col.sortAscKey || sortBy === col.sortDescKey);
+          return (
+            <div key={col.key} className="lv-h-cell">
+              <button
+                type="button"
+                className={`lv-h-btn${isSorting ? " sorting" : ""}`}
+                onClick={(e) => { e.stopPropagation(); setOpenHeaderMenu(o => o === col.key ? null : col.key); }}
+                title={col.sortable ? "Click for sort / hide options" : "Click for column options"}
+              >
+                <span>{col.label}</span>
+                <svg className="lv-h-caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+              {/* Drag handle on right edge — resizes this column. */}
+              <div
+                className={`lv-h-resize${resizingKey === col.key ? " dragging" : ""}`}
+                onPointerDown={(e) => beginResize(col.key, e)}
+                title="Drag to resize"
+              />
+              {openHeaderMenu === col.key && (
+                <div className="lv-h-menu" onClick={e => e.stopPropagation()}>
+                  {col.sortable && col.sortAscKey && col.sortDescKey && (
+                    <>
+                      <div
+                        className="lv-h-menu-item"
+                        onClick={() => { onSortChange?.(col.sortAscKey!); setOpenHeaderMenu(null); }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 3 18 9"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                        Sort ascending
+                      </div>
+                      <div
+                        className="lv-h-menu-item"
+                        onClick={() => { onSortChange?.(col.sortDescKey!); setOpenHeaderMenu(null); }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 15 12 21 18 15"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                        Sort descending
+                      </div>
+                    </>
+                  )}
+                  {col.sortable && col.hideable && <div className="lv-h-menu-divider"/>}
+                  {col.hideable && (
+                    <div
+                      className="lv-h-menu-item"
+                      onClick={() => { setHidden(h => { const n = new Set(h); n.add(col.key); return n; }); setOpenHeaderMenu(null); }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-10-8-10-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+                      Hide column
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
       {assets.map((a) => {
         const isArchived = a.status === "archived";
@@ -3414,80 +3635,103 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         if (!thumb && vid?.p === "yt") thumb = ytThumb(vid.id);
         if (!thumb) thumb = "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=160&h=90&fit=crop";
         const pubStatus = (a.status || "published") as "published" | "draft" | "archived";
+        // Each cell renders only when its column is visible, so
+        // hiding a column drops the corresponding cell across every
+        // row in lock-step with the header. Order matches
+        // LIST_VIEW_COLUMNS so the grid template + cells stay aligned.
         return (
           <div
             key={a.id}
             className={`lv-row${statusCls}${isSelected ? " selected" : ""}`}
             onClick={() => onClick(a)}
           >
-            <input
-              type="checkbox"
-              className="lv-check"
-              checked={isSelected}
-              onChange={() => { /* handled by onClick to capture shift key */ }}
-              onClick={(e) => { e.stopPropagation(); onToggleSelect(a.id, e.shiftKey); }}
-              title="Shift-click to select a range"
-            />
-            <div className="lv-thumb">
-              <img src={thumb} alt={a.company} loading="lazy" />
-            </div>
-            <div className="lv-title">
-              <div className="lv-title-h">{a.headline || "Untitled"}</div>
-              <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
-            </div>
-            <div className="lv-vert">{a.vertical || "—"}</div>
-            {/* Visibility column — publication dropdown (Public/Private/Archive). */}
-            <div className="lv-visibility">
-              <PublicationSelectCell
-                asset={a}
-                pubStatus={pubStatus}
-                onSetPublicationStatus={onSetPublicationStatus}
-                isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
-              />
-            </div>
-            {/* Status column — cleared indicators (approval + flags + freshness),
-                followed by any custom-status chips for at-a-glance scanning. */}
-            <div className="lv-statuscell">
-              <ClearedCell
-                asset={a}
-                cleared={cleared}
-                open={open}
-                onToggle={() => setOpenClearedFor(open ? null : a.id)}
-                onClose={() => setOpenClearedFor(null)}
-                libraryFreshnessRuleActive={!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate)}
-                isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
-                onSetFreshnessException={onSetFreshnessException}
-                onSetCustomFlags={onSetCustomFlags}
-                onResetStatusIndicators={onResetStatusIndicators}
-                onSetClientStatus={onSetClientStatus}
-                onSetApproval={onSetApproval}
-                onMarkVerified={onMarkVerified}
-                knownCustomTags={knownCustomTags}
-              />
-              <FlagChips
-                flags={(a.customFlags as CustomFlag[]) || []}
-                dense
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenClearedFor(open ? null : a.id);
-                }}
-              />
-            </div>
-            <div className="lv-actions">
-              <DotsMenu items={[
-                { label: "Open", onClick: () => onClick(a) },
-                { label: "Edit details", onClick: () => onEdit(a) },
-                { label: "Copy share link", onClick: () => onCopyShareLink(a) },
-                { divider: true },
-                { label: "Rate this asset", onClick: () => onRate(a) },
-                { divider: true },
-                isArchived
-                  ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
-                  : { label: "Archive", onClick: () => onSetPublicationStatus(a, "archived") },
-                { divider: true },
-                { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) onDelete(a.id); }, danger: true },
-              ]}/>
-            </div>
+            {visibleColumns.map(col => {
+              if (col.key === "thumb") {
+                return (
+                  <div key={col.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="checkbox"
+                      className="lv-check"
+                      checked={isSelected}
+                      onChange={() => { /* handled by onClick to capture shift key */ }}
+                      onClick={(e) => { e.stopPropagation(); onToggleSelect(a.id, e.shiftKey); }}
+                      title="Shift-click to select a range"
+                    />
+                    <div className="lv-thumb">
+                      <img src={thumb} alt={a.company} loading="lazy" />
+                    </div>
+                  </div>
+                );
+              }
+              if (col.key === "title") {
+                return (
+                  <div key={col.key} className="lv-title">
+                    <div className="lv-title-h">{a.headline || "Untitled"}</div>
+                    <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
+                  </div>
+                );
+              }
+              if (col.key === "vis") {
+                return (
+                  <div key={col.key} className="lv-visibility">
+                    <PublicationSelectCell
+                      asset={a}
+                      pubStatus={pubStatus}
+                      onSetPublicationStatus={onSetPublicationStatus}
+                      isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
+                    />
+                  </div>
+                );
+              }
+              if (col.key === "status") {
+                return (
+                  <div key={col.key} className="lv-statuscell">
+                    <ClearedCell
+                      asset={a}
+                      cleared={cleared}
+                      open={open}
+                      onToggle={() => setOpenClearedFor(open ? null : a.id)}
+                      onClose={() => setOpenClearedFor(null)}
+                      libraryFreshnessRuleActive={!!(orgSettings.freshnessWarnAfterMonths || orgSettings.freshnessWarnBeforeDate)}
+                      isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
+                      onSetFreshnessException={onSetFreshnessException}
+                      onSetCustomFlags={onSetCustomFlags}
+                      onResetStatusIndicators={onResetStatusIndicators}
+                      onSetClientStatus={onSetClientStatus}
+                      onSetApproval={onSetApproval}
+                      onMarkVerified={onMarkVerified}
+                      knownCustomTags={knownCustomTags}
+                    />
+                    <FlagChips
+                      flags={(a.customFlags as CustomFlag[]) || []}
+                      dense
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenClearedFor(open ? null : a.id);
+                      }}
+                    />
+                  </div>
+                );
+              }
+              // actions
+              return (
+                <div key={col.key} className="lv-actions">
+                  <DotsMenu items={[
+                    { label: "Open", onClick: () => onClick(a) },
+                    { label: "Edit details", onClick: () => onEdit(a) },
+                    { label: "Copy share link", onClick: () => onCopyShareLink(a) },
+                    { divider: true },
+                    { label: "Rate this asset", onClick: () => onRate(a) },
+                    { divider: true },
+                    isArchived
+                      ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
+                      : { label: "Archive", onClick: () => onSetPublicationStatus(a, "archived") },
+                    { divider: true },
+                    { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) onDelete(a.id); }, danger: true },
+                  ]}/>
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -5472,9 +5716,9 @@ export default function App(){
   }, []);
   // Library bar: which dropdown is open (Filter, Sort, or +Add) and the
   // current sort. Null = nothing open.
-  type SortBy = "custom" | "recent" | "oldest" | "az" | "za";
   const[sortBy,setSortBy]=useState<SortBy>("recent");
   const[libMenuOpen,setLibMenuOpen]=useState<"filter"|"sort"|"add"|null>(null);
+  const[filtersModalOpen,setFiltersModalOpen]=useState(false);
   // Modal state for standalone quote creation. Opened from the
   // "+ Add" → "Standalone quote" menu entry.
   const[standaloneQuoteOpen,setStandaloneQuoteOpen]=useState(false);
@@ -6969,75 +7213,22 @@ export default function App(){
                   // button wrappers — keeps popover behaviour predictable.
                   if (!(e.target as HTMLElement).closest(".lib-btn-wrap")) setLibMenuOpen(null);
                 }}>
-                  {/* Filter — opens a popover with one section per field
-                      def where showInFilters is on. Only select /
-                      multi_select fields have option lists; text /
-                      number / date fields don't render here (no
-                      checkable options to offer). The whole shape is
-                      driven by the org's field schema, so adding a
-                      filterable custom field surfaces it here without
-                      any code change. */}
-                  <div className="lib-btn-wrap">
-                    <button
-                      className={`lib-btn${libMenuOpen === "filter" || anyFilter ? " on" : ""}`}
-                      onClick={() => setLibMenuOpen(libMenuOpen === "filter" ? null : "filter")}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                      Filter
-                      {anyFilter && (
-                        <span className="lib-btn-count">{totalFilterCount}</span>
-                      )}
-                    </button>
-                    {libMenuOpen === "filter" && (() => {
-                      // Compute the filterable defs once per render.
-                      // Sort by FieldDef.position so the popover order
-                      // matches the Manage Fields panel order.
-                      const filterable = fieldDefs
-                        .filter(d => d.showInFilters && (d.type === "select" || d.type === "multi_select") && Array.isArray(d.options) && d.options.length > 0)
-                        .slice()
-                        .sort((a, b) => a.position - b.position);
-                      return (
-                        <div className="lib-menu" style={{ minWidth: 240 }}>
-                          {filterable.length === 0 && (
-                            <div className="lib-menu-section" style={{ color: "var(--t3)", fontWeight: 500 }}>No filterable fields yet. Toggle &ldquo;Show in filters&rdquo; on a field in Manage Fields.</div>
-                          )}
-                          {filterable.map(def => (
-                            <React.Fragment key={def.id}>
-                              <div className="lib-menu-section">{def.label}</div>
-                              {(def.options || []).map(opt => {
-                                const sel = filters[def.key] || [];
-                                const on = sel.includes(opt);
-                                return (
-                                  <div
-                                    key={opt}
-                                    className={`lib-menu-item${on ? " on" : ""}`}
-                                    onClick={() => {
-                                      setFilters(p => {
-                                        const prev = p[def.key] || [];
-                                        const next = on ? prev.filter(x => x !== opt) : [...prev, opt];
-                                        const out = { ...p };
-                                        if (next.length === 0) delete out[def.key];
-                                        else out[def.key] = next;
-                                        return out;
-                                      });
-                                    }}
-                                  >
-                                    <svg className="lib-menu-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                                    {opt}
-                                  </div>
-                                );
-                              })}
-                            </React.Fragment>
-                          ))}
-                          {anyFilter && (
-                            <div className="lib-menu-clear" onClick={() => setFilters({})}>
-                              Clear filters
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
+                  {/* Single Filters button — Rippling-style filled
+                      pill with the filter glyph, "Filters" label, and
+                      a count badge showing total selected values
+                      across all field categories. Opens FiltersModal
+                      which handles category + option picking in a
+                      three-column layout. */}
+                  <button
+                    className={`lib-filters-btn${anyFilter ? " on" : ""}`}
+                    onClick={() => setFiltersModalOpen(true)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                    <span>Filters</span>
+                    {anyFilter && (
+                      <span className="lib-filters-count">{totalFilterCount}</span>
+                    )}
+                  </button>
 
                   {/* Sort — small popover with the four sort options. */}
                   <div className="lib-btn-wrap">
@@ -7164,6 +7355,8 @@ export default function App(){
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
                   onRate={(a)=>setRatingAssetId(a.id)}
+                  sortBy={sortBy}
+                  onSortChange={setSortBy}
                   orgSettings={orgSettings}
                   knownCustomTags={knownCustomTags}
                 />
@@ -7445,6 +7638,16 @@ export default function App(){
             onCreated={() => { refreshFeaturedQuotes(); setToast("Quote added"); setTimeout(()=>setToast(null),1500); }}
           />
         )}
+        {/* Rippling-style filters modal — single Filters button in
+            the lib bar opens this. Categories driven by the org's
+            field schema (filterable fields only). */}
+        <FiltersModal
+          open={filtersModalOpen}
+          fieldDefs={fieldDefs}
+          filters={filters}
+          onFiltersChange={setFilters}
+          onClose={() => setFiltersModalOpen(false)}
+        />
         {/* In-context rating modal — opened from the "Rate this asset"
             dots-menu item on any card or row. Self-contained: handles
             its own loading, save, thank-you, and remove flows. */}
