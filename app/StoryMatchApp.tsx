@@ -852,6 +852,14 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lc-pill.unknown{background:var(--bg2);color:var(--t3);border-color:var(--border2);}
 
 /* ── VIEW MODE TOGGLE (admin only) ── */
+/* Clear-results button — takes the toggle slot when StoryMatch
+   results are active. Same height as Sort + Filters so the
+   library control bar stays a clean horizontal row. Filled accent
+   so it's unmissable (the previous tiny inline "Clear" link was
+   too easy to skip). */
+.sm-clear-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;letter-spacing:-.005em;}
+.sm-clear-btn:hover{background:var(--accent2);}
+
 .view-toggle{display:flex;height:32px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff;}
 .view-toggle-btn{height:100%;padding:0 10px;background:none;border:none;cursor:pointer;color:var(--t3);display:grid;place-items:center;}
 .view-toggle-btn.on{background:var(--accentLL);color:var(--accent);}
@@ -7814,15 +7822,12 @@ export default function App(){
               )}
             </div>
 
-            {smResults && smResults.length>0 && (
-              <div className="sm-status">
-                <div className="sm-status-dot"/>
-                <span className="sm-status-text">
-                  ✦ StoryMatch found {smResults.length} results — click any card to read the full story
-                </span>
-                <button className="sm-status-clear" onClick={clearSm}>Clear results</button>
-              </div>
-            )}
+            {/* The "StoryMatch found N results" status bar was
+                removed — the result cards themselves are the
+                signal, and the dedicated Clear results button now
+                lives in the library control bar in place of the
+                view toggle (which is meaningless during a match
+                view because the cards force-render in 2-up grid). */}
 
             {/* The standalone filters-wrap was consolidated into the
                 "Filter" popover in the lib-bar below. */}
@@ -7922,7 +7927,26 @@ export default function App(){
                     )}
                   </div>
 
-                  {isAdmin && adminMode && (
+                  {/* When StoryMatch results are active, the grid/list
+                      toggle is meaningless (cards force-render in a
+                      2-up grid). Swap it out for a prominent "Clear
+                      results" button so admins always have a one-
+                      click escape. When no StoryMatch results, the
+                      regular grid/list toggle returns. */}
+                  {isAdmin && adminMode && smResults && smResults.length > 0 ? (
+                    <button
+                      type="button"
+                      className="sm-clear-btn"
+                      onClick={clearSm}
+                      title="Clear StoryMatch results and return to the full library"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                      Clear results
+                    </button>
+                  ) : isAdmin && adminMode && (
                     <div className="view-toggle" title="Toggle grid/list view">
                       <button
                         className={`view-toggle-btn ${viewMode === "grid" ? "on" : ""}`}

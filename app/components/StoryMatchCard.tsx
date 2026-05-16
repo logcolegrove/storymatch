@@ -269,12 +269,12 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
             </p>
           )}
 
-          {reasoning && (
-            <div className="smc-sec">
-              <div className="smc-sec-h">Why this is a match</div>
-              <p className="smc-why">{renderWithChips(reasoning)}</p>
-            </div>
-          )}
+          {/* "Why this is a match" used to live here as the first
+              card section. It's now shown only in the % match
+              hover popover so reps see talking points + quotes
+              first (the things they'll actually pitch with) and
+              reach for the reasoning when they want to interrogate
+              the score. */}
 
           {talkingPoints.length > 0 && (
             <div className="smc-sec">

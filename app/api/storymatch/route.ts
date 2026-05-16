@@ -287,11 +287,17 @@ ABSOLUTE RULES:
 
 4. **Talking points are PARAPHRASED claims, not quotes.** Each talking point has a short topic header (2-4 words like "Time savings", "Migration support", "Peer reference") and a 1-2 sentence paraphrased summary written in third person about {COMPANY}. NOT a verbatim quote. Example: "Time savings — {COMPANY} got twelve hours a week back on reconciliation."
 
-5. **Reasoning is 1-2 sentences MAX.** Punchy, sales-coach voice. Highlight the 1-2 most important phrases with **markdown bold** — the UI renders those as accent chips.
+5. **Reasoning EXPLAINS THE SCORE.** Two to three sentences. This is shown when the user hovers the % match badge, so they're asking "why this percentage?". You MUST:
+   - Quote 1-3 SPECIFIC words or phrases from the salesperson's request (wrap them in "quotes") and tie each to a concrete element of THIS candidate's transcript or metadata.
+   - If the user used vague or off-topic language, say so. ("The request mentions 'partner ecosystem' but this story focuses on internal team training — the score reflects that gap.") Don't generate a generic 'this is a great match' when it isn't.
+   - Highlight the 1-2 strongest connection phrases with **markdown bold**. UI renders those as accent chips.
+   - DO NOT lead with "Why this is a match" or any generic opener. Get straight to the specific connection.
 
-6. **Reason from evidence.** Every claim must trace to text actually in the candidate's transcript or metadata.
+6. **Reason from evidence.** Every claim must trace to text actually in the candidate's transcript or metadata. If a connection is tenuous, say so — accuracy beats flattery.
 
-7. **Better fewer strong matches than many weak ones.**
+7. **lowestFactorNote is specific too.** Don't just say "the company is bigger." Say "The prospect's request implies a 30-person team; this testimonial is from a 5,000-person org — the org-similarity score reflects that." Quote specific phrases from the request when relevant.
+
+8. **Better fewer strong matches than many weak ones.**
 
 SCORING — each candidate gets three independent factor scores 0-100:
    - orgSimilarity: how closely THIS candidate's organisation matches the salesperson's described prospect (type, size, geography, vertical). 80+ = peer-org. 50-70 = same world but different size/geo. <50 = different category.
@@ -311,13 +317,13 @@ Return ONLY a JSON object in this shape:
   "matches": [
     {
       "id": "exact ID string of the chosen candidate",
-      "reasoning": "1-2 sentences with {SPEAKER}, {COMPANY}, etc. placeholders. Highlight 1-2 key phrases with **markdown bold**.",
+      "reasoning": "2-3 sentences. MUST quote 1-3 specific words/phrases from the salesperson's request (in double-quotes) and tie each to concrete evidence in THIS candidate's transcript or metadata. Use placeholders ({SPEAKER}, {COMPANY}, etc.) for names. Bold the 1-2 strongest connection phrases with **markdown bold**. Example: 'You asked about \\"unified billing\\" — {COMPANY} talks specifically about **consolidating three billing systems into one**. Their {VERTICAL} context matches the prospect closely.' If the request and the candidate don't really align, be honest about it.",
       "factorScores": {
         "orgSimilarity": 0-100,
         "painPoints": 0-100,
         "quoteMatch": 0-100
       },
-      "lowestFactorNote": "One short sentence in plain English explaining the lowest-scoring factor. Use placeholders for names. e.g. '{COMPANY} is larger than the prospect, which is the biggest reason this isn't a stronger match.'",
+      "lowestFactorNote": "1 sentence explaining the lowest-scoring factor specifically. Quote the relevant phrase from the request when possible. Use placeholders for names. Example: 'You mentioned \\"sub-50 employee teams\\" but {COMPANY} is enterprise-scale, which drags org-similarity down.'",
       "talkingPoints": [
         {
           "topic": "Short 2-4 word topic header",
@@ -340,7 +346,7 @@ Aim for 2-3 talking points per match and 1-2 verbatim quotes. If no candidates f
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
-      max_tokens: 4500,
+      max_tokens: 5000,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
     }),
