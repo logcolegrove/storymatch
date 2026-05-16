@@ -7662,7 +7662,25 @@ export default function App(){
                 />
               )}
               {adminSection==="insights" && (
-                <SearchLogsView authHeaders={authHeaders}/>
+                <SearchLogsView
+                  authHeaders={authHeaders}
+                  onRerunSearch={(query, source) => {
+                    // Close the admin panel so the results are
+                    // immediately visible behind it.
+                    setAdminSection(null);
+                    if (source === "storymatch") {
+                      setSmQuery(query);
+                      runStoryMatch(query);
+                    } else {
+                      // Library search: clear any active StoryMatch
+                      // results so the library view re-takes the
+                      // canvas, then drop the query into the search
+                      // field so the filter applies live.
+                      if (smResults) clearSm();
+                      setSearch(query);
+                    }
+                  }}
+                />
               )}
               {adminSection==="rules" && (
                 <RulesPanel

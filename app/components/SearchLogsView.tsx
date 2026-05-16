@@ -24,6 +24,11 @@ interface SearchLogEntry {
 
 interface Props {
   authHeaders: () => Promise<HeadersInit>;
+  // Fires when an admin clicks a logged search to re-run it. The
+  // parent decides what "re-run" means per source: library searches
+  // drop the query into the top-bar filter; StoryMatch searches
+  // open the dialog and submit the query to /api/storymatch.
+  onRerunSearch?: (query: string, source: SearchSource) => void;
 }
 
 function timeAgo(iso: string | null): string {
@@ -41,7 +46,7 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
-export default function SearchLogsView({ authHeaders }: Props) {
+export default function SearchLogsView({ authHeaders, onRerunSearch }: Props) {
   const [loading, setLoading] = useState(true);
   const [recent, setRecent] = useState<SearchLogEntry[]>([]);
   const [sourceFilter, setSourceFilter] = useState<"all" | SearchSource>("all");
@@ -100,7 +105,13 @@ export default function SearchLogsView({ authHeaders }: Props) {
         ) : recent.map(entry => {
           const zero = entry.resultCount === 0;
           return (
-            <div key={entry.id} className={`slv-row${zero ? " zero" : ""}`}>
+            <button
+              key={entry.id}
+              type="button"
+              className="slv-row"
+              onClick={() => onRerunSearch?.(entry.query, entry.source)}
+              title="Click to re-run this search"
+            >
               <div className="slv-q">{entry.query}</div>
               <div className="slv-meta">
                 <span className={`slv-source-pill ${entry.source}`}>
@@ -111,7 +122,7 @@ export default function SearchLogsView({ authHeaders }: Props) {
                 </span>
                 <span className="slv-when">{timeAgo(entry.createdAt)}</span>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -135,13 +146,17 @@ const css = `
 .slv-empty-h{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--t1);margin-bottom:4px;}
 .slv-empty-sub{font-size:12px;color:var(--t3);margin:0;line-height:1.5;}
 
-/* Compact two-line search row — query on top, meta line below.
-   Zero-result rows pick up a warm wash so admins spot library
-   gaps at a glance. */
-.slv-row{padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:#fff;transition:background .12s,border-color .12s;}
-.slv-row.zero{background:#fef7f7;border-color:#fecaca;}
-.slv-q{font-size:13px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.35;}
-.slv-meta{display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap;}
+/* Clickable search row — query on top (wraps onto multiple lines
+   so long queries stay fully readable), meta line below. Whole row
+   is a button so admins can re-run any team member's search
+   without retyping it. Zero-result rows keep red text on the count
+   but no longer wear a light red wash — the red text alone is
+   signal enough without dyeing the whole row. */
+.slv-row{display:block;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font:inherit;color:inherit;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;}
+.slv-row:hover{background:var(--bg);border-color:var(--border2);}
+.slv-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.slv-q{font-size:13px;font-weight:600;color:var(--t1);line-height:1.4;word-break:break-word;}
+.slv-meta{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;}
 
 .slv-source-pill{display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:2px 6px;border-radius:4px;background:var(--bg2);color:var(--t3);flex-shrink:0;}
 .slv-source-pill.storymatch{background:#F2EBF9;color:var(--accent);}
