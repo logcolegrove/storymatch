@@ -292,12 +292,18 @@ type SortBy =
   | "status-asc" | "status-desc";
 
 // Column-header quick filters — apply ON TOP of the regular Filters
-// modal. Both default to null = "show all rows". Visibility quick
-// filter pins the displayed assets to a single publication state.
-// Status quick filter pins them to a single cleared-level / freshness
-// bucket. State lives in StoryMatchApp so it survives view switches.
-type VisibilityQuickFilter = null | "published" | "draft" | "archived";
-type StatusQuickFilter = null | "cleared" | "attention" | "blocked" | "expired";
+// modal. Each is an ARRAY so admins can multi-select within a column
+// (e.g. "show Public AND Private", which is an OR match against the
+// asset's status). Empty array = no filter (show everything).
+type VisibilityQuickValue = "published" | "draft" | "archived";
+type VisibilityQuickFilter = VisibilityQuickValue[];
+type StatusQuickValue = "cleared" | "attention" | "blocked" | "expired";
+type StatusQuickFilter = StatusQuickValue[];
+
+// Date-range filter on the Date column. Either bound can be null to
+// mean "open on that side." Whole filter is null when not active.
+// Bounds are inclusive on both ends.
+type DateRangeFilter = { from: string | null; to: string | null } | null;
 
 interface Route {
   page: "home" | "detail" | "shares" | "feedback";
@@ -899,7 +905,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    properties; the head + every row read from the same vars so widths
    stay in sync without prop drilling. Defaults below match the
    previous grid-template-columns sizes. */
-.lv{--lv-grid:72px 320px 130px 130px 200px 160px;}
+.lv{--lv-grid:72px 320px 130px 200px 130px 160px;}
 /* Five columns: thumb | title | vertical | merged-status | actions.
    The merged-status column groups Publication + Cleared into one block.
    min-width on both head + row prevents horizontal squish — when the
@@ -930,6 +936,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-h-menu-check{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:3px;border:1.5px solid var(--border2);background:#fff;color:#fff;flex-shrink:0;}
 .lv-h-menu-check.on{background:var(--accent);border-color:var(--accent);}
 .lv-h-filter-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:2px;display:inline-block;}
+.lv-h-menu-clear{padding:7px 10px;border-radius:5px;cursor:pointer;font-size:11.5px;color:var(--accent);font-weight:600;text-align:center;border-top:1px solid var(--border);margin-top:4px;}
+.lv-h-menu-clear:hover{background:var(--accentLL);}
+.lv-h-daterange{padding:8px 10px;display:flex;flex-direction:column;gap:6px;}
+.lv-h-daterange label{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--t3);text-transform:none;font-weight:500;letter-spacing:0;}
+.lv-h-daterange label > span{min-width:38px;}
+.lv-h-daterange input{flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);font-family:var(--font);font-size:12px;}
+.lv-h-daterange input:focus{outline:none;border-color:var(--accent);}
 .lv-hidden-toolbar{padding:6px 14px;font-size:11.5px;color:var(--t3);background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .lv-hidden-restore{background:none;border:none;color:var(--accent);font-family:var(--font);font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:4px;cursor:pointer;}
 .lv-hidden-restore:hover{background:var(--accentLL);}
@@ -2322,13 +2335,15 @@ interface ListViewProps {
   // doesn't own the sort state; it just dispatches the change.
   sortBy?: SortBy;
   onSortChange?: (next: SortBy) => void;
-  // Quick filters driven by the Visibility + Status column headers.
-  // ListView reads these to mark which option is active in the menu;
-  // the parent applies them when building displayAssets.
+  // Quick filters driven by the Visibility, Status, and Date column
+  // headers. ListView reads these to mark which options are active
+  // in the menus; the parent applies them when building displayAssets.
   visibilityQuickFilter?: VisibilityQuickFilter;
   onVisibilityQuickFilter?: (next: VisibilityQuickFilter) => void;
   statusQuickFilter?: StatusQuickFilter;
   onStatusQuickFilter?: (next: StatusQuickFilter) => void;
+  dateRangeFilter?: DateRangeFilter;
+  onDateRangeFilter?: (next: DateRangeFilter) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
   orgSettings: OrgSettings;
   // Distinct (color, label) tags used elsewhere in the org — surfaced in
@@ -3568,13 +3583,13 @@ interface ListViewColumn {
 const LIST_VIEW_COLUMNS: ListViewColumn[] = [
   { key: "thumb", label: "", defaultWidth: 72, minWidth: 56, sortable: false, hideable: false },
   { key: "title", label: "Title", defaultWidth: 320, minWidth: 160, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
-  { key: "date", label: "Date", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "date-asc", sortDescKey: "date-desc" },
   { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "vis-asc", sortDescKey: "vis-desc", hasQuickFilter: true },
   { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: true, hideable: true, sortAscKey: "status-asc", sortDescKey: "status-desc", hasQuickFilter: true },
+  { key: "date", label: "Date", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "date-asc", sortDescKey: "date-desc", hasQuickFilter: true },
   { key: "actions", label: "", defaultWidth: 160, minWidth: 100, sortable: false, hideable: false },
 ];
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, orgSettings, knownCustomTags }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, orgSettings, knownCustomTags }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state — widths + which columns are hidden. Both
@@ -3705,9 +3720,10 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
             );
           }
           const isSorting = !!col.sortable && (sortBy === col.sortAscKey || sortBy === col.sortDescKey);
-          const visFilterActive = col.key === "vis" && !!visibilityQuickFilter;
-          const statusFilterActive = col.key === "status" && !!statusQuickFilter;
-          const filterActive = visFilterActive || statusFilterActive;
+          const visFilterActive = col.key === "vis" && (visibilityQuickFilter?.length ?? 0) > 0;
+          const statusFilterActive = col.key === "status" && (statusQuickFilter?.length ?? 0) > 0;
+          const dateFilterActive = col.key === "date" && !!dateRangeFilter && (!!dateRangeFilter.from || !!dateRangeFilter.to);
+          const filterActive = visFilterActive || statusFilterActive || dateFilterActive;
           return (
             <div key={col.key} className="lv-h-cell">
               <button
@@ -3748,24 +3764,31 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                       </div>
                     </>
                   )}
-                  {/* Visibility column — quick-filter to a single
-                      publication state. "All" clears the filter. */}
+                  {/* Visibility column — multi-select quick filter.
+                      Each checkbox is independent; passing the filter
+                      requires the asset to match ANY selected option.
+                      "Clear" deselects everything (= show all). */}
                   {col.key === "vis" && (
                     <>
-                      {(col.sortable || col.hideable) && <div className="lv-h-menu-divider"/>}
+                      <div className="lv-h-menu-divider"/>
                       <div className="lv-h-menu-section">Show only</div>
                       {([
-                        { v: null, label: "All visibilities" },
                         { v: "published", label: "Public" },
                         { v: "draft", label: "Private" },
                         { v: "archived", label: "Archived" },
-                      ] as { v: VisibilityQuickFilter; label: string }[]).map(opt => {
-                        const on = visibilityQuickFilter === opt.v;
+                      ] as { v: VisibilityQuickValue; label: string }[]).map(opt => {
+                        const selected = visibilityQuickFilter || [];
+                        const on = selected.includes(opt.v);
                         return (
                           <div
-                            key={String(opt.v)}
+                            key={opt.v}
                             className={`lv-h-menu-item${on ? " active" : ""}`}
-                            onClick={() => { onVisibilityQuickFilter?.(opt.v); setOpenHeaderMenu(null); }}
+                            onClick={() => {
+                              const next: VisibilityQuickFilter = on
+                                ? selected.filter(x => x !== opt.v)
+                                : [...selected, opt.v];
+                              onVisibilityQuickFilter?.(next);
+                            }}
                           >
                             <span className={`lv-h-menu-check${on ? " on" : ""}`}>
                               {on && (
@@ -3776,29 +3799,40 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                           </div>
                         );
                       })}
+                      {(visibilityQuickFilter?.length ?? 0) > 0 && (
+                        <div
+                          className="lv-h-menu-clear"
+                          onClick={() => { onVisibilityQuickFilter?.([]); }}
+                        >Clear</div>
+                      )}
                     </>
                   )}
-                  {/* Status column — quick-filter to a single cleared
-                      bucket. "Expired" is a freshness-specific cut
-                      that pulls the assets flagged by the org's
-                      freshness rule (regardless of overall level). */}
+                  {/* Status column — multi-select. "Expired" is a
+                      freshness-specific path (independent of overall
+                      cleared-level), so an asset can pass via either
+                      level OR expired. */}
                   {col.key === "status" && (
                     <>
-                      {(col.sortable || col.hideable) && <div className="lv-h-menu-divider"/>}
+                      <div className="lv-h-menu-divider"/>
                       <div className="lv-h-menu-section">Show only</div>
                       {([
-                        { v: null, label: "All statuses" },
                         { v: "cleared", label: "Cleared" },
                         { v: "attention", label: "Needs attention" },
                         { v: "blocked", label: "Blocked" },
                         { v: "expired", label: "Expired" },
-                      ] as { v: StatusQuickFilter; label: string }[]).map(opt => {
-                        const on = statusQuickFilter === opt.v;
+                      ] as { v: StatusQuickValue; label: string }[]).map(opt => {
+                        const selected = statusQuickFilter || [];
+                        const on = selected.includes(opt.v);
                         return (
                           <div
-                            key={String(opt.v)}
+                            key={opt.v}
                             className={`lv-h-menu-item${on ? " active" : ""}`}
-                            onClick={() => { onStatusQuickFilter?.(opt.v); setOpenHeaderMenu(null); }}
+                            onClick={() => {
+                              const next: StatusQuickFilter = on
+                                ? selected.filter(x => x !== opt.v)
+                                : [...selected, opt.v];
+                              onStatusQuickFilter?.(next);
+                            }}
                           >
                             <span className={`lv-h-menu-check${on ? " on" : ""}`}>
                               {on && (
@@ -3809,6 +3843,52 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                           </div>
                         );
                       })}
+                      {(statusQuickFilter?.length ?? 0) > 0 && (
+                        <div
+                          className="lv-h-menu-clear"
+                          onClick={() => { onStatusQuickFilter?.([]); }}
+                        >Clear</div>
+                      )}
+                    </>
+                  )}
+                  {/* Date column — custom range filter. Either bound
+                      can stay empty (open on that side). Inclusive on
+                      both ends. Assets with no publishedAt are
+                      excluded when any range is active. */}
+                  {col.key === "date" && (
+                    <>
+                      <div className="lv-h-menu-divider"/>
+                      <div className="lv-h-menu-section">Custom range</div>
+                      <div className="lv-h-daterange">
+                        <label>
+                          <span>From</span>
+                          <input
+                            type="date"
+                            value={dateRangeFilter?.from || ""}
+                            onChange={(e) => {
+                              const v = e.target.value || null;
+                              onDateRangeFilter?.({ from: v, to: dateRangeFilter?.to || null });
+                            }}
+                          />
+                        </label>
+                        <label>
+                          <span>To</span>
+                          <input
+                            type="date"
+                            value={dateRangeFilter?.to || ""}
+                            onChange={(e) => {
+                              const v = e.target.value || null;
+                              onDateRangeFilter?.({ from: dateRangeFilter?.from || null, to: v });
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {dateRangeFilter && (dateRangeFilter.from || dateRangeFilter.to) && (
+                        <div
+                          className="lv-h-menu-clear"
+                          onClick={() => { onDateRangeFilter?.(null); }}
+                        >Clear range</div>
+                      )}
                     </>
                   )}
                   {col.hideable && (
@@ -6102,10 +6182,12 @@ export default function App(){
   // current sort. Null = nothing open.
   const[sortBy,setSortBy]=useState<SortBy>("recent");
   // Column-header quick filters — orthogonal to the regular Filters
-  // modal. Both null = no quick filter active. Set via the Status
-  // and Visibility column dropdowns in ListView.
-  const[visibilityQuickFilter,setVisibilityQuickFilter]=useState<VisibilityQuickFilter>(null);
-  const[statusQuickFilter,setStatusQuickFilter]=useState<StatusQuickFilter>(null);
+  // modal. Empty arrays = no filter. Set via the Status, Visibility
+  // and Date column dropdowns in ListView. Multi-select within a
+  // column OR-matches (any one option passes).
+  const[visibilityQuickFilter,setVisibilityQuickFilter]=useState<VisibilityQuickFilter>([]);
+  const[statusQuickFilter,setStatusQuickFilter]=useState<StatusQuickFilter>([]);
+  const[dateRangeFilter,setDateRangeFilter]=useState<DateRangeFilter>(null);
   const[libMenuOpen,setLibMenuOpen]=useState<"filter"|"sort"|"add"|null>(null);
   const[filtersModalOpen,setFiltersModalOpen]=useState(false);
   // Modal state for standalone quote creation. Opened from the
@@ -6793,22 +6875,43 @@ export default function App(){
     displayAssets=assets.filter(a=>{
       if(a.status === "deleted") return false; // soft-deleted: hidden everywhere
       if(!showAllStatuses && a.status !== "published") return false;
-      // Visibility quick-filter (column header): pin to one
-      // publication state.
-      if(visibilityQuickFilter && a.status !== visibilityQuickFilter) return false;
-      // Status quick-filter (column header): pin to a single cleared
-      // bucket OR specifically to "expired" assets (which can happen
-      // independently of the cleared-level computation).
-      if(statusQuickFilter){
-        if(statusQuickFilter === "expired"){
-          if(!isAssetExpiredFE(a, orgSettings)) return false;
-        } else {
-          const lvl = computeCleared(a, orgSettings).level;
-          // "cleared" → green, "attention" → yellow, "blocked" → red
-          const want = statusQuickFilter === "cleared" ? "green"
-            : statusQuickFilter === "attention" ? "yellow"
-            : "red";
-          if(lvl !== want) return false;
+      // Visibility quick-filter (column header): asset must match
+      // ANY of the selected publication states. Empty array = no
+      // constraint.
+      if(visibilityQuickFilter.length > 0 && !visibilityQuickFilter.includes(a.status as VisibilityQuickValue)) return false;
+      // Status quick-filter (column header): asset must match ANY of
+      // the selected status buckets. Each bucket maps to either a
+      // cleared-level (green/yellow/red) or to "expired" (freshness
+      // rule), so an asset can pass via multiple paths.
+      if(statusQuickFilter.length > 0){
+        const lvl = computeCleared(a, orgSettings).level;
+        const expired = isAssetExpiredFE(a, orgSettings);
+        const passes = statusQuickFilter.some(opt => {
+          if(opt === "expired") return expired;
+          if(opt === "cleared") return lvl === "green";
+          if(opt === "attention") return lvl === "yellow";
+          if(opt === "blocked") return lvl === "red";
+          return false;
+        });
+        if(!passes) return false;
+      }
+      // Date range filter from the Date column. Both ends inclusive.
+      // Assets with no publish date are excluded when any range is
+      // active — there's nothing to match against. Bounds are parsed
+      // as local YYYY-MM-DD; the "to" bound covers the full day.
+      if(dateRangeFilter && (dateRangeFilter.from || dateRangeFilter.to)){
+        if(!a.publishedAt) return false;
+        const pub = new Date(a.publishedAt).getTime();
+        if(!Number.isFinite(pub)) return false;
+        if(dateRangeFilter.from){
+          const fromTs = new Date(dateRangeFilter.from).getTime();
+          if(Number.isFinite(fromTs) && pub < fromTs) return false;
+        }
+        if(dateRangeFilter.to){
+          const toTs = new Date(dateRangeFilter.to).getTime();
+          // Add a day (minus 1 ms) so the entire "to" calendar date
+          // passes inclusive.
+          if(Number.isFinite(toTs) && pub > toTs + 86399999) return false;
         }
       }
       // Every field with an active filter must pass. System fields read
@@ -7791,13 +7894,14 @@ export default function App(){
                   <p style={{color:"var(--t4)"}}>
                     {smResults?"Try broadening your search":"Adjust your filters above to see more stories."}
                   </p>
-                  {(anyFilter || visibilityQuickFilter || statusQuickFilter) && !smResults && (
+                  {(anyFilter || visibilityQuickFilter.length > 0 || statusQuickFilter.length > 0 || (dateRangeFilter && (dateRangeFilter.from || dateRangeFilter.to))) && !smResults && (
                     <button
                       type="button"
                       onClick={() => {
                         setFilters({});
-                        setVisibilityQuickFilter(null);
-                        setStatusQuickFilter(null);
+                        setVisibilityQuickFilter([]);
+                        setStatusQuickFilter([]);
+                        setDateRangeFilter(null);
                       }}
                       style={{marginTop:14,padding:"8px 18px",border:"none",borderRadius:8,background:"var(--accent)",color:"#fff",fontFamily:"var(--font)",fontSize:13,fontWeight:600,cursor:"pointer"}}
                     >Clear all filters</button>
@@ -7826,6 +7930,8 @@ export default function App(){
                   onVisibilityQuickFilter={setVisibilityQuickFilter}
                   statusQuickFilter={statusQuickFilter}
                   onStatusQuickFilter={setStatusQuickFilter}
+                  dateRangeFilter={dateRangeFilter}
+                  onDateRangeFilter={setDateRangeFilter}
                   orgSettings={orgSettings}
                   knownCustomTags={knownCustomTags}
                 />
