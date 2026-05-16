@@ -973,8 +973,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* "+ Add column" header cell — sits at the right edge of the
    header row, opens the column-control panel anchored beneath. */
 .lv-h-addcol-cell{display:flex;align-items:center;justify-content:center;}
-.lv-h-addcol{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t3);cursor:pointer;padding:0;transition:all .12s;}
-.lv-h-addcol:hover{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
+.lv-h-addcol{display:grid;place-items:center;width:28px;height:28px;border:none;border-radius:6px;background:transparent;color:var(--t3);cursor:pointer;padding:0;transition:background .12s,color .12s;}
+.lv-h-addcol:hover{color:var(--accent);background:var(--accentLL);}
 
 /* Generic custom-field cell — simple text rendering with em-dash
    fallback when the asset has no value for the field. Mirrors the
@@ -3968,11 +3968,26 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
           const hasMenu = !!col.label && (col.sortable || col.hideable || col.hasQuickFilter);
           const draggable = col.key !== "thumb" && col.key !== "title";
           const isDragging = colDrag?.key === col.key;
-          const cellTransform = transformForCol(col.key);
-          const cellStyle: React.CSSProperties = {
-            transform: cellTransform,
-            opacity: isDragging ? 0.4 : undefined,
-            transition: colDrag ? "transform .15s ease, opacity .15s ease" : undefined,
+          // Two distinct visual treatments during a drag:
+          //   • Dragged cell: follows the cursor in real time via
+          //     translateX(pointerX - startX), elevated z-index +
+          //     subtle shadow so it reads as "this is being dragged."
+          //     No transition so it tracks the pointer instantly.
+          //   • Other cells: magic-rearrange via the transformForCol
+          //     helper, smooth transition.
+          const cellStyle: React.CSSProperties = isDragging && colDrag ? {
+            transform: `translateX(${colDrag.pointerX - colDrag.startX}px)`,
+            opacity: 0.92,
+            zIndex: 20,
+            position: "relative",
+            background: "var(--bg)",
+            boxShadow: "0 6px 18px rgba(0,0,0,.18)",
+            borderRadius: 6,
+            transition: "none",
+            cursor: "grabbing",
+          } : {
+            transform: transformForCol(col.key),
+            transition: colDrag ? "transform .15s ease" : undefined,
           };
           if (!hasMenu) {
             return (
