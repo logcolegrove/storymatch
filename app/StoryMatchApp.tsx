@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
 import FeedbackView from "./components/FeedbackView";
+import RateAssetModal from "./components/RateAssetModal";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./components/FeaturedQuoteRotator";
@@ -2167,6 +2168,8 @@ interface ListViewProps {
   onResetStatusIndicators: (a: Asset) => void;
   onDelete: (id: string) => void;
   onCopyShareLink: (a: Asset) => void;
+  // Opens the in-context rating modal for this asset.
+  onRate: (a: Asset) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
   orgSettings: OrgSettings;
   // Distinct (color, label) tags used elsewhere in the org — surfaced in
@@ -3379,7 +3382,7 @@ function PublicationSelectCell({
   );
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, orgSettings, knownCustomTags }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, orgSettings, knownCustomTags }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   if (assets.length === 0) {
@@ -3475,6 +3478,8 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 { label: "Open", onClick: () => onClick(a) },
                 { label: "Edit details", onClick: () => onEdit(a) },
                 { label: "Copy share link", onClick: () => onCopyShareLink(a) },
+                { divider: true },
+                { label: "Rate this asset", onClick: () => onRate(a) },
                 { divider: true },
                 isArchived
                   ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
@@ -5490,6 +5495,7 @@ export default function App(){
   const[selectedIds,setSelectedIds]=useState<Set<string>>(new Set()); // admin-only: multi-select for bulk actions
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
+  const[ratingAssetId,setRatingAssetId]=useState<string|null>(null);   // open the in-context rating modal for this asset
   // Visibility-override target — set when admin tries to mark something
   // Public but one or more rules would re-flip it. Modal explains every
   // blocker and offers a single Override button that clears all triggers
@@ -7157,6 +7163,7 @@ export default function App(){
                   onResetStatusIndicators={resetStatusIndicators}
                   onDelete={deleteAssetInline}
                   onCopyShareLink={copyShareLink}
+                  onRate={(a)=>setRatingAssetId(a.id)}
                   orgSettings={orgSettings}
                   knownCustomTags={knownCustomTags}
                 />
@@ -7325,17 +7332,34 @@ export default function App(){
                       );
                     }
                     const restore = adminMgmt ? restoreAsset : undefined;
-                    const cardMenu: MenuItem[] | undefined = adminMgmt ? [
-                      { label: "Open", onClick: () => openAsset(a) },
-                      { label: "Edit details", onClick: () => setEditingAssetId(a.id) },
-                      { label: "Copy share link", onClick: () => copyShareLink(a) },
-                      { divider: true },
-                      a.status === "archived"
-                        ? { label: "Restore", onClick: () => setPublicationStatus(a, "published") }
-                        : { label: "Archive", onClick: () => setPublicationStatus(a, "archived") },
-                      { divider: true },
-                      { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) deleteAssetInline(a.id); }, danger: true },
-                    ] : undefined;
+                    // Card menu items are role-aware. Admins get the full
+                    // governance menu (Edit / Archive / Delete); everyone
+                    // gets "Rate this asset" — it's the primary
+                    // in-context entry point for sales feedback so the
+                    // rep never leaves the library to leave a rating.
+                    const cardMenu: MenuItem[] | undefined = (() => {
+                      const items: MenuItem[] = [];
+                      if (adminMgmt) {
+                        items.push(
+                          { label: "Open", onClick: () => openAsset(a) },
+                          { label: "Edit details", onClick: () => setEditingAssetId(a.id) },
+                          { label: "Copy share link", onClick: () => copyShareLink(a) },
+                          { divider: true },
+                          a.status === "archived"
+                            ? { label: "Restore", onClick: () => setPublicationStatus(a, "published") }
+                            : { label: "Archive", onClick: () => setPublicationStatus(a, "archived") },
+                          { divider: true },
+                        );
+                      }
+                      items.push({ label: "Rate this asset", onClick: () => setRatingAssetId(a.id) });
+                      if (adminMgmt) {
+                        items.push(
+                          { divider: true },
+                          { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) deleteAssetInline(a.id); }, danger: true },
+                        );
+                      }
+                      return items.length > 0 ? items : undefined;
+                    })();
                     const cardSelected = selectedIds.has(a.id);
                     const cardToggle = adminMgmt ? toggleSelected : undefined;
                     const share = ((isAdmin && adminMode) || org?.role === "sales") ? copyShareLink : undefined;
@@ -7419,6 +7443,27 @@ export default function App(){
             onCreated={() => { refreshFeaturedQuotes(); setToast("Quote added"); setTimeout(()=>setToast(null),1500); }}
           />
         )}
+        {/* In-context rating modal — opened from the "Rate this asset"
+            dots-menu item on any card or row. Self-contained: handles
+            its own loading, save, thank-you, and remove flows. */}
+        {ratingAssetId && (() => {
+          const a = assets.find(x => x.id === ratingAssetId);
+          if (!a) return null;
+          return (
+            <RateAssetModal
+              asset={{
+                id: a.id,
+                headline: a.headline,
+                company: a.company,
+                clientName: a.clientName,
+                thumbnail: a.thumbnail,
+                vertical: a.vertical,
+              }}
+              authHeaders={authHeaders}
+              onClose={() => setRatingAssetId(null)}
+            />
+          );
+        })()}
         {rotationPanelOpen && (
           <FeaturedRotationPanel
             authHeaders={authHeaders}
