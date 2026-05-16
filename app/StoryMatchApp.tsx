@@ -7301,6 +7301,7 @@ export default function App(){
                       return (
                         <StoryMatchCard
                           key={a.id}
+                          assetId={a.id}
                           rank={ai.rank}
                           thumbnail={thumb}
                           title={a.headline || "Untitled"}
@@ -7314,6 +7315,7 @@ export default function App(){
                           talkingPoints={ai.talkingPoints}
                           quotes={ai.quotes}
                           relevanceScore={ai.relevanceScore ?? 50}
+                          authHeaders={authHeaders}
                           onOpen={() => safeOpenAsset(a)}
                           onShare={() => copyShareLink(a)}
                           onCopySummary={() => {

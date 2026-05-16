@@ -180,24 +180,26 @@ export default function RateAssetModal({ asset, authHeaders, onClose, onSaved }:
                   className={`ram-thumb-btn ${rating === "up" ? "active up" : ""}`}
                   onClick={() => setRating("up")}
                   disabled={phase === "saving" || phase === "loading"}
+                  aria-label="Thumbs up"
+                  title="Thumbs up"
                 >
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
                     <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
                   </svg>
-                  <span>Helpful</span>
                 </button>
                 <button
                   type="button"
                   className={`ram-thumb-btn ${rating === "down" ? "active down" : ""}`}
                   onClick={() => setRating("down")}
                   disabled={phase === "saving" || phase === "loading"}
+                  aria-label="Thumbs down"
+                  title="Thumbs down"
                 >
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M17 13V4h3a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-3z"/>
                     <path d="M17 13l-4 7a2 2 0 0 1-4-.8V15H4.6a2 2 0 0 1-1.97-2.35l1.5-7A2 2 0 0 1 6 4h11"/>
                   </svg>
-                  <span>Not for me</span>
                 </button>
               </div>
 
@@ -269,7 +271,7 @@ const css = `
 .ram-section-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;margin-bottom:8px;}
 .ram-optional{text-transform:none;letter-spacing:0;color:var(--t4);font-weight:500;}
 .ram-thumbs{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-.ram-thumb-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:18px 12px;border-radius:10px;border:1.5px solid var(--border);background:#fff;color:var(--t2);cursor:pointer;font-family:var(--font);font-size:13px;font-weight:600;transition:all .15s;}
+.ram-thumb-btn{display:flex;align-items:center;justify-content:center;padding:22px 12px;border-radius:10px;border:1.5px solid var(--border);background:#fff;color:var(--t2);cursor:pointer;font-family:var(--font);transition:all .15s;}
 .ram-thumb-btn:hover:not(:disabled){border-color:var(--border2);color:var(--t1);transform:translateY(-1px);}
 .ram-thumb-btn:disabled{opacity:.5;cursor:not-allowed;}
 .ram-thumb-btn.active.up{background:#dcfce7;border-color:#22c55e;color:#15803d;}
