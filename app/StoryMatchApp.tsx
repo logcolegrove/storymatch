@@ -869,7 +869,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    properties; the head + every row read from the same vars so widths
    stay in sync without prop drilling. Defaults below match the
    previous grid-template-columns sizes. */
-.lv{--lv-grid:72px 320px 130px 200px 90px;}
+.lv{--lv-grid:72px 320px 130px 200px 160px;}
 /* Five columns: thumb | title | vertical | merged-status | actions.
    The merged-status column groups Publication + Cleared into one block.
    min-width on both head + row prevents horizontal squish — when the
@@ -937,7 +937,17 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-pub-select{font-family:var(--font);font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);cursor:pointer;width:auto;}
 .lv-pub-select:hover{background:var(--bg2);}
-.lv-actions{display:flex;gap:5px;justify-content:flex-end;}
+.lv-actions{display:flex;align-items:center;gap:4px;justify-content:flex-end;}
+
+/* Hover-revealed icon row in the Actions cell. Fades in when the
+   row is hovered (or any icon receives keyboard focus), sits to
+   the LEFT of the dots menu. Buttons stop propagation so clicking
+   an icon doesn't also fire the row's onClick (asset open). */
+.lv-hover-actions{display:flex;gap:1px;opacity:0;transition:opacity .12s;}
+.lv-row:hover .lv-hover-actions,.lv-hover-actions:focus-within{opacity:1;}
+.lv-hover-btn{width:28px;height:28px;display:grid;place-items:center;background:none;border:none;color:var(--t3);cursor:pointer;border-radius:6px;transition:background .12s,color .12s;padding:0;}
+.lv-hover-btn:hover{background:var(--bg2);color:var(--t1);}
+.lv-hover-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .lv-act-btn{font-family:var(--font);font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t2);cursor:pointer;font-weight:600;}
 .lv-act-btn:hover{background:var(--bg2);color:var(--t1);}
 .lv-act-btn.accent{color:var(--accent);border-color:var(--accent);}
@@ -3513,7 +3523,7 @@ const LIST_VIEW_COLUMNS: ListViewColumn[] = [
   { key: "title", label: "Title", defaultWidth: 320, minWidth: 160, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
   { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: false, hideable: true },
   { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: false, hideable: true },
-  { key: "actions", label: "Actions", defaultWidth: 90, minWidth: 80, sortable: false, hideable: false },
+  { key: "actions", label: "Actions", defaultWidth: 160, minWidth: 100, sortable: false, hideable: false },
 ];
 
 function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, orgSettings, knownCustomTags }: ListViewProps) {
@@ -3780,6 +3790,73 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               // actions
               return (
                 <div key={col.key} className="lv-actions">
+                  {/* Hover-revealed icon row, Vimeo-style. Fades in on
+                      row hover; sits to the LEFT of the dots menu so
+                      reps can hit a one-click action without opening a
+                      menu. Each icon stops propagation so clicking the
+                      icon never also triggers the row's onClick (which
+                      would navigate to the asset page). */}
+                  <div className="lv-hover-actions">
+                    <button
+                      type="button"
+                      className="lv-hover-btn"
+                      onClick={(e) => { e.stopPropagation(); onCopyShareLink(a); }}
+                      title="Copy share link"
+                      aria-label="Copy share link"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="lv-hover-btn"
+                      onClick={(e) => { e.stopPropagation(); onEdit(a); }}
+                      title="Edit details"
+                      aria-label="Edit details"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="lv-hover-btn"
+                      onClick={(e) => { e.stopPropagation(); onRate(a); }}
+                      title="Rate this asset"
+                      aria-label="Rate this asset"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
+                        <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="lv-hover-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Per-asset analytics view doesn't exist yet —
+                        // for now we route to My shares so admins can
+                        // scan engagement for this asset alongside the
+                        // rest of their shares. Once we add per-asset
+                        // filtering on /shares, this becomes a deep
+                        // link rather than a list jump.
+                        window.location.hash = "/shares";
+                      }}
+                      title="View analytics"
+                      aria-label="View analytics"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"/>
+                        <line x1="12" y1="20" x2="12" y2="4"/>
+                        <line x1="6" y1="20" x2="6" y2="14"/>
+                        <line x1="3" y1="20" x2="21" y2="20"/>
+                      </svg>
+                    </button>
+                  </div>
                   <DotsMenu items={[
                     { label: "Open", onClick: () => onClick(a) },
                     { label: "Edit details", onClick: () => onEdit(a) },
