@@ -466,6 +466,19 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .field-card-label:hover{background:var(--bg2);}
 .field-card-label:focus{background:#fff;border-color:var(--accent);}
 .field-card-lock{font-size:9.5px;color:var(--t4);text-transform:uppercase;letter-spacing:.6px;font-weight:700;background:var(--bg2);padding:2px 6px;border-radius:4px;flex-shrink:0;}
+
+/* Populator badge — shows where a field's value comes from. Three
+   color treatments so admins can scan the panel and group by source
+   visually. Sits beside the field label in the card head. */
+.field-pop-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:3px 7px;border-radius:5px;flex-shrink:0;}
+.field-pop-badge.vimeo{background:#E0F2FE;color:#075985;}
+.field-pop-badge.ai{background:#F2EBF9;color:var(--accent);}
+.field-pop-badge.manual{background:var(--bg2);color:var(--t3);}
+.field-pop-badge svg{flex-shrink:0;}
+
+/* Inline note shown on Vimeo-locked cards in place of toggles —
+   explains the locked state instead of showing inert controls. */
+.field-card-vimeo-note{font-size:11.5px;color:var(--t3);font-style:italic;justify-content:flex-start;padding:6px 10px;background:var(--bg);border-radius:6px;}
 .field-card-body{padding:0 14px 12px 14px;display:flex;flex-direction:column;gap:10px;}
 .field-card-row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--t2);}
 .field-card-type-tag{font-size:11px;color:var(--t2);font-weight:600;background:var(--bg2);padding:3px 8px;border-radius:5px;}
@@ -4629,6 +4642,7 @@ function DefaultApprovalSelect({ settings, onSave }: { settings: OrgSettings; on
 // destructive controls so they stay backed by their typed columns.
 
 type FieldType = "text" | "select" | "multi_select" | "number" | "date";
+type FieldPopulator = "manual" | "vimeo" | "ai";
 interface FieldDef {
   id: string;
   key: string;
@@ -4639,6 +4653,14 @@ interface FieldDef {
   position: number;
   system: boolean;
   systemColumn?: string;
+  // Where this field's value comes from. "vimeo" is locked (synced
+  // from Vimeo on each source sync). "ai" runs through Claude's
+  // metadata extraction on import. "manual" requires admin entry.
+  populator: FieldPopulator;
+  // Whether AI is allowed to populate this field on import. Vimeo
+  // fields force this to false. AI fields default to true. Manual
+  // fields default to false but can opt in.
+  aiAutoFill: boolean;
 }
 
 const FIELD_TYPE_LABELS: Record<FieldType, string> = {
@@ -4712,6 +4734,15 @@ function FieldsPanel({ fields, onChange, onError, authHeaders }: FieldsPanelProp
   const setOptions = (id: string, options: string[]) => {
     persist(fields.map(f => f.id === id ? { ...f, options } : f));
   };
+  const setAiAutoFill = (id: string, on: boolean) => {
+    persist(fields.map(f => {
+      if (f.id !== id) return f;
+      // Vimeo-sourced fields can never AI-fill — guard at the UI layer
+      // even though the data layer enforces this too.
+      if (f.populator === "vimeo") return f;
+      return { ...f, aiAutoFill: on };
+    }));
+  };
   const setCustomType = (id: string, type: FieldType) => {
     persist(fields.map(f => {
       if (f.id !== id || f.system) return f;
@@ -4762,6 +4793,8 @@ function FieldsPanel({ fields, onChange, onError, authHeaders }: FieldsPanelProp
       showInFilters: false,
       position: fields.length,
       system: false,
+      populator: "manual",
+      aiAutoFill: false,
     };
     persist([...fields, def]);
   };
@@ -4785,6 +4818,7 @@ function FieldsPanel({ fields, onChange, onError, authHeaders }: FieldsPanelProp
             onSetType={(type) => setCustomType(f.id, type)}
             onSetShowInFilters={(on) => setShowInFilters(f.id, on)}
             onSetOptions={(opts) => setOptions(f.id, opts)}
+            onSetAiAutoFill={(on) => setAiAutoFill(f.id, on)}
             onDelete={() => deleteField(f.id)}
           />
         ))}
@@ -4806,18 +4840,23 @@ interface FieldCardProps {
   onSetType: (type: FieldType) => void;
   onSetShowInFilters: (on: boolean) => void;
   onSetOptions: (opts: string[]) => void;
+  onSetAiAutoFill: (on: boolean) => void;
   onDelete: () => void;
 }
 
-function FieldCard({ field, isFirst, isLast, onMoveUp, onMoveDown, onRename, onSetType, onSetShowInFilters, onSetOptions, onDelete }: FieldCardProps) {
+function FieldCard({ field, isFirst, isLast, onMoveUp, onMoveDown, onRename, onSetType, onSetShowInFilters, onSetOptions, onSetAiAutoFill, onDelete }: FieldCardProps) {
   // Local label buffer — flushes to onRename on blur / Enter. Avoids a
   // network roundtrip on every keystroke.
   const [localLabel, setLocalLabel] = useState(field.label);
   useEffect(() => { setLocalLabel(field.label); }, [field.label]);
   const supportsOptions = field.type === "select" || field.type === "multi_select";
+  const isFilterEligible = field.type === "select" || field.type === "multi_select";
+  // Vimeo-pulled fields are locked: admins can rename the label and
+  // hide from filters, but type / source / AI toggle are inert.
+  const isVimeo = field.populator === "vimeo";
 
   return (
-    <div className={`field-card${field.system ? " system" : ""}`}>
+    <div className={`field-card${field.system ? " system" : ""} src-${field.populator}`}>
       <div className="field-card-head">
         <div className="field-card-move">
           <button
@@ -4847,7 +4886,7 @@ function FieldCard({ field, isFirst, isLast, onMoveUp, onMoveDown, onRename, onS
           }}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
         />
-        {field.system && <span className="field-card-lock" title="System field — backed by a typed column. Can be renamed, reordered, and hidden but not removed.">System</span>}
+        <PopulatorBadge populator={field.populator}/>
       </div>
       <div className="field-card-body">
         <div className="field-card-row">
@@ -4868,18 +4907,49 @@ function FieldCard({ field, isFirst, isLast, onMoveUp, onMoveDown, onRename, onS
             </select>
           )}
         </div>
-        <div className="field-card-row">
-          <span>Show in filters</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={field.showInFilters}
-            className={`rule-toggle${field.showInFilters ? " on" : ""}`}
-            onClick={() => onSetShowInFilters(!field.showInFilters)}
-            title={field.showInFilters ? "Hide from library filters" : "Show in library filters"}
-          ><span className="rule-toggle-thumb"/></button>
-        </div>
-        {supportsOptions && (
+        {/* Show-in-filters only renders for filter-eligible types
+            (select / multi_select). Text / number / date can't show
+            up in the filter popover anyway, so the toggle would be a
+            no-op for them. */}
+        {isFilterEligible && (
+          <div className="field-card-row">
+            <span>Show in filters</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={field.showInFilters}
+              className={`rule-toggle${field.showInFilters ? " on" : ""}`}
+              onClick={() => onSetShowInFilters(!field.showInFilters)}
+              title={field.showInFilters ? "Hide from library filters" : "Show in library filters"}
+            ><span className="rule-toggle-thumb"/></button>
+          </div>
+        )}
+        {/* AI auto-fill row. Locked off for Vimeo fields (the entire
+            row hides because there's nothing for admin to control —
+            Vimeo IS the source). AI fields default on; manual fields
+            default off but can opt in. */}
+        {!isVimeo && (
+          <div className="field-card-row">
+            <span title={field.populator === "ai"
+              ? "Let AI auto-fill this field on import. Off = field stays blank until manually entered."
+              : "Opt in to AI auto-fill on import. Off by default for manual fields."}
+            >AI auto-fill</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={field.aiAutoFill}
+              className={`rule-toggle${field.aiAutoFill ? " on" : ""}`}
+              onClick={() => onSetAiAutoFill(!field.aiAutoFill)}
+              title={field.aiAutoFill ? "Disable AI auto-fill for this field" : "Enable AI auto-fill for this field"}
+            ><span className="rule-toggle-thumb"/></button>
+          </div>
+        )}
+        {isVimeo && (
+          <div className="field-card-row field-card-vimeo-note">
+            <span>Synced from Vimeo on every source sync. Locked.</span>
+          </div>
+        )}
+        {supportsOptions && !isVimeo && (
           <FieldOptionsEditor
             options={field.options || []}
             onChange={onSetOptions}
@@ -4896,6 +4966,41 @@ function FieldCard({ field, isFirst, isLast, onMoveUp, onMoveDown, onRename, onS
         </div>
       )}
     </div>
+  );
+}
+
+// Source-of-truth badge. Renders alongside the field label so admins
+// can scan the panel and see at a glance what populates each field.
+// Color-coded: Vimeo blue, AI purple, Manual neutral.
+function PopulatorBadge({ populator }: { populator: FieldPopulator }) {
+  if (populator === "vimeo") {
+    return (
+      <span className="field-pop-badge vimeo" title="Synced from Vimeo on every source sync">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M22.875 6.875c-.099 2.158-1.612 5.119-4.54 8.883C15.31 19.69 12.766 21.6 10.84 21.6c-1.193 0-2.203-1.092-3.029-3.275L6.16 12.395c-.612-2.184-1.27-3.276-1.974-3.276-.153 0-.687.31-1.604.93l-.96-1.24c1.01-.886 2.005-1.772 2.985-2.66 1.346-1.162 2.357-1.773 3.029-1.834 1.591-.153 2.571.94 2.94 3.276.398 2.52.673 4.087.83 4.701.46 2.092.964 3.138 1.514 3.138.428 0 1.07-.677 1.927-2.03.857-1.354 1.317-2.386 1.378-3.096.123-1.176-.337-1.764-1.378-1.764-.49 0-.995.114-1.515.34 1.005-3.288 2.924-4.884 5.757-4.794 2.099.062 3.09 1.422 2.973 4.079z"/>
+        </svg>
+        Vimeo
+      </span>
+    );
+  }
+  if (populator === "ai") {
+    return (
+      <span className="field-pop-badge ai" title="Filled in by AI on import (reads the transcript)">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 2L9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5L12 2z"/>
+        </svg>
+        AI
+      </span>
+    );
+  }
+  return (
+    <span className="field-pop-badge manual" title="Admin fills this in manually">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+        <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      </svg>
+      Manual
+    </span>
   );
 }
 

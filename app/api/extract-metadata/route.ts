@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { fetchOrgFieldDefs } from "@/lib/field-defs";
 
 async function getCurrentUserOrg(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -54,19 +55,53 @@ const EMPTY_META: ExtractedMetadata = {
   pullQuote: "",
 };
 
+// Map from FieldDef.key → ExtractedMetadata key. Used so we can ask
+// the org's field schema "which of these extractable fields is AI
+// enabled?" and only pull those. Keys not in this map aren't
+// AI-extractable through this route (e.g. Vimeo-pulled fields).
+const AI_FIELD_KEY_MAP: Record<string, keyof ExtractedMetadata> = {
+  clientName: "clientName",
+  company: "company",
+  vertical: "vertical",
+  geography: "geography",
+  companySize: "companySize",
+  challenge: "challenge",
+  outcome: "outcome",
+  pullQuote: "pullQuote",
+};
+
+// Map from ExtractedMetadata key → DB column on assets. Lets us
+// build a dynamic UPDATE payload from the enabled-fields set.
+const META_TO_DB_COLUMN: Record<keyof ExtractedMetadata, string> = {
+  clientName: "client_name",
+  company: "company",
+  vertical: "vertical",
+  geography: "geography",
+  companySize: "company_size",
+  challenge: "challenge",
+  outcome: "outcome",
+  pullQuote: "pull_quote",
+};
+
 async function extractMetadata(input: {
   videoTitle: string;
   description: string;
   transcript: string;
+  enabledFields: Set<keyof ExtractedMetadata>;
 }): Promise<ExtractedMetadata> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
-  const { videoTitle, description, transcript } = input;
+  const { videoTitle, description, transcript, enabledFields } = input;
   const hasContent =
     (description && description.length > 10) ||
     (transcript && transcript.length > 50);
   if (!hasContent) {
+    return { ...EMPTY_META };
+  }
+  // If the admin has disabled AI auto-fill on every extractable
+  // field, there's nothing to do. Skip the Claude call entirely.
+  if (enabledFields.size === 0) {
     return { ...EMPTY_META };
   }
   // videoTitle is passed in only as context for the LLM — never as an output target.
@@ -103,18 +138,30 @@ Return ONLY valid JSON.`;
     .filter(Boolean)
     .join("\n\n");
 
+  // Build the JSON-shape spec dynamically — only ask for the fields
+  // the admin has AI auto-fill enabled on. Other fields are omitted
+  // entirely from the prompt so the model isn't tempted to guess at
+  // them and waste tokens.
+  const FIELD_SPECS: Record<keyof ExtractedMetadata, string> = {
+    clientName: `"clientName": "the speaker's name (prefer description/title, fall back to transcript only as last resort), or empty string if not stated"`,
+    company: `"company": "their company/organization (prefer description/title), or empty string if not stated"`,
+    vertical: `"vertical": "industry like 'Foundation', 'Healthcare', 'Education', 'Agriculture', 'Nonprofit', 'Technology', etc., or empty string if unclear"`,
+    geography: `"geography": "city/state/region they mention, or empty string"`,
+    companySize: `"companySize": "approximate size if stated like '50 employees', '$10M revenue', or empty string"`,
+    challenge: `"challenge": "1-sentence summary of the problem they describe, or empty string"`,
+    outcome: `"outcome": "1-sentence summary of what they achieved, or empty string"`,
+    pullQuote: `"pullQuote": "a single powerful 1-2 sentence VERBATIM substring from the TRANSCRIPT (not the description), or empty string if no good quote available"`,
+  };
+  const specEntries = (Object.keys(FIELD_SPECS) as Array<keyof ExtractedMetadata>)
+    .filter(k => enabledFields.has(k))
+    .map(k => "  " + FIELD_SPECS[k])
+    .join(",\n");
+
   const userPrompt = `${sources}
 
 Return ONLY a JSON object with this exact shape:
 {
-  "clientName": "the speaker's name (prefer description/title, fall back to transcript only as last resort), or empty string if not stated",
-  "company": "their company/organization (prefer description/title), or empty string if not stated",
-  "vertical": "industry like 'Foundation', 'Healthcare', 'Education', 'Agriculture', 'Nonprofit', 'Technology', etc., or empty string if unclear",
-  "geography": "city/state/region they mention, or empty string",
-  "companySize": "approximate size if stated like '50 employees', '$10M revenue', or empty string",
-  "challenge": "1-sentence summary of the problem they describe, or empty string",
-  "outcome": "1-sentence summary of what they achieved, or empty string",
-  "pullQuote": "a single powerful 1-2 sentence VERBATIM substring from the TRANSCRIPT (not the description), or empty string if no good quote available"
+${specEntries}
 }`;
 
   const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -148,20 +195,67 @@ Return ONLY a JSON object with this exact shape:
 
   try {
     const parsed = JSON.parse(json) as Partial<ExtractedMetadata>;
-    return {
-      clientName: parsed.clientName || "",
-      company: parsed.company || "",
-      vertical: parsed.vertical || "",
-      geography: parsed.geography || "",
-      companySize: parsed.companySize || "",
-      challenge: parsed.challenge || "",
-      outcome: parsed.outcome || "",
-      pullQuote: parsed.pullQuote || "",
-    };
+    // Only accept values for fields the admin enabled. Disabled
+    // fields stay empty even if the model somehow returns them.
+    const out: ExtractedMetadata = { ...EMPTY_META };
+    for (const key of Object.keys(out) as Array<keyof ExtractedMetadata>) {
+      if (enabledFields.has(key)) {
+        out[key] = parsed[key] || "";
+      }
+    }
+    return out;
   } catch {
     console.error("Failed to parse Claude metadata response:", txt.slice(0, 500));
     return { ...EMPTY_META };
   }
+}
+
+// Resolve which extractable fields the org has AI auto-fill enabled
+// on. Reads the org's field schema and matches against
+// AI_FIELD_KEY_MAP. Returns an empty set if the schema is unreachable
+// — caller handles that as "skip extraction."
+async function resolveEnabledFields(orgId: string): Promise<Set<keyof ExtractedMetadata>> {
+  const enabled = new Set<keyof ExtractedMetadata>();
+  try {
+    const defs = await fetchOrgFieldDefs(orgId);
+    for (const def of defs) {
+      const metaKey = AI_FIELD_KEY_MAP[def.key];
+      if (!metaKey) continue;
+      // Vimeo populators never AI-fill (data layer enforces this too,
+      // but we double-check here so the API path is self-protecting).
+      if (def.populator === "vimeo") continue;
+      if (def.aiAutoFill) enabled.add(metaKey);
+    }
+  } catch (e) {
+    console.error("[extract-metadata] failed to read field schema:", e);
+  }
+  return enabled;
+}
+
+// Build the DB update payload for an asset given an extracted
+// metadata blob and the enabled-fields set. Disabled fields are
+// omitted entirely (NOT set to null) so the column keeps whatever
+// the admin manually entered. Always invalidates the embedding so
+// downstream similarity reflects the fresh metadata.
+function buildUpdate(
+  meta: ExtractedMetadata,
+  validatedQuote: string,
+  enabled: Set<keyof ExtractedMetadata>,
+): Record<string, unknown> {
+  const update: Record<string, unknown> = {
+    embedding: null,
+    embedding_updated_at: null,
+  };
+  for (const metaKey of Object.keys(META_TO_DB_COLUMN) as Array<keyof ExtractedMetadata>) {
+    if (!enabled.has(metaKey)) continue;
+    const dbCol = META_TO_DB_COLUMN[metaKey];
+    if (metaKey === "pullQuote") {
+      update[dbCol] = validatedQuote || null;
+    } else {
+      update[dbCol] = meta[metaKey] || null;
+    }
+  }
+  return update;
 }
 
 // Validate that a pull quote is a verbatim substring of the transcript
@@ -188,9 +282,18 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
 
+  // Resolve the org's enabled-AI-field set up front. Both modes
+  // below use this — backfill loop reuses it across all rows.
+  const enabledFields = await resolveEnabledFields(ctx.orgId);
+
   // Backfill mode
   if (body?.backfill) {
     const limit = Math.min(Number(body.limit) || 5, 20);
+
+    // If no fields are AI-enabled, there's nothing to do.
+    if (enabledFields.size === 0) {
+      return NextResponse.json({ extracted: 0, skipped: "no AI fields enabled" });
+    }
 
     const { data: rows, error } = await supabaseAdmin
       .from("assets")
@@ -215,24 +318,14 @@ export async function POST(req: NextRequest) {
             videoTitle: row.headline || "",
             description: row.description || "",
             transcript: row.transcript || "",
+            enabledFields,
           });
-          const validatedQuote = validateQuote(meta.pullQuote, row.transcript || "");
+          const validatedQuote = enabledFields.has("pullQuote")
+            ? validateQuote(meta.pullQuote, row.transcript || "")
+            : "";
           await supabaseAdmin
             .from("assets")
-            .update({
-              client_name: meta.clientName || null,
-              company: meta.company || null,
-              vertical: meta.vertical || null,
-              geography: meta.geography || null,
-              company_size: meta.companySize || null,
-              challenge: meta.challenge || null,
-              outcome: meta.outcome || null,
-              pull_quote: validatedQuote || null,
-              // headline is NOT updated — it's the Vimeo title (source of truth).
-              // Invalidate embedding so it gets regenerated with fresh metadata
-              embedding: null,
-              embedding_updated_at: null,
-            })
+            .update(buildUpdate(meta, validatedQuote, enabledFields))
             .eq("id", row.id)
             .eq("org_id", ctx.orgId);
           extracted++;
@@ -262,34 +355,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Asset not found" }, { status: 404 });
   }
 
+  if (enabledFields.size === 0) {
+    return NextResponse.json({ ok: true, metadata: { ...EMPTY_META }, skipped: "no AI fields enabled" });
+  }
+
   let meta: ExtractedMetadata;
   try {
     meta = await extractMetadata({
       videoTitle: row.headline || "",
       description: row.description || "",
       transcript: row.transcript || "",
+      enabledFields,
     });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  const validatedQuote = validateQuote(meta.pullQuote, row.transcript || "");
+  const validatedQuote = enabledFields.has("pullQuote")
+    ? validateQuote(meta.pullQuote, row.transcript || "")
+    : "";
 
   const { error: updateError } = await supabaseAdmin
     .from("assets")
-    .update({
-      client_name: meta.clientName || null,
-      company: meta.company || null,
-      vertical: meta.vertical || null,
-      geography: meta.geography || null,
-      company_size: meta.companySize || null,
-      challenge: meta.challenge || null,
-      outcome: meta.outcome || null,
-      pull_quote: validatedQuote || null,
-      // headline is NOT updated — it's the Vimeo title (source of truth).
-      embedding: null,
-      embedding_updated_at: null,
-    })
+    .update(buildUpdate(meta, validatedQuote, enabledFields))
     .eq("id", assetId)
     .eq("org_id", ctx.orgId);
   if (updateError) {

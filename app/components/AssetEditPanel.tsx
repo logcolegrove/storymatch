@@ -61,6 +61,7 @@ export interface EditableAsset {
 // duplicate the shape here. The Manage Fields panel writes the
 // canonical schema through /api/org/fields.
 export type FieldType = "text" | "select" | "multi_select" | "number" | "date";
+export type FieldPopulator = "manual" | "vimeo" | "ai";
 export interface FieldDef {
   id: string;
   key: string;
@@ -71,6 +72,8 @@ export interface FieldDef {
   position: number;
   system: boolean;
   systemColumn?: string;
+  populator: FieldPopulator;
+  aiAutoFill: boolean;
 }
 
 const VERTICALS = ["Logistics", "Healthcare", "Manufacturing", "Financial Services", "Retail", "Education", "Real Estate", "Technology"];
