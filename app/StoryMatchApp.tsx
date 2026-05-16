@@ -929,13 +929,22 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Six grid tracks: thumb | title | vertical | visibility | status | actions.
    Visibility is content-sized (just the dropdown), Status takes the remaining
    space so the cleared trigger has room to breathe. */
-.lv-head{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:920px;}
-.lv-row{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:920px;}
+/* Head and rows both reference --lv-grid set on .lv (per-key
+   widths). The grid-template-columns drives natural element width,
+   so head/row sizes track the total column widths. The hardcoded
+   min-width was removed — it conflicted with dynamic columns and
+   caused the header to clip behind row content when the column
+   total exceeded the old fixed minimum. */
+.lv-head{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;width:max-content;min-width:100%;}
+.lv-row{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;width:max-content;min-width:100%;}
 /* Header cells are click-to-sort buttons. The right edge has a thin
    drag handle to resize the column. Both behaviors coexist — clicks
    on the label open the menu; pointer events on the handle drive
    resize. */
 .lv-h-cell{position:relative;display:flex;align-items:center;height:42px;}
+.lv-h-cell.draggable{cursor:grab;}
+.lv-h-cell.draggable:active,.lv-h-cell.dragging{cursor:grabbing;}
+.lv-h-cell.dragging{z-index:5;}
 .lv-h-btn{display:inline-flex;align-items:center;gap:5px;background:none;border:none;padding:0;cursor:pointer;color:var(--t3);font:inherit;text-transform:inherit;letter-spacing:inherit;}
 .lv-h-btn:hover{color:var(--t1);}
 .lv-h-btn .lv-h-caret{opacity:0;transition:opacity .12s;}
@@ -3820,6 +3829,112 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
   const [colControlOpen, setColControlOpen] = useState(false);
   const colControlAnchorRef = useRef<HTMLButtonElement | null>(null);
 
+  // Column header drag-reorder. Pointer-driven with click/drag
+  // discrimination via a movement threshold — click without moving
+  // opens the header menu (existing behavior); drag past ~5px
+  // initiates reorder. Title is pinned and never draggable.
+  //
+  // Magic-rearrange: as the pointer crosses non-dragged column
+  // midpoints, those columns shift via translateX so admins see
+  // exactly where the dropped column will land. transition:
+  // transform on the header cells keeps motion smooth.
+  const [colDrag, setColDrag] = useState<{
+    key: string;
+    fromIdx: number;       // index in the reorderable list
+    targetIdx: number;     // where it'll land
+    pointerX: number;      // viewport x of pointer
+    startX: number;        // pointer x at drag start
+    dragColWidth: number;  // width of dragged column (drives shift distance)
+  } | null>(null);
+  const headerCellRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+
+  const beginColumnDrag = (key: string, e: React.PointerEvent) => {
+    // Built-in pinned keys never reorder. Resize handle has its own
+    // pointer handler that we don't want to fight with.
+    if (key === "thumb" || key === "title") return;
+    if ((e.target as HTMLElement).closest(".lv-h-resize")) return;
+    const reorderableKeys = columnOrder.filter(k => !hidden.has(k));
+    const fromIdx = reorderableKeys.indexOf(key);
+    if (fromIdx === -1) return;
+    const dragCol = resolveColumnByKey(key, fieldDefs);
+    if (!dragCol) return;
+    const dragColWidth = widths[key] ?? dragCol.defaultWidth;
+    const startX = e.clientX;
+    let started = false;
+    let lastTargetIdx = fromIdx;
+
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      if (!started) {
+        if (Math.abs(dx) < 5) return;
+        started = true;
+        setOpenHeaderMenu(null); // make sure menu doesn't pop
+      }
+      // Compute drop target by walking the (unmoved) header cell
+      // rects and finding which midpoint the pointer is past.
+      let target = reorderableKeys.length - 1;
+      for (let i = 0; i < reorderableKeys.length; i++) {
+        if (reorderableKeys[i] === key) continue;
+        const el = headerCellRefs.current.get(reorderableKeys[i]);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        const mid = r.left + r.width / 2;
+        if (ev.clientX < mid) { target = i; break; }
+      }
+      // Compensate for the dragged column's own position: when the
+      // target is at-or-past fromIdx but we removed the dragged
+      // column conceptually, the index needs to match the splice
+      // semantics in the drop step.
+      if (target > fromIdx) target -= 1;
+      if (target !== lastTargetIdx) {
+        lastTargetIdx = target;
+      }
+      setColDrag({
+        key,
+        fromIdx,
+        targetIdx: target,
+        pointerX: ev.clientX,
+        startX,
+        dragColWidth,
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      if (started && lastTargetIdx !== fromIdx) {
+        const next = [...reorderableKeys];
+        const [m] = next.splice(fromIdx, 1);
+        next.splice(lastTargetIdx, 0, m);
+        const hiddenInOrder = columnOrder.filter(k => hidden.has(k));
+        setColumnOrder([...next, ...hiddenInOrder]);
+      }
+      setColDrag(null);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  };
+
+  // Per-column transform during drag. Magic-rearrange: every
+  // non-dragged reorderable column shifts left or right by the
+  // dragged column's width when its index is between fromIdx and
+  // targetIdx. Pinned columns (thumb, title) never shift.
+  const transformForCol = (key: string): string | undefined => {
+    if (!colDrag) return undefined;
+    if (key === "thumb" || key === "title") return undefined;
+    if (key === colDrag.key) return undefined;
+    const reorderable = columnOrder.filter(k => !hidden.has(k));
+    const idx = reorderable.indexOf(key);
+    if (idx === -1) return undefined;
+    const { fromIdx, targetIdx, dragColWidth } = colDrag;
+    if (targetIdx > fromIdx && idx > fromIdx && idx <= targetIdx) {
+      return `translateX(-${dragColWidth + 14}px)`;
+    }
+    if (targetIdx < fromIdx && idx >= targetIdx && idx < fromIdx) {
+      return `translateX(${dragColWidth + 14}px)`;
+    }
+    return undefined;
+  };
+
   // Header dropdown state — which column's menu is open. Null = none.
   const [openHeaderMenu, setOpenHeaderMenu] = useState<ListViewColumnKey | null>(null);
   useEffect(() => {
@@ -3851,9 +3966,22 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
           // (label intentionally dropped). Still want them clickable
           // to resize via the right edge handle.
           const hasMenu = !!col.label && (col.sortable || col.hideable || col.hasQuickFilter);
+          const draggable = col.key !== "thumb" && col.key !== "title";
+          const isDragging = colDrag?.key === col.key;
+          const cellTransform = transformForCol(col.key);
+          const cellStyle: React.CSSProperties = {
+            transform: cellTransform,
+            opacity: isDragging ? 0.4 : undefined,
+            transition: colDrag ? "transform .15s ease, opacity .15s ease" : undefined,
+          };
           if (!hasMenu) {
             return (
-              <div key={col.key} className="lv-h-cell">
+              <div
+                key={col.key}
+                ref={el => { headerCellRefs.current.set(col.key, el); }}
+                className="lv-h-cell"
+                style={cellStyle}
+              >
                 {col.label ? <span style={{ alignSelf: "center" }}>{col.label}</span> : null}
                 {col.key !== "thumb" && (
                   <div
@@ -3871,12 +3999,29 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
           const dateFilterActive = col.key === "date" && !!dateRangeFilter && (!!dateRangeFilter.from || !!dateRangeFilter.to);
           const filterActive = visFilterActive || statusFilterActive || dateFilterActive;
           return (
-            <div key={col.key} className="lv-h-cell">
+            <div
+              key={col.key}
+              ref={el => { headerCellRefs.current.set(col.key, el); }}
+              className={`lv-h-cell${draggable ? " draggable" : ""}${isDragging ? " dragging" : ""}`}
+              style={cellStyle}
+              onPointerDown={draggable ? (e) => beginColumnDrag(col.key, e) : undefined}
+            >
               <button
                 type="button"
                 className={`lv-h-btn${isSorting || filterActive ? " sorting" : ""}`}
-                onClick={(e) => { e.stopPropagation(); setOpenHeaderMenu(o => o === col.key ? null : col.key); }}
-                title="Click for sort, filter, and column options"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // If a drag just ended on this cell, suppress the
+                  // click → menu opening. The colDrag state is null
+                  // by mouseup but a click event may still fire; we
+                  // dedupe by tracking pointer movement during the
+                  // drag handler (the drag's onUp doesn't trigger a
+                  // click anyway, but headers nested under
+                  // draggable cells can — this guards belt+braces).
+                  if (colDrag) return;
+                  setOpenHeaderMenu(o => o === col.key ? null : col.key);
+                }}
+                title="Click for sort, filter, and column options · drag to reorder"
               >
                 <span>{col.label}</span>
                 {filterActive && <span className="lv-h-filter-dot" aria-hidden="true"/>}

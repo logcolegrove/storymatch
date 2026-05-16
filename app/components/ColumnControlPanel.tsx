@@ -20,6 +20,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+// (Drag-reorder + hide controls moved into the table itself — admins
+// click & drag column headers to reorder, and use each column
+// header's dropdown menu to hide. This panel is now a focused
+// "Add column" picker.)
+
 type FieldType = "text" | "select" | "multi_select" | "number" | "date";
 interface FieldDef {
   id: string;
@@ -103,32 +108,6 @@ export default function ColumnControlPanel({ anchor, fieldDefs, columnOrder, hid
 
   const [search, setSearch] = useState("");
 
-  // Resolve "Shown" — visible columns in their current display order,
-  // including the pinned Title row at the top so admins see it's
-  // present (even though it's locked). The pinned thumb row is
-  // omitted — it's purely visual scaffolding, not a column anyone
-  // thinks of conceptually.
-  const builtInLabel = (key: string): string =>
-    BUILT_IN_TOGGLEABLE.find(b => b.key === key)?.label
-      || (key === "title" ? "Title" : key);
-  const labelForKey = (key: string): string => {
-    const def = fieldDefs.find(d => d.key === key);
-    if (def) return def.label;
-    return builtInLabel(key);
-  };
-
-  const shown = useMemo(() => {
-    const out: { key: string; label: string; pinned: boolean }[] = [
-      { key: "title", label: "Title", pinned: true },
-    ];
-    for (const key of columnOrder) {
-      if (hidden.has(key)) continue;
-      out.push({ key, label: labelForKey(key), pinned: false });
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columnOrder, hidden, fieldDefs]);
-
   // "Available" — built-in columns currently hidden OR not in the
   // order, plus every custom field NOT already shown. The available
   // list is search-filtered.
@@ -158,80 +137,16 @@ export default function ColumnControlPanel({ anchor, fieldDefs, columnOrder, hid
     return out.filter(o => o.label.toLowerCase().includes(q));
   }, [columnOrder, hidden, fieldDefs, search]);
 
-  // Show/hide handlers.
-  const hideColumn = (key: string) => {
-    if (key === "title" || key === "thumb") return; // pinned
-    const next = new Set(hidden);
-    next.add(key);
-    onChange(columnOrder, next);
-  };
+  // Show handler — adds the chosen column to the visible set. If the
+  // key isn't in columnOrder yet (first time adding a custom field
+  // as a column), it gets appended.
   const showColumn = (key: string) => {
     const next = new Set(hidden);
     next.delete(key);
-    // If the key isn't in columnOrder yet, append it (custom field
-    // first time being added as a column).
     const nextOrder = columnOrder.includes(key)
       ? columnOrder
       : [...columnOrder, key];
     onChange(nextOrder, next);
-  };
-
-  // Pointer-driven drag-reorder inside the Shown section. Title is
-  // pinned (index 0 in `shown` always) so its row gets no handle and
-  // is excluded from the drag math.
-  const [dragKey, setDragKey] = useState<string | null>(null);
-  const [dragY, setDragY] = useState<number | null>(null);
-  const rowRectsRef = useRef<Map<string, DOMRect>>(new Map());
-  const listRef = useRef<HTMLDivElement>(null);
-
-  const beginDrag = (key: string, e: React.PointerEvent) => {
-    if (key === "title") return; // pinned
-    e.preventDefault();
-    e.stopPropagation();
-    // Snapshot the current rects so we can compare pointer Y against
-    // each row's midpoint during the drag.
-    const map = new Map<string, DOMRect>();
-    const rows = listRef.current?.querySelectorAll<HTMLElement>("[data-shown-key]");
-    rows?.forEach(el => {
-      const k = el.getAttribute("data-shown-key");
-      if (k) map.set(k, el.getBoundingClientRect());
-    });
-    rowRectsRef.current = map;
-    setDragKey(key);
-    setDragY(e.clientY);
-    const onMove = (ev: PointerEvent) => setDragY(ev.clientY);
-    const onUp = () => {
-      // Compute the drop target from the final pointer position.
-      const finalY = (dragY ?? e.clientY);
-      const rects = rowRectsRef.current;
-      const reorderable = columnOrder.filter(k => !hidden.has(k));
-      // Build a flat ordering of currently shown reorderable rows.
-      const showing = reorderable;
-      let targetIdx = showing.length - 1;
-      for (let i = 0; i < showing.length; i++) {
-        const r = rects.get(showing[i]);
-        if (!r) continue;
-        if (finalY < r.top + r.height / 2) { targetIdx = i; break; }
-      }
-      // Move dragKey to targetIdx within the reorderable subset.
-      const fromIdx = showing.indexOf(key);
-      if (fromIdx !== -1 && fromIdx !== targetIdx) {
-        const next = [...showing];
-        const [m] = next.splice(fromIdx, 1);
-        next.splice(targetIdx, 0, m);
-        // Merge back: keep hidden keys in their original positions,
-        // overlay the new reorderable sequence. Simpler approach:
-        // replace columnOrder with [next, ...hiddenKeys-from-old-order]
-        const hiddenInOrder = columnOrder.filter(k => hidden.has(k));
-        onChange([...next, ...hiddenInOrder], hidden);
-      }
-      setDragKey(null);
-      setDragY(null);
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-    };
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
   };
 
   if (!anchor || !pos || typeof document === "undefined") return null;
@@ -265,82 +180,36 @@ export default function ColumnControlPanel({ anchor, fieldDefs, columnOrder, hid
         />
       </div>
 
+      {/* "Shown in table" section was removed — reordering + hiding
+          now happens in the table itself (drag column headers,
+          dropdown menu's Hide option). This panel is just "add a
+          column" — a flat list of everything that COULD be added. */}
       <div className="ccp-section">
-        <div className="ccp-section-h">Shown in table</div>
-        <div className="ccp-list" ref={listRef}>
-          {shown.map(row => {
-            const isDragging = dragKey === row.key;
-            return (
-              <div
-                key={row.key}
-                data-shown-key={row.key}
-                className={`ccp-row${row.pinned ? " pinned" : ""}${isDragging ? " dragging" : ""}`}
-              >
-                {row.pinned ? (
-                  <span className="ccp-row-pin" title="Title is always shown"/>
-                ) : (
-                  <button
-                    type="button"
-                    className="ccp-row-grip"
-                    onPointerDown={(e) => beginDrag(row.key, e)}
-                    title="Drag to reorder"
-                  >
-                    <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true">
-                      <circle cx="2" cy="2" r="1.4"/><circle cx="2" cy="7" r="1.4"/><circle cx="2" cy="12" r="1.4"/>
-                      <circle cx="8" cy="2" r="1.4"/><circle cx="8" cy="7" r="1.4"/><circle cx="8" cy="12" r="1.4"/>
-                    </svg>
-                  </button>
-                )}
-                <span className="ccp-row-label">{row.label}</span>
-                {row.pinned ? (
-                  <span className="ccp-row-locked" title="Always shown">Pinned</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="ccp-row-hide"
-                    onClick={() => hideColumn(row.key)}
-                    title="Hide column"
-                    aria-label={`Hide ${row.label}`}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-10-8-10-8a18.45 18.45 0 0 1 5.06-5.94"/>
-                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19"/>
-                      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>
-                      <line x1="2" y1="2" x2="22" y2="22"/>
-                    </svg>
-                  </button>
-                )}
-              </div>
-            );
-          })}
+        <div className="ccp-list">
+          {available.length === 0 ? (
+            <div className="ccp-empty">
+              Every column is already in the table. To create new fields, click <span style={{whiteSpace:"nowrap"}}>Manage fields →</span>
+            </div>
+          ) : available.map(row => (
+            <button
+              key={row.key}
+              type="button"
+              className="ccp-row available"
+              onClick={() => showColumn(row.key)}
+              title={`Add ${row.label} column`}
+            >
+              <span className="ccp-row-add">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"/>
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+              </span>
+              <span className="ccp-row-label">{row.label}</span>
+              {row.sublabel && <span className="ccp-row-sub">{row.sublabel}</span>}
+            </button>
+          ))}
         </div>
       </div>
-
-      {available.length > 0 && (
-        <div className="ccp-section">
-          <div className="ccp-section-h">Available</div>
-          <div className="ccp-list">
-            {available.map(row => (
-              <button
-                key={row.key}
-                type="button"
-                className="ccp-row available"
-                onClick={() => showColumn(row.key)}
-                title={`Show ${row.label}`}
-              >
-                <span className="ccp-row-add">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19"/>
-                    <line x1="5" y1="12" x2="19" y2="12"/>
-                  </svg>
-                </span>
-                <span className="ccp-row-label">{row.label}</span>
-                {row.sublabel && <span className="ccp-row-sub">{row.sublabel}</span>}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       {onOpenFieldsPanel && (
         <div className="ccp-foot">
@@ -367,27 +236,17 @@ const css = `
 .ccp-search{width:100%;padding:7px 10px 7px 28px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--t1);font-family:var(--font);font-size:12.5px;}
 .ccp-search:focus{outline:none;border-color:var(--accent);background:#fff;}
 
-.ccp-section{padding:6px 8px;overflow-y:auto;}
-.ccp-section + .ccp-section{border-top:1px solid var(--border);}
-.ccp-section-h{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;padding:8px 10px 6px;}
-
+.ccp-section{padding:6px 8px;overflow-y:auto;flex:1;min-height:0;}
 .ccp-list{display:flex;flex-direction:column;gap:1px;}
+.ccp-empty{padding:18px 14px;font-size:12px;color:var(--t3);line-height:1.5;text-align:center;}
 
 .ccp-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;background:none;border:none;font-family:var(--font);font-size:13px;color:var(--t1);text-align:left;width:100%;cursor:default;}
 .ccp-row:hover{background:var(--bg2);}
-.ccp-row.dragging{opacity:.5;}
 .ccp-row.available{cursor:pointer;}
-.ccp-row-grip{width:18px;height:18px;display:grid;place-items:center;background:none;border:none;color:var(--t4);cursor:grab;padding:0;border-radius:3px;}
-.ccp-row-grip:hover{color:var(--t1);background:var(--bg);}
-.ccp-row-grip:active{cursor:grabbing;}
-.ccp-row-pin{width:18px;height:18px;flex-shrink:0;}
 .ccp-row-add{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--bg2);color:var(--t3);flex-shrink:0;}
 .ccp-row.available:hover .ccp-row-add{background:var(--accentL);color:var(--accent);}
 .ccp-row-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}
 .ccp-row-sub{font-size:10.5px;color:var(--t4);font-weight:600;text-transform:uppercase;letter-spacing:.4px;flex-shrink:0;}
-.ccp-row-locked{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);font-weight:700;padding:2px 6px;background:var(--bg2);border-radius:4px;flex-shrink:0;}
-.ccp-row-hide{background:none;border:none;color:var(--t4);cursor:pointer;width:24px;height:24px;display:grid;place-items:center;border-radius:5px;padding:0;flex-shrink:0;}
-.ccp-row-hide:hover{color:var(--t1);background:var(--bg);}
 
 .ccp-foot{padding:8px 14px 12px;border-top:1px solid var(--border);}
 .ccp-foot-link{background:none;border:none;color:var(--accent);cursor:pointer;font-family:var(--font);font-size:12.5px;font-weight:600;padding:6px 8px;border-radius:5px;}
