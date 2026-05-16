@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { fetchOrgAggregates, FEEDBACK_MIN_VOTES_FOR_RANKING, type FeedbackAggregate } from "@/lib/feedback-dal";
+import { logSearch } from "@/lib/search-log-dal";
 
 async function getCurrentUserOrg(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -531,19 +532,34 @@ export async function POST(req: NextRequest) {
     feedbackAdjusted.sort((a, b) => b.adjustedScore - a.adjustedScore);
   }
 
+  const finalMatches = feedbackAdjusted.map((entry, i) => ({
+    ...entry.match,
+    relevanceScore: entry.adjustedScore,
+    rank: i + 1,
+    // Surface aggregate counts so the FE can show them in the
+    // hover popover without an extra round trip. Always present
+    // when the org's flag is on; undefined when feedback isn't
+    // affecting ranking (FE hides the indicator entirely).
+    feedback: orgFlag?.feedback_affects_ranking && entry.agg
+      ? { up: entry.agg.up, down: entry.agg.down, total: entry.agg.total }
+      : undefined,
+  }));
+
+  // Log every StoryMatch search for the admin Insights view. Fire
+  // and forget — never block the response. result_count is the
+  // length of the final match set the user actually sees; zero is
+  // the gap signal admins care about most.
+  void logSearch({
+    orgId: ctx.orgId,
+    userId: ctx.userId,
+    query,
+    source: "storymatch",
+    resultCount: finalMatches.length,
+    topResultIds: finalMatches.slice(0, 10).map(m => m.id),
+  });
+
   return NextResponse.json({
-    matches: feedbackAdjusted.map((entry, i) => ({
-      ...entry.match,
-      relevanceScore: entry.adjustedScore,
-      rank: i + 1,
-      // Surface aggregate counts so the FE can show them in the
-      // hover popover without an extra round trip. Always present
-      // when the org's flag is on; undefined when feedback isn't
-      // affecting ranking (FE hides the indicator entirely).
-      feedback: orgFlag?.feedback_affects_ranking && entry.agg
-        ? { up: entry.agg.up, down: entry.agg.down, total: entry.agg.total }
-        : undefined,
-    })),
+    matches: finalMatches,
     candidatesFound: filteredCandidates.length,
     feedbackAffectsRanking: !!orgFlag?.feedback_affects_ranking,
   });

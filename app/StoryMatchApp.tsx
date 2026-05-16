@@ -8,6 +8,7 @@ import MySharesView from "./components/MySharesView";
 import FeedbackView from "./components/FeedbackView";
 import RateAssetModal from "./components/RateAssetModal";
 import FiltersModal from "./components/FiltersModal";
+import SearchLogsView from "./components/SearchLogsView";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./components/FeaturedQuoteRotator";
@@ -6115,6 +6116,47 @@ export default function App(){
   const[filters,setFilters]=useState<Filters>({});
   const[openFilter,setOpenFilter]=useState<string|null>(null);
   const[search,setSearch]=useState("");
+  // Debounce + log library search queries to /api/search-logs so
+  // admins can see what reps are searching for in the Insights view.
+  // Fire-and-forget. Skip ultra-short queries (< 2 chars) and the
+  // empty state — those carry no signal and would flood the log.
+  useEffect(() => {
+    const q = search.trim();
+    if (q.length < 2) return;
+    const t = setTimeout(async () => {
+      try {
+        // displayAssets at log time isn't easily reachable here
+        // without dependency churn; the result_count we log is the
+        // post-filter count of matching assets snapshot at typing
+        // stabilization. We compute it lazily via a local filter
+        // pass to avoid coupling to the render pipeline.
+        const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
+        const lowerQ = q.toLowerCase();
+        const matches = assets.filter(a =>
+          a.status !== "deleted" &&
+          ((a.company || "").toLowerCase().includes(lowerQ) ||
+            (a.clientName || "").toLowerCase().includes(lowerQ) ||
+            (a.vertical || "").toLowerCase().includes(lowerQ) ||
+            (a.headline || "").toLowerCase().includes(lowerQ))
+        );
+        await fetch("/api/search-logs", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            query: q,
+            source: "library",
+            result_count: matches.length,
+            top_result_ids: matches.slice(0, 10).map(a => a.id),
+          }),
+        });
+      } catch (e) {
+        // Non-fatal — admin Insights just won't see this row.
+        console.warn("[search log] library log write failed", e);
+      }
+    }, 1500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
   const[route,setRoute]=useState<Route>({page:"home",id:null});
   const[toast,setToast]=useState<string|null>(null);
 
@@ -7434,6 +7476,20 @@ export default function App(){
                 </svg>
                 Fields
               </button>
+              <button
+                className={`rail-btn ${adminSection==="insights"?"on":""}`}
+                onClick={()=>setAdminSection(adminSection==="insights"?null:"insights")}
+                title="Insights — see what your team is searching for"
+              >
+                {/* Magnifier over bars — search + analytics in one glyph */}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="4" y1="20" x2="4" y2="12"/>
+                  <line x1="10" y1="20" x2="10" y2="14"/>
+                  <circle cx="15" cy="9" r="5"/>
+                  <line x1="19" y1="13" x2="22" y2="16"/>
+                </svg>
+                Insights
+              </button>
               <button className="rail-btn disabled" title="Embed (coming soon)">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <polyline points="16 18 22 12 16 6"/>
@@ -7604,6 +7660,9 @@ export default function App(){
                   onError={(msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); }}
                   authHeaders={authHeaders}
                 />
+              )}
+              {adminSection==="insights" && (
+                <SearchLogsView authHeaders={authHeaders}/>
               )}
               {adminSection==="rules" && (
                 <RulesPanel
