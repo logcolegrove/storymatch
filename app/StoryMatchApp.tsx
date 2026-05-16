@@ -905,7 +905,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    properties; the head + every row read from the same vars so widths
    stay in sync without prop drilling. Defaults below match the
    previous grid-template-columns sizes. */
-.lv{--lv-grid:72px 320px 130px 200px 130px 160px;}
+.lv{--lv-grid:72px 360px 130px 200px 130px;}
 /* Five columns: thumb | title | vertical | merged-status | actions.
    The merged-status column groups Publication + Cleared into one block.
    min-width on both head + row prevents horizontal squish — when the
@@ -913,8 +913,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Six grid tracks: thumb | title | vertical | visibility | status | actions.
    Visibility is content-sized (just the dropdown), Status takes the remaining
    space so the cleared trigger has room to breathe. */
-.lv-head{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:1060px;}
-.lv-row{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:1060px;}
+.lv-head{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:920px;}
+.lv-row{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:920px;}
 /* Header cells are click-to-sort buttons. The right edge has a thin
    drag handle to resize the column. Both behaviors coexist — clicks
    on the label open the menu; pointer events on the handle drive
@@ -964,8 +964,24 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-thumb img{width:100%;height:100%;object-fit:cover;}
 .lv-row.archived .lv-thumb img,.lv-row.draft .lv-thumb img{filter:grayscale(.9);}
 .lv-title{display:flex;flex-direction:column;gap:2px;min-width:0;}
-.lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;}
+/* YouTube-style affordance: the headline underlines on its own hover
+   so users know that clicking opens the asset (not "rename in
+   place"). Hover lives on the text, not the whole row. */
+.lv-title-h:hover{text-decoration:underline;text-underline-offset:2px;}
 .lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* Hover-revealed action row that sits underneath the title +
+   company. Height is pre-reserved so rows don't grow on hover
+   (no layout jump). Visibility toggles on row hover; the row
+   stays click-through (pointer-events:none) when hidden so
+   accidental clicks don't fire. */
+.lv-title-actions{display:flex;align-items:center;gap:1px;margin-top:4px;height:28px;opacity:0;pointer-events:none;transition:opacity .15s;}
+.lv-row:hover .lv-title-actions{opacity:1;pointer-events:auto;}
+.lv-title-act{width:28px;height:28px;display:grid;place-items:center;background:none;border:none;color:var(--t3);cursor:pointer;border-radius:6px;transition:background .12s,color .12s;padding:0;}
+.lv-title-act:hover{background:var(--bg2);color:var(--t1);}
+.lv-title-act:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.lv-title-actions .dots-btn{margin-left:2px;}
 .lv-date{font-size:12.5px;color:var(--t2);font-variant-numeric:tabular-nums;white-space:nowrap;}
 
 /* YouTube-style tooltip shown when a truncated label is hovered.
@@ -3561,7 +3577,7 @@ function PublicationSelectCell({
 // (--lvw-<key>) so column widths can be flipped via inline style on
 // the wrapper. `sortable` columns get Sort asc/desc in their header
 // menu; `hideable` controls whether the menu shows the Hide option.
-type ListViewColumnKey = "thumb" | "title" | "date" | "vis" | "status" | "actions";
+type ListViewColumnKey = "thumb" | "title" | "date" | "vis" | "status";
 
 interface ListViewColumn {
   key: ListViewColumnKey;
@@ -3582,11 +3598,10 @@ interface ListViewColumn {
 
 const LIST_VIEW_COLUMNS: ListViewColumn[] = [
   { key: "thumb", label: "", defaultWidth: 72, minWidth: 56, sortable: false, hideable: false },
-  { key: "title", label: "Title", defaultWidth: 320, minWidth: 160, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
+  { key: "title", label: "Title", defaultWidth: 360, minWidth: 200, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
   { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "vis-asc", sortDescKey: "vis-desc", hasQuickFilter: true },
   { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: true, hideable: true, sortAscKey: "status-asc", sortDescKey: "status-desc", hasQuickFilter: true },
   { key: "date", label: "Date", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "date-asc", sortDescKey: "date-desc", hasQuickFilter: true },
-  { key: "actions", label: "", defaultWidth: 160, minWidth: 100, sortable: false, hideable: false },
 ];
 
 function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, orgSettings, knownCustomTags }: ListViewProps) {
@@ -3709,7 +3724,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
             return (
               <div key={col.key} className="lv-h-cell">
                 {col.label ? <span style={{ alignSelf: "center" }}>{col.label}</span> : null}
-                {col.key !== "thumb" && col.key !== "actions" && (
+                {col.key !== "thumb" && (
                   <div
                     className={`lv-h-resize${resizingKey === col.key ? " dragging" : ""}`}
                     onPointerDown={(e) => beginResize(col.key, e)}
@@ -3950,10 +3965,84 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 );
               }
               if (col.key === "title") {
+                // Title cell now holds the headline, company, AND a
+                // YouTube-style row of hover-revealed action icons +
+                // 3-dot menu below. Pre-reserved height keeps row
+                // height stable on hover (no jumpy shift). Each icon
+                // stops propagation so clicking it doesn't also fire
+                // the row's open handler.
                 return (
                   <div key={col.key} className="lv-title">
                     <TruncatedDiv className="lv-title-h">{a.headline || "Untitled"}</TruncatedDiv>
                     <TruncatedDiv className="lv-title-c">{a.company || a.clientName || "—"}</TruncatedDiv>
+                    <div className="lv-title-actions" onClick={e => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="lv-title-act"
+                        onClick={(e) => { e.stopPropagation(); onCopyShareLink(a); }}
+                        title="Copy share link"
+                        aria-label="Copy share link"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="lv-title-act"
+                        onClick={(e) => { e.stopPropagation(); onEdit(a); }}
+                        title="Edit details"
+                        aria-label="Edit details"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="lv-title-act"
+                        onClick={(e) => { e.stopPropagation(); onRate(a); }}
+                        title="Rate this asset"
+                        aria-label="Rate this asset"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
+                          <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="lv-title-act"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.location.hash = "/shares";
+                        }}
+                        title="View analytics"
+                        aria-label="View analytics"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="18" y1="20" x2="18" y2="10"/>
+                          <line x1="12" y1="20" x2="12" y2="4"/>
+                          <line x1="6" y1="20" x2="6" y2="14"/>
+                          <line x1="3" y1="20" x2="21" y2="20"/>
+                        </svg>
+                      </button>
+                      <DotsMenu items={[
+                        { label: "Open", onClick: () => onClick(a) },
+                        { label: "Edit details", onClick: () => onEdit(a) },
+                        { label: "Copy share link", onClick: () => onCopyShareLink(a) },
+                        { divider: true },
+                        { label: "Rate this asset", onClick: () => onRate(a) },
+                        { divider: true },
+                        isArchived
+                          ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
+                          : { label: "Archive", onClick: () => onSetPublicationStatus(a, "archived") },
+                        { divider: true },
+                        { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) onDelete(a.id); }, danger: true },
+                      ]}/>
+                    </div>
                   </div>
                 );
               }
@@ -4015,91 +4104,9 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                   </div>
                 );
               }
-              // actions
-              return (
-                <div key={col.key} className="lv-actions">
-                  {/* Hover-revealed icon row, Vimeo-style. Fades in on
-                      row hover; sits to the LEFT of the dots menu so
-                      reps can hit a one-click action without opening a
-                      menu. Each icon stops propagation so clicking the
-                      icon never also triggers the row's onClick (which
-                      would navigate to the asset page). */}
-                  <div className="lv-hover-actions">
-                    <button
-                      type="button"
-                      className="lv-hover-btn"
-                      onClick={(e) => { e.stopPropagation(); onCopyShareLink(a); }}
-                      title="Copy share link"
-                      aria-label="Copy share link"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className="lv-hover-btn"
-                      onClick={(e) => { e.stopPropagation(); onEdit(a); }}
-                      title="Edit details"
-                      aria-label="Edit details"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                        <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className="lv-hover-btn"
-                      onClick={(e) => { e.stopPropagation(); onRate(a); }}
-                      title="Rate this asset"
-                      aria-label="Rate this asset"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
-                        <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className="lv-hover-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // Per-asset analytics view doesn't exist yet —
-                        // for now we route to My shares so admins can
-                        // scan engagement for this asset alongside the
-                        // rest of their shares. Once we add per-asset
-                        // filtering on /shares, this becomes a deep
-                        // link rather than a list jump.
-                        window.location.hash = "/shares";
-                      }}
-                      title="View analytics"
-                      aria-label="View analytics"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="18" y1="20" x2="18" y2="10"/>
-                        <line x1="12" y1="20" x2="12" y2="4"/>
-                        <line x1="6" y1="20" x2="6" y2="14"/>
-                        <line x1="3" y1="20" x2="21" y2="20"/>
-                      </svg>
-                    </button>
-                  </div>
-                  <DotsMenu items={[
-                    { label: "Open", onClick: () => onClick(a) },
-                    { label: "Edit details", onClick: () => onEdit(a) },
-                    { label: "Copy share link", onClick: () => onCopyShareLink(a) },
-                    { divider: true },
-                    { label: "Rate this asset", onClick: () => onRate(a) },
-                    { divider: true },
-                    isArchived
-                      ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
-                      : { label: "Archive", onClick: () => onSetPublicationStatus(a, "archived") },
-                    { divider: true },
-                    { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) onDelete(a.id); }, danger: true },
-                  ]}/>
-                </div>
-              );
+              // No actions column anymore — its contents (hover icons +
+              // 3-dot menu) moved into the Title cell above.
+              return null;
             })}
           </div>
         );
