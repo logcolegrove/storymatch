@@ -258,7 +258,7 @@ export default function FeedbackView({ assets, role, authHeaders, onBack }: Prop
         <h1 className="fbv-title">Feedback</h1>
         <p className="fbv-sub">
           {role === "admin"
-            ? "How your sales team rates each testimonial. Comments are anonymous — counts and notes show up here, but never the rep who left them."
+            ? "Rate testimonials yourself and see how your sales team rates them. Comments are anonymous — counts and notes show here, but never who left them. Your own vote feeds the aggregate just like a rep's does."
             : "Rate the testimonials you've used with prospects. Your name is never attached to your feedback — admins see the count and the note, but never who wrote it."}
         </p>
       </div>
@@ -329,6 +329,7 @@ export default function FeedbackView({ assets, role, authHeaders, onBack }: Prop
                   </div>
                 </div>
                 <div className="fbv-row-vote">
+                  <div className="fbv-vote-label">{my?.rating ? "Your rating" : "Rate this asset"}</div>
                   <div className="fbv-thumbs">
                     <button
                       type="button"
@@ -366,7 +367,8 @@ export default function FeedbackView({ assets, role, authHeaders, onBack }: Prop
                 </div>
                 {role === "admin" && (
                   <div className="fbv-row-agg">
-                    <div className="fbv-agg-counts" title="Aggregate ratings from your sales team">
+                    <div className="fbv-vote-label">Team ratings</div>
+                    <div className="fbv-agg-counts" title="Aggregate ratings from everyone on your team (including you)">
                       <span className="fbv-agg-up">{agg?.up ?? 0} 👍</span>
                       <span className="fbv-agg-down">{agg?.down ?? 0} 👎</span>
                     </div>
@@ -424,7 +426,8 @@ const css = `
 .fbv-row-co{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;}
 .fbv-row-head{font-size:14.5px;font-weight:600;color:var(--t1);margin-top:2px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .fbv-row-meta{font-size:11.5px;color:var(--t3);margin-top:4px;}
-.fbv-row-vote{display:flex;flex-direction:column;gap:8px;align-items:flex-end;min-width:220px;}
+.fbv-row-vote{display:flex;flex-direction:column;gap:6px;align-items:flex-end;min-width:220px;}
+.fbv-vote-label{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
 .fbv-thumbs{display:flex;gap:6px;}
 .fbv-thumb{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--t3);cursor:pointer;transition:all .12s;}
 .fbv-thumb:hover{border-color:var(--border2);color:var(--t1);}
@@ -432,7 +435,7 @@ const css = `
 .fbv-thumb.active.down{background:#fee2e2;border-color:#fca5a5;color:#b91c1c;}
 .fbv-comment{width:240px;min-height:54px;padding:7px 10px;font-family:var(--font);font-size:12.5px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--t1);resize:vertical;line-height:1.45;}
 .fbv-comment:focus{outline:none;border-color:var(--accent);background:#fff;}
-.fbv-row-agg{display:flex;flex-direction:column;gap:6px;align-items:flex-end;min-width:120px;font-size:11.5px;color:var(--t2);}
+.fbv-row-agg{display:flex;flex-direction:column;gap:6px;align-items:flex-end;min-width:130px;font-size:11.5px;color:var(--t2);padding-left:14px;border-left:1px solid var(--border);}
 .fbv-agg-counts{display:flex;gap:10px;font-size:12px;font-weight:600;}
 .fbv-agg-up{color:#15803d;}
 .fbv-agg-down{color:#b91c1c;}
