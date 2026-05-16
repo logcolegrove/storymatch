@@ -79,6 +79,9 @@ type AssetDB = {
   last_synced_transcript: string | null;
   // Vimeo publish date — drives the org's freshness Rule.
   published_at: string | null;
+  // Vimeo duration in seconds. Source-sync writes this; the FE
+  // uses it for the "Watch · 2:14" badge on grid + match cards.
+  duration_seconds: number | null;
   // Per-asset freshness exception (overrides org freshness rule).
   // until is null = no exception. Far-future = "never flag." With expiry =
   // approve until that date.
@@ -160,6 +163,8 @@ type AssetFE = {
   lastSyncedTranscript?: string | null;
   // Read-only — set at insert time from Vimeo's created_time. Not editable.
   publishedAt?: string | null;
+  // Read-only Vimeo duration. Drives the "Watch · 2:14" CTA on cards.
+  durationSeconds?: number | null;
   // Per-asset freshness exception. set_by_email and set_at are stamped
   // server-side from the auth context — clients only send the until date.
   freshnessExceptionUntil?: string | null;
@@ -232,6 +237,7 @@ function dbToFe(r: AssetDB): AssetFE {
     lastSyncedDescription: r.last_synced_description,
     lastSyncedTranscript: r.last_synced_transcript,
     publishedAt: r.published_at,
+    durationSeconds: r.duration_seconds,
     freshnessExceptionUntil: r.freshness_exception_until,
     freshnessExceptionSetByEmail: r.freshness_exception_set_by_email,
     freshnessExceptionSetAt: r.freshness_exception_set_at,

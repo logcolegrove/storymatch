@@ -107,6 +107,10 @@ interface Asset {
   lastSyncedTranscript?: string | null;
   // Vimeo's actual publish date (created_time). Drives the freshness Rule.
   publishedAt?: string | null;
+  // Vimeo duration in seconds. Surfaces the "Watch · 2:14" badge on
+  // grid cards + StoryMatch result cards. Null on assets not synced
+  // from Vimeo (or pre-duration-migration assets, until next sync).
+  durationSeconds?: number | null;
   // Per-asset freshness exception — when set, this asset bypasses the org
   // freshness rule until the until date (if set) or always (if until is in
   // the far future). set_by_email + set_at are server-stamped from auth.
@@ -905,7 +909,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    properties; the head + every row read from the same vars so widths
    stay in sync without prop drilling. Defaults below match the
    previous grid-template-columns sizes. */
-.lv{--lv-grid:72px 360px 130px 200px 130px;}
+.lv{--lv-grid:140px 360px 130px 200px 130px;}
 /* Five columns: thumb | title | vertical | merged-status | actions.
    The merged-status column groups Publication + Cleared into one block.
    min-width on both head + row prevents horizontal squish — when the
@@ -960,7 +964,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-row:last-child{border-bottom:none;border-radius:0 0 var(--r2) var(--r2);}
 .lv-row:hover{background:var(--bg2);}
 .lv-row.archived,.lv-row.draft{opacity:.65;}
-.lv-thumb{width:72px;height:48px;border-radius:6px;overflow:hidden;background:var(--bg3);position:relative;}
+.lv-thumb{width:108px;height:62px;border-radius:7px;overflow:hidden;background:var(--bg3);position:relative;flex-shrink:0;}
 .lv-thumb img{width:100%;height:100%;object-fit:cover;}
 .lv-row.archived .lv-thumb img,.lv-row.draft .lv-thumb img{filter:grayscale(.9);}
 .lv-title{display:flex;flex-direction:column;gap:2px;min-width:0;}
@@ -1512,7 +1516,7 @@ function TCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
           {isV ? (
             <>
               <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20"/></svg>
-              <span>Watch</span>
+              <span>Watch{asset.durationSeconds ? ` · ${formatDuration(asset.durationSeconds)}` : ""}</span>
             </>
           ) : (
             <>
@@ -3597,7 +3601,7 @@ interface ListViewColumn {
 }
 
 const LIST_VIEW_COLUMNS: ListViewColumn[] = [
-  { key: "thumb", label: "", defaultWidth: 72, minWidth: 56, sortable: false, hideable: false },
+  { key: "thumb", label: "", defaultWidth: 140, minWidth: 80, sortable: false, hideable: false },
   { key: "title", label: "Title", defaultWidth: 360, minWidth: 200, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
   { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "vis-asc", sortDescKey: "vis-desc", hasQuickFilter: true },
   { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: true, hideable: true, sortAscKey: "status-asc", sortDescKey: "status-desc", hasQuickFilter: true },
@@ -4113,6 +4117,20 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
       })}
     </div>
   );
+}
+
+// Format a Vimeo duration (in seconds) as "MM:SS" or "H:MM:SS" for
+// the long ones. Returns empty string when no duration is known so
+// callers can suppress the badge gracefully.
+function formatDuration(secs: number | null | undefined): string {
+  if (typeof secs !== "number" || !Number.isFinite(secs) || secs <= 0) return "";
+  const total = Math.floor(secs);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const ss = s.toString().padStart(2, "0");
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${ss}`;
+  return `${m}:${ss}`;
 }
 
 function timeAgoShort(iso: string | null | undefined): string {
@@ -8082,7 +8100,7 @@ export default function App(){
                           title={a.headline || "Untitled"}
                           metaParts={metaParts}
                           isVideo={isVideoAsset}
-                          durationLabel={undefined}
+                          durationLabel={a.durationSeconds ? formatDuration(a.durationSeconds) : undefined}
                           readLabel={undefined}
                           reasoning={ai.reasoning}
                           factorScores={ai.factorScores}

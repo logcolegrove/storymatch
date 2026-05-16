@@ -199,6 +199,10 @@ interface NormalizedVideo {
   // Vimeo's created_time — the actual publish date of the video. Used by
   // the Cleared signal to flag stale stories per org-level freshness rule.
   publishedAt: string;
+  // Vimeo's duration in seconds. Drives the "Watch · 2:14" badge on
+  // grid cards + StoryMatch result cards. Null when the source isn't
+  // a Vimeo video or duration wasn't returned (rare).
+  durationSeconds: number | null;
 }
 
 async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Promise<NormalizedVideo[] | null> {
@@ -238,6 +242,7 @@ async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Pr
     title: v.name,
     description: v.description || "",
     publishedAt: v.created_time || "",
+    durationSeconds: typeof v.duration === "number" ? v.duration : null,
     thumbnailFallback: pickLargestThumb(v.pictures?.sizes),
   }));
 
@@ -268,6 +273,7 @@ async function fetchShowcaseVideos(showcaseUrl: string, accessToken: string): Pr
     transcript: transcripts[i]?.plain || "",
     transcriptSegments: transcripts[i]?.segments || [],
     publishedAt: b.publishedAt,
+    durationSeconds: b.durationSeconds,
   }));
 }
 
@@ -302,6 +308,7 @@ async function fetchSingleVideo(videoUrl: string, accessToken: string): Promise<
       transcript: transcript.plain || "",
       transcriptSegments: transcript.segments || [],
       publishedAt: v.created_time || "",
+      durationSeconds: typeof v.duration === "number" ? v.duration : null,
     }];
   } catch {
     return null;
@@ -356,6 +363,8 @@ interface AssetRow {
   transcript: string | null;
   // Vimeo's actual upload date — auto-updated on every sync (never user-editable).
   published_at: string | null;
+  // Vimeo duration in seconds. Always auto-updated, never edited by admin.
+  duration_seconds: number | null;
   // last_synced_* track what the corresponding Vimeo field was at the most
   // recent successful sync. Lets us tell "user hasn't edited locally"
   // (current === last_synced) apart from "user has edited" (current !==
@@ -415,7 +424,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
   if (existingAssetIds.length > 0) {
     const { data: rows } = await supabaseAdmin
       .from("assets")
-      .select("id, source_id, status, video_url, headline, description, thumbnail, transcript, published_at, last_synced_title, last_synced_description, last_synced_transcript")
+      .select("id, source_id, status, video_url, headline, description, thumbnail, transcript, published_at, duration_seconds, last_synced_title, last_synced_description, last_synced_transcript")
       .in("id", existingAssetIds);
     existingAssets = (rows || []) as AssetRow[];
   }
@@ -456,6 +465,8 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       thumbnail: v.thumbnail || "",
       // Vimeo's actual publish date — drives the freshness Rule.
       published_at: v.publishedAt || null,
+      // Vimeo duration in seconds. Powers the "Watch · 2:14" badge.
+      duration_seconds: v.durationSeconds ?? null,
       // Org-default approval status (typically "unset" but admins can
       // configure to "approved" if they pre-bless all content by policy).
       approval_status: defaultApprovalStatus,
@@ -526,6 +537,7 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
     transcript?: string;
     thumbnail?: string;
     published_at?: string;
+    duration_seconds?: number;
     last_synced_title?: string;
     last_synced_description?: string;
     last_synced_transcript?: string;
@@ -596,6 +608,13 @@ export async function runSourceSync(orgId: string, sourceId: string): Promise<Sy
       if (!Number.isNaN(vimeoTs) && currentTs !== vimeoTs) {
         updates.published_at = v.publishedAt;
       }
+    }
+
+    // DURATION — also a Vimeo fact, never user-edited. Always
+    // auto-apply when it changes (or fills in for the first time).
+    // No conflict prompt; not surfaced to the admin sync report.
+    if (typeof v.durationSeconds === "number" && v.durationSeconds !== a.duration_seconds) {
+      updates.duration_seconds = v.durationSeconds;
     }
 
     fieldDecide(
