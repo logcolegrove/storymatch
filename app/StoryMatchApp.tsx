@@ -4888,7 +4888,10 @@ function FieldCard({ field, isFirst, isLast, onMoveUp, onMoveDown, onRename, onS
       </div>
       {!field.system && (
         <div className="field-card-actions">
-          <span className="field-card-key" title={`Key (immutable): ${field.key}`}>Key: <code>{field.key}</code></span>
+          {/* Key (field.key) is intentionally not surfaced to admins —
+              it's internal plumbing used by the JSONB store. Users only
+              care about the label. */}
+          <div style={{ flex: 1 }}/>
           <button type="button" className="field-card-delete" onClick={onDelete}>Delete</button>
         </div>
       )}
