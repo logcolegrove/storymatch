@@ -875,14 +875,16 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lib-btn.primary:hover{background:var(--accent2);border-color:var(--accent2);}
 .lib-btn .lib-btn-count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:8px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;margin-left:4px;}
 
-/* Rippling-style Filters button — filled primary pill with a
-   circular count badge. Always visually prominent (it's the primary
-   library-shaping control), darkens slightly when filters are
-   active, count badge appears alongside the label. */
-.lib-filters-btn{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 14px 0 12px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;transition:background .12s,box-shadow .12s;letter-spacing:-.005em;box-shadow:0 1px 2px rgba(0,0,0,.06);}
-.lib-filters-btn:hover{background:var(--accent2);box-shadow:0 4px 12px rgba(109,40,217,.25);}
-.lib-filters-btn.on{background:var(--accent2);}
-.lib-filters-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:99px;background:rgba(255,255,255,.22);color:#fff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:2px;}
+/* Filters button — matches Sort + view toggle dimensions exactly.
+   White/neutral by default so the three controls read as a unified
+   row. Lights up to the accent fill only when a filter is active —
+   the count badge appears on the right at that point so the active
+   state is unmistakable. */
+.lib-filters-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t1);font-family:var(--font);font-size:12.5px;font-weight:500;cursor:pointer;transition:border-color .12s,background .12s,color .12s;}
+.lib-filters-btn:hover{border-color:var(--border2);}
+.lib-filters-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.lib-filters-btn.on:hover{background:var(--accent2);border-color:var(--accent2);}
+.lib-filters-count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 6px;border-radius:99px;background:rgba(255,255,255,.22);color:#fff;font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:2px;}
 
 /* Popovers anchored under the lib-bar buttons. Position via .lib-btn-wrap
    parent (relative). Opens with a quick fade. */
@@ -7874,40 +7876,12 @@ export default function App(){
                     </div>
                   )}
 
-                  {/* + Add — admin only. Opens a popover with the available
-                      creation paths. Currently just "Add a source" (jumps
-                      to the Sources panel). More entries land here as
-                      new asset types arrive (standalone quote, written
-                      case study, etc.). */}
-                  {isAdmin && adminMode && (
-                    <div className="lib-btn-wrap">
-                      <button
-                        className="lib-btn primary"
-                        onClick={() => setLibMenuOpen(libMenuOpen === "add" ? null : "add")}
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        Add
-                      </button>
-                      {libMenuOpen === "add" && (
-                        <div className="lib-menu">
-                          <div
-                            className="lib-menu-item"
-                            onClick={() => { setAdminSection("import"); setLibMenuOpen(null); }}
-                          >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-                            Add a source
-                          </div>
-                          <div
-                            className="lib-menu-item"
-                            onClick={() => { setStandaloneQuoteOpen(true); setLibMenuOpen(null); }}
-                          >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21c3 0 7-1 7-8V5c0-1-1-2-2-2H4c-1 0-2 1-2 2v6c0 1 1 2 2 2h3"/><path d="M15 21c3 0 7-1 7-8V5c0-1-1-2-2-2h-4c-1 0-2 1-2 2v6c0 1 1 2 2 2h3"/></svg>
-                            Standalone quote
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {/* "+ Add" button removed — adding assets is admin
+                      work that lives in the left rail (Import → Add a
+                      source, or the standalone quote modal triggered
+                      from the rotation panel). Surfacing a second
+                      entry point in the library bar muddied the
+                      mental model. */}
                 </div>
               </div>
             )}
