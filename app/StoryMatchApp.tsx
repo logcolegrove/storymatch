@@ -918,6 +918,22 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-title{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* YouTube-style tooltip shown when a truncated label is hovered.
+   Portal-rendered with position:fixed so it escapes any clipping
+   ancestor. Only appears when the underlying text was actually
+   cut off — TruncatedDiv measures scrollWidth vs clientWidth and
+   skips the tip when content fits. */
+.trunc-tip{
+  background:#1c1c1c;color:#fff;
+  font-family:var(--font);font-size:12.5px;font-weight:500;
+  padding:8px 12px;border-radius:7px;line-height:1.4;
+  box-shadow:0 8px 24px rgba(0,0,0,.22);
+  z-index:1100;pointer-events:none;
+  word-break:break-word;
+  animation:truncTipIn .12s ease;
+}
+@keyframes truncTipIn{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:translateY(0);}}
 .lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-pub-select{font-family:var(--font);font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);cursor:pointer;width:auto;}
 .lv-pub-select:hover{background:var(--bg2);}
@@ -1581,6 +1597,54 @@ function QCard({asset,onClick,aiData,onCopyQuote,onRestore,isSelected,onToggleSe
 
 // ─── DOTS MENU (per-row, per-card actions) ─────────────────────────────────
 type MenuItem = { label: string; onClick: () => void; danger?: boolean } | { divider: true };
+// Wraps a single line of text that may overflow its container. On
+// hover, if the contents are actually truncated (scrollWidth >
+// clientWidth), a portal-rendered tooltip appears just below the
+// element with the full text. YouTube-style — only shows when the
+// text was clipped, so non-truncated rows don't get noisy tooltips.
+// Uses a portal so the tip escapes any clipping ancestor.
+function TruncatedDiv({ className, children, style }: {
+  className?: string;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [tip, setTip] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const measureAndShow = () => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.scrollWidth <= el.clientWidth + 1) return; // not truncated; +1 fudge for sub-pixel rounding
+    const r = el.getBoundingClientRect();
+    setTip({ top: r.bottom + 6, left: r.left, width: r.width });
+  };
+
+  return (
+    <>
+      <div
+        ref={ref}
+        className={className}
+        style={style}
+        onMouseEnter={measureAndShow}
+        onMouseLeave={() => setTip(null)}
+      >{children}</div>
+      {tip && typeof document !== "undefined" && createPortal(
+        <div
+          className="trunc-tip"
+          style={{
+            position: "fixed",
+            top: tip.top,
+            left: tip.left,
+            minWidth: Math.min(tip.width, 220),
+            maxWidth: 420,
+          }}
+        >{children}</div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function DotsMenu({ items }: { items: MenuItem[] }) {
   const [open, setOpen] = useState(false);
   // Popup is portal-rendered to document.body with computed fixed coords so
@@ -3666,8 +3730,8 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               if (col.key === "title") {
                 return (
                   <div key={col.key} className="lv-title">
-                    <div className="lv-title-h">{a.headline || "Untitled"}</div>
-                    <div className="lv-title-c">{a.company || a.clientName || "—"}</div>
+                    <TruncatedDiv className="lv-title-h">{a.headline || "Untitled"}</TruncatedDiv>
+                    <TruncatedDiv className="lv-title-c">{a.company || a.clientName || "—"}</TruncatedDiv>
                   </div>
                 );
               }
@@ -7182,9 +7246,11 @@ export default function App(){
 
             {/* ── Library control bar (Vimeo-style) ─────────────────────
                 Select-all + count on the left; grid/list view toggle on the
-                right (admin only). Visible whenever there are assets to
-                manage; hides on the empty state. */}
-            {displayAssets.length > 0 && (
+                right (admin only). Stays visible whenever the library has
+                ANY assets — even if the current filter set reduces them to
+                zero — so users can adjust filters without a page refresh.
+                Only hides when the org has no assets at all. */}
+            {assets.length > 0 && (
               <div className="lib-bar">
                 <div className="lib-bar-l">
                   {isAdmin && adminMode ? (
@@ -7335,8 +7401,15 @@ export default function App(){
                 <div className="empty">
                   <h3>{smResults?"No matches found":"No stories match"}</h3>
                   <p style={{color:"var(--t4)"}}>
-                    {smResults?"Try broadening your search":"Adjust filters"}
+                    {smResults?"Try broadening your search":"Adjust your filters above to see more stories."}
                   </p>
+                  {anyFilter && !smResults && (
+                    <button
+                      type="button"
+                      onClick={() => setFilters({})}
+                      style={{marginTop:14,padding:"8px 18px",border:"none",borderRadius:8,background:"var(--accent)",color:"#fff",fontFamily:"var(--font)",fontSize:13,fontWeight:600,cursor:"pointer"}}
+                    >Clear all filters</button>
+                  )}
                 </div>
               ) : (isAdmin && adminMode && viewMode === "list" && !smResults) ? (
                 <ListView
