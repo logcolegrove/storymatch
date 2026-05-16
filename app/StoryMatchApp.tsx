@@ -1430,6 +1430,22 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .dp-rel-title{font-family:var(--serif);font-size:14px;font-weight:500;line-height:1.35;}
 
 .empty{text-align:center;padding:60px 40px;color:var(--t4);}.empty h3{font-family:var(--serif);font-size:17px;color:var(--t3);margin-bottom:4px;}
+
+/* StoryMatch zero-result empty state — distinct from the generic
+   library "no stories match" message. Gives reps both validation
+   (search ran, found nothing) and three concrete next steps. */
+.sm-empty{max-width:560px;margin:48px auto 60px;padding:36px 32px;text-align:left;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.04);}
+.sm-empty-icon{width:64px;height:64px;border-radius:50%;background:var(--accentLL);color:var(--accent);display:grid;place-items:center;margin:0 auto 18px;}
+.sm-empty-h{font-family:var(--serif);font-size:24px;font-weight:600;color:var(--t1);text-align:center;margin:0 0 8px;letter-spacing:-.3px;}
+.sm-empty-sub{font-size:14px;color:var(--t2);text-align:center;line-height:1.55;margin:0 0 22px;}
+.sm-empty-tips{list-style:none;padding:0;margin:0 0 24px;display:flex;flex-direction:column;gap:12px;}
+.sm-empty-tips li{padding:12px 16px;background:var(--bg);border-radius:9px;font-size:13.5px;color:var(--t1);line-height:1.5;}
+.sm-empty-tips strong{color:var(--accent);font-weight:600;}
+.sm-empty-actions{display:flex;justify-content:center;gap:10px;}
+.sm-empty-primary{padding:10px 20px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:13.5px;font-weight:600;cursor:pointer;transition:background .12s;}
+.sm-empty-primary:hover{background:var(--accent2);}
+.sm-empty-secondary{padding:10px 20px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t2);font-family:var(--font);font-size:13.5px;font-weight:600;cursor:pointer;transition:all .12s;}
+.sm-empty-secondary:hover{border-color:var(--border2);color:var(--t1);}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);padding:9px 22px;background:var(--accent);color:#fff;border-radius:var(--r3);font-size:12px;font-weight:600;z-index:300;box-shadow:0 4px 20px rgba(0,0,0,.15);animation:fadeIn .2s;}
 .spin-inline{display:inline-block;width:14px;height:14px;border:2px solid var(--accentL);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;margin-right:6px;vertical-align:middle;}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -6940,7 +6956,12 @@ export default function App(){
   // Determine what to show in the grid
   let displayAssets: Asset[];
   const aiDataMap: Record<string, AIMatchResult> = {};
-  if(smResults&&smResults.length>0){
+  if(smResults){
+    // A StoryMatch search ran — even an empty result array still
+    // means "show ONLY what StoryMatch found." Falling back to the
+    // full library on zero matches was a bug: it hid the no-match
+    // state behind a sea of unrelated assets, and reps had no way
+    // to tell their search returned nothing.
     const matchedIds=smResults.map(r=>r.id);
     displayAssets=matchedIds
       .map(id=>assets.find(a=>a.id===id))
@@ -7989,24 +8010,75 @@ export default function App(){
 
             <div className="lib-wrap">
               {displayAssets.length===0 ? (
-                <div className="empty">
-                  <h3>{smResults?"No matches found":"No stories match"}</h3>
-                  <p style={{color:"var(--t4)"}}>
-                    {smResults?"Try broadening your search":"Adjust your filters above to see more stories."}
-                  </p>
-                  {(anyFilter || visibilityQuickFilter.length > 0 || statusQuickFilter.length > 0 || (dateRangeFilter && (dateRangeFilter.from || dateRangeFilter.to))) && !smResults && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFilters({});
-                        setVisibilityQuickFilter([]);
-                        setStatusQuickFilter([]);
-                        setDateRangeFilter(null);
-                      }}
-                      style={{marginTop:14,padding:"8px 18px",border:"none",borderRadius:8,background:"var(--accent)",color:"#fff",fontFamily:"var(--font)",fontSize:13,fontWeight:600,cursor:"pointer"}}
-                    >Clear all filters</button>
-                  )}
-                </div>
+                smResults ? (
+                  // StoryMatch zero-result empty state. Reps need
+                  // both validation ("I see — nothing matched") AND
+                  // an actionable path forward (try a different
+                  // search, signal the gap). We also remind admins
+                  // that every search lands in Insights so this
+                  // search is already captured as a demand signal.
+                  <div className="sm-empty">
+                    <div className="sm-empty-icon">
+                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        <line x1="11" y1="8" x2="11" y2="11"/>
+                        <line x1="11" y1="14" x2="11.01" y2="14"/>
+                      </svg>
+                    </div>
+                    <h3 className="sm-empty-h">No good matches yet</h3>
+                    <p className="sm-empty-sub">
+                      StoryMatch couldn&apos;t find a strong fit for that prospect in your library. A couple of things to try:
+                    </p>
+                    <ul className="sm-empty-tips">
+                      <li>
+                        <strong>Rephrase the request.</strong> Adding industry, company size, role, or specific pain points helps. &ldquo;A mid-market healthcare CFO struggling with manual reconciliation&rdquo; lands better than &ldquo;healthcare.&rdquo;
+                      </li>
+                      <li>
+                        <strong>Drop a filter.</strong> If you searched with any filters on, an aggressive set can hide good matches. Clear them and try again.
+                      </li>
+                      <li>
+                        <strong>Flag it as a gap.</strong> Your admin can see what the team is searching for in the Insights view — your search is already logged there. If this prospect represents a story you wish existed, mention it to whoever curates the library.
+                      </li>
+                    </ul>
+                    <div className="sm-empty-actions">
+                      <button
+                        type="button"
+                        className="sm-empty-primary"
+                        onClick={() => {
+                          // Reopen the StoryMatch dialog with the
+                          // previous query so reps can edit it
+                          // rather than retype from scratch.
+                          setSmOpen(true);
+                        }}
+                      >Try another search</button>
+                      <button
+                        type="button"
+                        className="sm-empty-secondary"
+                        onClick={clearSm}
+                      >Back to library</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="empty">
+                    <h3>No stories match</h3>
+                    <p style={{color:"var(--t4)"}}>
+                      Adjust your filters above to see more stories.
+                    </p>
+                    {(anyFilter || visibilityQuickFilter.length > 0 || statusQuickFilter.length > 0 || (dateRangeFilter && (dateRangeFilter.from || dateRangeFilter.to))) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFilters({});
+                          setVisibilityQuickFilter([]);
+                          setStatusQuickFilter([]);
+                          setDateRangeFilter(null);
+                        }}
+                        style={{marginTop:14,padding:"8px 18px",border:"none",borderRadius:8,background:"var(--accent)",color:"#fff",fontFamily:"var(--font)",fontSize:13,fontWeight:600,cursor:"pointer"}}
+                      >Clear all filters</button>
+                    )}
+                  </div>
+                )
               ) : (isAdmin && adminMode && viewMode === "list" && !smResults) ? (
                 <ListView
                   assets={displayAssets}
