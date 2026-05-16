@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "@/lib/auth-context";
 import AssetDetail from "./components/AssetDetail";
@@ -9,6 +9,7 @@ import FeedbackView from "./components/FeedbackView";
 import RateAssetModal from "./components/RateAssetModal";
 import FiltersModal from "./components/FiltersModal";
 import SearchLogsView from "./components/SearchLogsView";
+import ColumnControlPanel from "./components/ColumnControlPanel";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./components/FeaturedQuoteRotator";
@@ -959,6 +960,20 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-h-daterange input{flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);font-family:var(--font);font-size:12px;}
 .lv-h-daterange input:focus{outline:none;border-color:var(--accent);}
 .lv-hidden-toolbar{padding:6px 14px;font-size:11.5px;color:var(--t3);background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+
+/* "+ Add column" header cell — sits at the right edge of the
+   header row, opens the column-control panel anchored beneath. */
+.lv-h-addcol-cell{display:flex;align-items:center;justify-content:center;}
+.lv-h-addcol{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--t3);cursor:pointer;padding:0;transition:all .12s;}
+.lv-h-addcol:hover{border-color:var(--accent);color:var(--accent);background:var(--accentLL);}
+
+/* Generic custom-field cell — simple text rendering with em-dash
+   fallback when the asset has no value for the field. Mirrors the
+   visual weight of other primary cells (title, vis) without doing
+   anything custom per type beyond formatting. */
+.lv-customcell{display:flex;align-items:center;min-width:0;}
+.lv-customcell-text{font-size:13px;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv-customcell-empty{font-size:13px;color:var(--t4);}
 .lv-hidden-restore{background:none;border:none;color:var(--accent);font-family:var(--font);font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:4px;cursor:pointer;}
 .lv-hidden-restore:hover{background:var(--accentLL);}
 /* Merged status cell — Publication on the left (content-sized, only as
@@ -2391,6 +2406,14 @@ interface ListViewProps {
   onStatusQuickFilter?: (next: StatusQuickFilter) => void;
   dateRangeFilter?: DateRangeFilter;
   onDateRangeFilter?: (next: DateRangeFilter) => void;
+  // The org's field schema — drives the "available columns" list in
+  // the column control panel. Custom fields here can be added as
+  // columns to the table.
+  fieldDefs: FieldDef[];
+  // Opens the Fields admin panel from the column control's
+  // "Manage fields →" link. Defined here so the panel can use it
+  // without ListView needing to know about adminSection state.
+  onOpenFieldsPanel?: () => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
   orgSettings: OrgSettings;
   // Distinct (color, label) tags used elsewhere in the org — surfaced in
@@ -3604,11 +3627,14 @@ function PublicationSelectCell({
 }
 
 // Column descriptors — drives header rendering, per-row cells, and
-// the resize/sort/hide state. `key` doubles as the CSS-var suffix
-// (--lvw-<key>) so column widths can be flipped via inline style on
-// the wrapper. `sortable` columns get Sort asc/desc in their header
-// menu; `hideable` controls whether the menu shows the Hide option.
-type ListViewColumnKey = "thumb" | "title" | "date" | "vis" | "status";
+// the resize/sort/hide state. Keys are strings (built-in keys like
+// "thumb"/"title"/etc. OR custom-field keys from the org's field
+// schema like "vertical" / "f-abc123"). `sortable` columns get
+// Sort asc/desc in their header menu; `hideable` controls whether
+// the menu shows the Hide option. `kind` distinguishes built-ins
+// (have bespoke render logic) from custom fields (use a generic
+// type-driven cell renderer).
+type ListViewColumnKey = string;
 
 interface ListViewColumn {
   key: ListViewColumnKey;
@@ -3625,47 +3651,98 @@ interface ListViewColumn {
   // the menu picks up the additional Visibility / Status options
   // based on the column key.
   hasQuickFilter?: boolean;
+  // "builtin" = thumb/title/vis/status/date with hardcoded rendering.
+  // "field"   = synthesized from the org's field schema, generic
+  //             type-driven render path. `def` is set in that case.
+  kind: "builtin" | "field";
+  def?: FieldDef;
 }
 
-const LIST_VIEW_COLUMNS: ListViewColumn[] = [
-  { key: "thumb", label: "", defaultWidth: 140, minWidth: 80, sortable: false, hideable: false },
-  { key: "title", label: "Title", defaultWidth: 360, minWidth: 200, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
-  { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "vis-asc", sortDescKey: "vis-desc", hasQuickFilter: true },
-  { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: true, hideable: true, sortAscKey: "status-asc", sortDescKey: "status-desc", hasQuickFilter: true },
-  { key: "date", label: "Date", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "date-asc", sortDescKey: "date-desc", hasQuickFilter: true },
+const BUILT_IN_LIST_VIEW_COLUMNS: ListViewColumn[] = [
+  { key: "thumb", label: "", defaultWidth: 140, minWidth: 80, sortable: false, hideable: false, kind: "builtin" },
+  { key: "title", label: "Title", defaultWidth: 360, minWidth: 200, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za", kind: "builtin" },
+  { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "vis-asc", sortDescKey: "vis-desc", hasQuickFilter: true, kind: "builtin" },
+  { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: true, hideable: true, sortAscKey: "status-asc", sortDescKey: "status-desc", hasQuickFilter: true, kind: "builtin" },
+  { key: "date", label: "Date", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "date-asc", sortDescKey: "date-desc", hasQuickFilter: true, kind: "builtin" },
 ];
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, orgSettings, knownCustomTags }: ListViewProps) {
+// Default reorderable section — built-in columns that flow into the
+// column-order array. "thumb" and "title" stay pinned at the front,
+// always present, in that order (title is the row identity column,
+// thumb is its visual anchor — neither should move).
+const DEFAULT_REORDERABLE_KEYS = ["vis", "status", "date"];
+
+// Synthesise a column descriptor for a custom field. Width defaults
+// reflect a moderately compact display; admin can resize as needed.
+function fieldDefToColumn(def: FieldDef): ListViewColumn {
+  return {
+    key: def.key,
+    label: def.label,
+    defaultWidth: 160,
+    minWidth: 100,
+    sortable: false,
+    hideable: true,
+    kind: "field",
+    def,
+  };
+}
+
+// Resolve any column key to its descriptor. Built-ins win first;
+// otherwise we look up the matching FieldDef. Returns null when the
+// key references neither — e.g. when an admin deleted a field that
+// was still in localStorage's columnOrder.
+function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): ListViewColumn | null {
+  const builtIn = BUILT_IN_LIST_VIEW_COLUMNS.find(c => c.key === key);
+  if (builtIn) return builtIn;
+  const def = (fieldDefs || []).find(d => d.key === key);
+  if (def) return fieldDefToColumn(def);
+  return null;
+}
+
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, orgSettings, knownCustomTags }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
-  // Per-column state — widths + which columns are hidden. Both
-  // persist to localStorage so admins keep their layout across
-  // sessions. Defaults match LIST_VIEW_COLUMNS' defaultWidth.
-  const [widths, setWidths] = useState<Record<ListViewColumnKey, number>>(() => {
+  // Per-column state. All three persist to localStorage so admins
+  // keep their custom layout across sessions:
+  //   widths       — key → pixel width (Record<string,number>)
+  //   hidden       — keys currently dropped from the visible table
+  //   columnOrder  — sequence of REORDERABLE keys (everything
+  //                  except the pinned thumb + title pair). Custom
+  //                  field keys live here too once added.
+  const [widths, setWidths] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
-    for (const c of LIST_VIEW_COLUMNS) init[c.key] = c.defaultWidth;
+    for (const c of BUILT_IN_LIST_VIEW_COLUMNS) init[c.key] = c.defaultWidth;
     if (typeof window !== "undefined") {
       try {
         const raw = localStorage.getItem("storymatch.lv.widths");
         if (raw) {
           const parsed = JSON.parse(raw) as Record<string, number>;
-          for (const c of LIST_VIEW_COLUMNS) {
-            const v = parsed[c.key];
-            if (typeof v === "number" && v >= c.minWidth) init[c.key] = v;
+          for (const [k, v] of Object.entries(parsed)) {
+            if (typeof v === "number" && v >= 80) init[k] = v;
           }
         }
       } catch { /* ignore parse errors — fall back to defaults */ }
     }
-    return init as Record<ListViewColumnKey, number>;
+    return init;
   });
-  const [hidden, setHidden] = useState<Set<ListViewColumnKey>>(() => {
+  const [hidden, setHidden] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set();
     try {
       const raw = localStorage.getItem("storymatch.lv.hidden");
       if (!raw) return new Set();
       const arr = JSON.parse(raw) as string[];
-      return new Set(arr.filter(k => LIST_VIEW_COLUMNS.some(c => c.key === k && c.hideable)) as ListViewColumnKey[]);
+      return new Set(arr);
     } catch { return new Set(); }
+  });
+  const [columnOrder, setColumnOrder] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [...DEFAULT_REORDERABLE_KEYS];
+    try {
+      const raw = localStorage.getItem("storymatch.lv.columnOrder");
+      if (!raw) return [...DEFAULT_REORDERABLE_KEYS];
+      const arr = JSON.parse(raw) as string[];
+      if (!Array.isArray(arr)) return [...DEFAULT_REORDERABLE_KEYS];
+      return arr;
+    } catch { return [...DEFAULT_REORDERABLE_KEYS]; }
   });
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3675,27 +3752,53 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     if (typeof window === "undefined") return;
     try { localStorage.setItem("storymatch.lv.hidden", JSON.stringify(Array.from(hidden))); } catch { /* non-fatal */ }
   }, [hidden]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem("storymatch.lv.columnOrder", JSON.stringify(columnOrder)); } catch { /* non-fatal */ }
+  }, [columnOrder]);
 
-  const visibleColumns = LIST_VIEW_COLUMNS.filter(c => !hidden.has(c.key));
+  // Resolve the final column list for rendering. Order is:
+  //   1. thumb (pinned)
+  //   2. title (pinned)
+  //   3. ...columnOrder, filtered to keys that resolve to a real
+  //      column (drops stale references to deleted custom fields)
+  //      and not currently hidden
+  const visibleColumns: ListViewColumn[] = (() => {
+    const out: ListViewColumn[] = [];
+    const thumb = resolveColumnByKey("thumb", fieldDefs);
+    const title = resolveColumnByKey("title", fieldDefs);
+    if (thumb) out.push(thumb);
+    if (title) out.push(title);
+    for (const key of columnOrder) {
+      if (hidden.has(key)) continue;
+      const col = resolveColumnByKey(key, fieldDefs);
+      if (col) out.push(col);
+    }
+    return out;
+  })();
 
   // Compose the grid-template-columns string from visible columns'
-  // current widths. Set on the wrapper as a CSS custom property so
+  // current widths plus a trailing 44px slot for the "+ Add column"
+  // header button. Set on the wrapper as a CSS custom property so
   // both the header row and every data row read the same template
   // — guarantees alignment even when columns are hidden / resized.
-  const gridTemplate = visibleColumns.map(c => `${widths[c.key]}px`).join(" ");
+  const gridTemplate = [
+    ...visibleColumns.map(c => `${widths[c.key] ?? c.defaultWidth}px`),
+    "44px",
+  ].join(" ");
   const styleVars = { ["--lv-grid" as string]: gridTemplate } as React.CSSProperties;
 
   // Pointer-driven column resize. Captures start width + start X on
   // mousedown, listens on the document for move/up so the drag
   // continues even when the cursor leaves the tiny handle.
-  const [resizingKey, setResizingKey] = useState<ListViewColumnKey | null>(null);
-  const beginResize = (key: ListViewColumnKey, e: React.PointerEvent) => {
+  const [resizingKey, setResizingKey] = useState<string | null>(null);
+  const beginResize = (key: string, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const col = LIST_VIEW_COLUMNS.find(c => c.key === key);
+    const col = resolveColumnByKey(key, fieldDefs);
     if (!col) return;
     const startX = e.clientX;
-    const startW = widths[key];
+    const startW = widths[key] ?? col.defaultWidth;
     setResizingKey(key);
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - startX;
@@ -3711,6 +3814,12 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     document.addEventListener("pointerup", onUp);
   };
 
+  // Column control panel state — open + anchor coords for the
+  // popover. Built up here in the parent so the "+" header cell
+  // and the panel can both reference it.
+  const [colControlOpen, setColControlOpen] = useState(false);
+  const colControlAnchorRef = useRef<HTMLButtonElement | null>(null);
+
   // Header dropdown state — which column's menu is open. Null = none.
   const [openHeaderMenu, setOpenHeaderMenu] = useState<ListViewColumnKey | null>(null);
   useEffect(() => {
@@ -3723,26 +3832,17 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     return () => { clearTimeout(tm); document.removeEventListener("mousedown", onDoc); };
   }, [openHeaderMenu]);
 
-  const hiddenHideable = LIST_VIEW_COLUMNS.filter(c => c.hideable && hidden.has(c.key));
+  // (The previous standalone "Hidden columns" toolbar was removed —
+  // hiding/showing happens in the column-control panel now, which
+  // already lists hidden columns under "Available." Keeping a second
+  // surface for the same action would clutter the header without
+  // adding capability.)
 
   if (assets.length === 0) {
     return <div className="lv"><div className="lv-empty">No assets to show.</div></div>;
   }
   return (
     <div className="lv" style={styleVars as React.CSSProperties}>
-      {hiddenHideable.length > 0 && (
-        <div className="lv-hidden-toolbar">
-          <span>Hidden:</span>
-          {hiddenHideable.map(c => (
-            <button
-              key={c.key}
-              type="button"
-              className="lv-hidden-restore"
-              onClick={() => setHidden(h => { const n = new Set(h); n.delete(c.key); return n; })}
-            >+ {c.label}</button>
-          ))}
-        </div>
-      )}
       <div className="lv-head">
         {visibleColumns.map(col => {
           // Columns without a label, sort, hide, or quick filter have
@@ -3954,7 +4054,39 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
             </div>
           );
         })}
+        {/* Trailing "+ Add column" header cell. Opens the column
+            control panel anchored beneath this button so admins can
+            show/hide and reorder columns without leaving the table. */}
+        <div className="lv-h-cell lv-h-addcol-cell">
+          <button
+            ref={colControlAnchorRef}
+            type="button"
+            className="lv-h-addcol"
+            onClick={(e) => { e.stopPropagation(); setColControlOpen(o => !o); }}
+            title="Add or hide columns"
+            aria-label="Add or hide columns"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+        </div>
       </div>
+      {colControlOpen && (
+        <ColumnControlPanel
+          anchor={colControlAnchorRef.current}
+          fieldDefs={fieldDefs}
+          columnOrder={columnOrder}
+          hidden={hidden}
+          onClose={() => setColControlOpen(false)}
+          onChange={(nextOrder, nextHidden) => {
+            setColumnOrder(nextOrder);
+            setHidden(nextHidden);
+          }}
+          onOpenFieldsPanel={onOpenFieldsPanel}
+        />
+      )}
       {assets.map((a) => {
         const isArchived = a.status === "archived";
         const isDraft = a.status === "draft";
@@ -4135,15 +4267,62 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                   </div>
                 );
               }
-              // No actions column anymore — its contents (hover icons +
-              // 3-dot menu) moved into the Title cell above.
-              return null;
+              // Custom-field column. Read the value off the asset
+              // (system fields use direct properties; non-system
+              // fields live in customFieldValues) and render per
+              // type. Read-only for v1 — edits happen in the asset
+              // edit panel.
+              if (col.kind === "field" && col.def) {
+                const def = col.def;
+                const raw = def.system
+                  ? (a as unknown as Record<string, unknown>)[def.key]
+                  : (a.customFieldValues || {})[def.key];
+                return (
+                  <div key={col.key} className="lv-customcell">
+                    <CustomFieldCell def={def} value={raw}/>
+                  </div>
+                );
+              }
+              // Unknown built-in fallthrough — render nothing so the
+              // grid stays aligned.
+              return <div key={col.key}/>;
             })}
+            {/* Trailing slot aligned with the "+ Add column" header
+                cell so the grid stays aligned across every row. */}
+            <div/>
           </div>
         );
       })}
     </div>
   );
+}
+
+// Render a single asset's value for a custom-field column. Read-only
+// — edits go through the asset edit panel. Picks a sensible default
+// representation per FieldDef type so the table stays scannable.
+function CustomFieldCell({ def, value }: { def: FieldDef; value: unknown }) {
+  if (value == null || value === "") return <span className="lv-customcell-empty">—</span>;
+  if (def.type === "multi_select") {
+    const arr = Array.isArray(value) ? (value as unknown[]).filter(x => typeof x === "string") as string[] : [];
+    if (arr.length === 0) return <span className="lv-customcell-empty">—</span>;
+    return <span className="lv-customcell-text">{arr.join(", ")}</span>;
+  }
+  if (def.type === "date") {
+    const s = typeof value === "string" ? value : "";
+    if (!s) return <span className="lv-customcell-empty">—</span>;
+    try {
+      const d = new Date(s);
+      if (Number.isNaN(d.getTime())) return <span className="lv-customcell-text">{s}</span>;
+      return <span className="lv-customcell-text">{d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>;
+    } catch { return <span className="lv-customcell-text">{s}</span>; }
+  }
+  if (def.type === "number") {
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) return <span className="lv-customcell-empty">—</span>;
+    return <span className="lv-customcell-text">{n.toLocaleString()}</span>;
+  }
+  // text + select fall through to plain string display.
+  return <span className="lv-customcell-text">{String(value)}</span>;
 }
 
 // Format a Vimeo duration (in seconds) as "MM:SS" or "H:MM:SS" for
@@ -8104,6 +8283,8 @@ export default function App(){
                   onStatusQuickFilter={setStatusQuickFilter}
                   dateRangeFilter={dateRangeFilter}
                   onDateRangeFilter={setDateRangeFilter}
+                  fieldDefs={fieldDefs}
+                  onOpenFieldsPanel={() => setAdminSection("fields")}
                   orgSettings={orgSettings}
                   knownCustomTags={knownCustomTags}
                 />
