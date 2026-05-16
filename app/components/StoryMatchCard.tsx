@@ -71,84 +71,34 @@ function tierClass(score: number): "strong" | "good" | "weak" {
   return "weak";
 }
 
-type Rating = "up" | "down";
+// (Rating type removed — inline thumbs were dropped from this card.
+// Feedback lives in the rate-this-asset modal triggered from the
+// library 3-dot menu, where the question is unambiguously about
+// asset content quality, not StoryMatch match quality.)
 
 export default function StoryMatchCard(props: StoryMatchCardProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number } | null>(null);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const badgeRef = useRef<HTMLButtonElement | null>(null);
   const {
-    assetId, rank, thumbnail, title, metaParts, isVideo, durationLabel, readLabel,
-    reasoning, lowestFactorNote, talkingPoints = [], quotes = [],
-    relevanceScore, onOpen, onShare, onCopySummary, onCopyQuote, authHeaders,
+    rank, thumbnail, title, metaParts, isVideo, durationLabel, readLabel,
+    reasoning, talkingPoints = [], quotes = [],
+    relevanceScore, onOpen, onShare, onCopySummary, onCopyQuote,
   } = props;
 
   const matchTier = tierClass(relevanceScore);
 
-  // Inline rating state. Fetched once on mount via the same
-  // /api/feedback endpoint the modal uses. Clicking a thumb saves
-  // immediately; clicking the active thumb a second time clears the
-  // vote. We deliberately don't surface a comment field on the card
-  // itself — comments live in the modal, reachable from the asset's
-  // 3-dot menu in the library. Inline thumbs are about quick
-  // signal capture while reps are evaluating matches.
-  const [myRating, setMyRating] = useState<Rating | null>(null);
-  const [voteSaving, setVoteSaving] = useState(false);
-  const [voteFlash, setVoteFlash] = useState(false);
+  // Inline thumbs removed from the StoryMatch card. Feedback belongs
+  // in the modal triggered from the asset's 3-dot menu — there the
+  // rep is rating asset CONTENT QUALITY in general. Showing the
+  // thumbs on a match-result card confuses the question with "did
+  // StoryMatch get this match right?" which is a different signal we
+  // don't want polluting the feedback dataset.
 
-  useEffect(() => {
-    if (!authHeaders || !assetId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const headers = await authHeaders();
-        const r = await fetch(`/api/feedback?asset_id=${encodeURIComponent(assetId)}`, { headers });
-        if (!r.ok) return;
-        const data = (await r.json()) as { myVote: { rating: Rating } | null };
-        if (cancelled) return;
-        if (data.myVote) setMyRating(data.myVote.rating);
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [assetId, authHeaders]);
-
-  const toggleRating = async (next: Rating) => {
-    if (!authHeaders || !assetId || voteSaving) return;
-    const prev = myRating;
-    const willClear = prev === next;
-    // Optimistic local update.
-    setMyRating(willClear ? null : next);
-    setVoteSaving(true);
-    try {
-      const headers: HeadersInit = { "Content-Type": "application/json", ...(await authHeaders()) };
-      if (willClear) {
-        const r = await fetch(`/api/feedback?asset_id=${encodeURIComponent(assetId)}`, {
-          method: "DELETE",
-          headers,
-        });
-        if (!r.ok) throw new Error("delete failed");
-      } else {
-        const r = await fetch(`/api/feedback`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ asset_id: assetId, rating: next }),
-        });
-        if (!r.ok) throw new Error("save failed");
-      }
-      // Brief flash to confirm save without a full toast.
-      setVoteFlash(true);
-      setTimeout(() => setVoteFlash(false), 600);
-    } catch (e) {
-      console.error("[StoryMatchCard] vote save failed", e);
-      // Roll back.
-      setMyRating(prev);
-    } finally {
-      setVoteSaving(false);
-    }
-  };
-
-  // Position the popover via portal in viewport space, anchored just
-  // under the badge. Recompute on scroll/resize so it follows.
+  // Position the popover via portal in viewport space, anchored
+  // just under the badge. Badge sits top-LEFT of the thumb so we
+  // align the popover's left edge to it (was right-aligned when the
+  // badge was top-right). Recompute on scroll/resize so it follows.
   useEffect(() => {
     if (!popoverOpen) { setPopoverPos(null); return; }
     const update = () => {
@@ -157,7 +107,7 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
       const r = el.getBoundingClientRect();
       setPopoverPos({
         top: r.bottom + 8,
-        right: window.innerWidth - r.right,
+        left: r.left,
       });
     };
     update();
@@ -181,10 +131,28 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
               <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             </div>
           )}
-          <div className="smc-rank">{rank}</div>
+          {/* Combined rank + match pill — top-LEFT of the thumb.
+              "#1" rank circle on the left, "87% match" on the right,
+              one tier-coloured pill that's also the hover/click
+              target for the explanation popover. Top-right is now
+              reserved for hover affordances (share link), which is
+              where reps naturally expect quick actions to live. */}
+          <button
+            ref={badgeRef}
+            type="button"
+            className={`smc-match smc-match-${matchTier}`}
+            onClick={(e) => { e.stopPropagation(); setPopoverOpen(o => !o); }}
+            onMouseEnter={() => setPopoverOpen(true)}
+            onMouseLeave={() => setPopoverOpen(false)}
+            aria-label={`Rank ${rank}, match score ${relevanceScore} percent — hover for details`}
+          >
+            <span className="smc-rank-num">{rank}</span>
+            <span className="smc-match-num">{relevanceScore}%</span>
+            <span>match</span>
+          </button>
           {/* Share link icon — fades in on card hover, top-right.
-              Same affordance as the library cards. Stacked to the
-              LEFT of the match badge so neither obscures the other. */}
+              Same affordance as the library cards. Now alone in the
+              top-right corner since the match pill moved left. */}
           {onShare && (
             <button
               type="button"
@@ -199,29 +167,10 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
               </svg>
             </button>
           )}
-          {/* Match badge — tier-coloured, click to toggle popover.
-              The popover renders via portal (below) so it escapes
-              the card's overflow:hidden and never gets clipped.
-              Content is no longer a factor breakdown — instead it
-              mirrors the "why + what's different" frame the rest of
-              the card uses, which is closer to how real search
-              engines explain rankings (semantic, not numeric). */}
-          <button
-            ref={badgeRef}
-            type="button"
-            className={`smc-match smc-match-${matchTier}`}
-            onClick={(e) => { e.stopPropagation(); setPopoverOpen(o => !o); }}
-            onMouseEnter={() => setPopoverOpen(true)}
-            onMouseLeave={() => setPopoverOpen(false)}
-            aria-label={`Match score ${relevanceScore} percent`}
-          >
-            <span className="smc-match-num">{relevanceScore}%</span>
-            <span>match</span>
-          </button>
           {popoverOpen && popoverPos && typeof document !== "undefined" && createPortal(
             <div
               className="smc-pop"
-              style={{ position: "fixed", top: popoverPos.top, right: popoverPos.right }}
+              style={{ position: "fixed", top: popoverPos.top, left: popoverPos.left }}
               onMouseEnter={() => setPopoverOpen(true)}
               onMouseLeave={() => setPopoverOpen(false)}
               onClick={e => e.stopPropagation()}
@@ -229,14 +178,7 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
               <div className="smc-pop-title">{relevanceScore}% match</div>
               {reasoning && (
                 <div className="smc-pop-section">
-                  <div className="smc-pop-section-h">Why this matches</div>
                   <p className="smc-pop-text">{renderWithChips(reasoning)}</p>
-                </div>
-              )}
-              {lowestFactorNote && (
-                <div className="smc-pop-section smc-pop-section-diff">
-                  <div className="smc-pop-section-h">Things to watch out for</div>
-                  <p className="smc-pop-text">{lowestFactorNote}</p>
                 </div>
               )}
             </div>,
@@ -283,6 +225,15 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
                 <div key={i} className="smc-tp">
                   <div className="smc-tp-topic">{tp.topic}</div>
                   <p className="smc-tp-text">{tp.text}</p>
+                  <button
+                    type="button"
+                    className="smc-tp-copy"
+                    onClick={() => onCopyQuote?.(`${tp.topic}: ${tp.text}`)}
+                    title="Copy talking point"
+                    aria-label="Copy talking point"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
                 </div>
               ))}
             </div>
@@ -314,40 +265,6 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
             View full story <span className="smc-arr">→</span>
           </button>
           <div className="smc-foot-actions">
-            {/* Inline thumbs — quick rating capture without leaving
-                the card. Saves directly on click; brief flash on
-                successful save. Comments live in the rate-this-asset
-                modal reachable from the library 3-dot menu. */}
-            {authHeaders && assetId && (
-              <div className={`smc-rate${voteFlash ? " flash" : ""}`}>
-                <button
-                  type="button"
-                  className={`smc-rate-btn ${myRating === "up" ? "active up" : ""}`}
-                  onClick={() => toggleRating("up")}
-                  disabled={voteSaving}
-                  title={myRating === "up" ? "Remove your thumbs-up" : "Thumbs up"}
-                  aria-label={myRating === "up" ? "Remove your thumbs-up" : "Thumbs up"}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
-                    <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className={`smc-rate-btn ${myRating === "down" ? "active down" : ""}`}
-                  onClick={() => toggleRating("down")}
-                  disabled={voteSaving}
-                  title={myRating === "down" ? "Remove your thumbs-down" : "Thumbs down"}
-                  aria-label={myRating === "down" ? "Remove your thumbs-down" : "Thumbs down"}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17 13V4h3a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-3z"/>
-                    <path d="M17 13l-4 7a2 2 0 0 1-4-.8V15H4.6a2 2 0 0 1-1.97-2.35l1.5-7A2 2 0 0 1 6 4h11"/>
-                  </svg>
-                </button>
-              </div>
-            )}
             {onCopySummary && <button type="button" className="smc-foot-btn" onClick={onCopySummary}>Copy summary</button>}
           </div>
         </div>
@@ -370,16 +287,25 @@ const css = `
 .smc-thumb-fallback{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--t4);}
 .smc-thumb-badge{position:absolute;bottom:11px;right:11px;background:rgba(20,20,28,.55);color:rgba(255,255,255,.94);font-size:11px;padding:4px 8px;border-radius:5px;font-weight:500;display:inline-flex;align-items:center;gap:4px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);letter-spacing:.01em;font-family:var(--font);}
 
-.smc-share{position:absolute;top:14px;right:108px;display:grid;place-items:center;width:32px;height:32px;border-radius:99px;background:#fff;border:1px solid var(--border);color:var(--t2);cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.12);opacity:0;transform:translateX(6px);transition:opacity .15s,transform .15s,color .12s,border-color .12s;padding:0;}
-.smc:hover .smc-share{opacity:1;transform:translateX(0);}
-.smc-share:hover{color:var(--accent);border-color:var(--accent);}
-.smc-match{position:absolute;top:14px;right:14px;display:inline-flex;align-items:center;gap:6px;padding:7px 13px 7px 11px;border-radius:99px;background:#fff;border:1px solid var(--border);font-family:var(--font);font-size:13.5px;font-weight:600;cursor:help;box-shadow:0 6px 18px rgba(0,0,0,.12);letter-spacing:-.005em;}
+/* Combined rank + match pill, top-LEFT of the thumb. Rank lives
+   in a darker inset circle inside the pill; the rest is the
+   tier-coloured match summary. One element, two pieces of
+   information, anchored where users naturally look first. */
+.smc-match{position:absolute;top:14px;left:14px;display:inline-flex;align-items:center;gap:7px;padding:5px 13px 5px 5px;border-radius:99px;background:#fff;border:1px solid var(--border);font-family:var(--font);font-size:13.5px;font-weight:600;cursor:help;box-shadow:0 6px 18px rgba(0,0,0,.12);letter-spacing:-.005em;}
+.smc-rank-num{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.16);color:currentColor;font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:0;flex-shrink:0;}
 .smc-match-num{font-variant-numeric:tabular-nums;letter-spacing:-.015em;}
 .smc-match-strong{color:#0F6E56;background:#E1F5EE;border-color:#9FE1CB;}
+.smc-match-strong .smc-rank-num{background:rgba(15,110,86,.18);}
 .smc-match-good{color:#854F0B;background:#FAEEDA;border-color:#FAC775;}
-.smc-match-weak{color:var(--t3);background:#fff;}
+.smc-match-good .smc-rank-num{background:rgba(133,79,11,.18);}
+.smc-match-weak{color:var(--t2);background:#fff;}
+.smc-match-weak .smc-rank-num{background:var(--bg2);color:var(--t2);}
 
-.smc-rank{position:absolute;top:14px;left:14px;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;box-shadow:0 4px 12px rgba(109,40,217,.32);font-family:var(--font);}
+/* Share link icon — fades in on card hover, top-right corner now
+   that the match pill no longer lives there. */
+.smc-share{position:absolute;top:14px;right:14px;display:grid;place-items:center;width:32px;height:32px;border-radius:99px;background:#fff;border:1px solid var(--border);color:var(--t2);cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.12);opacity:0;transform:translateX(-6px);transition:opacity .15s,transform .15s,color .12s,border-color .12s;padding:0;}
+.smc:hover .smc-share{opacity:1;transform:translateX(0);}
+.smc-share:hover{color:var(--accent);border-color:var(--accent);}
 
 .smc-body{padding:28px 30px 24px;flex:1;}
 .smc-title{font-family:var(--font);font-size:21px;font-weight:600;color:var(--t1);line-height:1.28;letter-spacing:-.018em;margin:0 0 6px;cursor:pointer;}
@@ -396,12 +322,16 @@ const css = `
 .smc-why{font-family:var(--font);font-size:15px;font-weight:400;line-height:1.55;color:var(--t1);margin:0;letter-spacing:-.005em;}
 .smc-why strong{font-weight:600;color:var(--accent);background:var(--accentLL);padding:1px 7px;border-radius:4px;font-size:13.5px;letter-spacing:0;}
 
-/* Talking points — cool/clean styling. */
-.smc-tp{padding:14px 18px;background:#f8f8fb;border:1px solid var(--bg2);border-radius:10px;margin-bottom:8px;transition:background .15s,border-color .15s,transform .15s;position:relative;}
+/* Talking points — cool/clean styling. Copy icon fades in on
+   hover, mirroring the quote pattern below. */
+.smc-tp{padding:14px 38px 14px 18px;background:#f8f8fb;border:1px solid var(--bg2);border-radius:10px;margin-bottom:8px;transition:background .15s,border-color .15s,transform .15s;position:relative;}
 .smc-tp:last-child{margin-bottom:0;}
 .smc-tp:hover{background:var(--accentLL);border-color:var(--accentL);transform:translateX(2px);}
 .smc-tp-topic{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.08em;margin:0 0 5px;font-family:var(--font);}
 .smc-tp-text{font-family:var(--font);font-size:14.5px;line-height:1.5;color:var(--t1);margin:0;letter-spacing:-.005em;}
+.smc-tp-copy{position:absolute;top:10px;right:10px;width:26px;height:26px;border-radius:6px;background:#fff;border:1px solid var(--border);color:var(--t3);display:grid;place-items:center;cursor:pointer;opacity:0;transition:opacity .15s,color .12s,border-color .12s;padding:0;}
+.smc-tp:hover .smc-tp-copy{opacity:1;}
+.smc-tp-copy:hover{color:var(--accent);border-color:var(--accent);}
 
 /* Quotes — italic serif, copy on hover. */
 .smc-quote{position:relative;padding:10px 36px 10px 16px;border-left:2px solid var(--accentL);margin-bottom:10px;border-radius:0 6px 6px 0;transition:background .12s;}
@@ -423,31 +353,13 @@ const css = `
 .smc-foot-btn:hover{background:var(--bg2);color:var(--t1);}
 
 /* Match-badge popover — rendered via portal, position:fixed in
-   viewport space so it escapes any parent overflow clipping.
-   Content is prose-first: a tight "why this matches" summary plus
-   a "things to watch out for" callout. Replaces the old factor
-   breakdown which mirrored numbers the LLM made up anyway. */
+   viewport space so it escapes any parent overflow clipping. The
+   "Things to watch out for" callout was retired now that the
+   reasoning prose itself is query-specific and calls out weak
+   match factors directly. */
 .smc-pop{width:340px;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 20px 50px rgba(0,0,0,.16);padding:18px 20px;z-index:1000;font-family:var(--font);}
-.smc-pop-title{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);font-weight:700;margin-bottom:14px;}
-.smc-pop-section{margin-bottom:14px;}
-.smc-pop-section:last-child{margin-bottom:0;}
-.smc-pop-section-h{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);font-weight:700;margin-bottom:6px;}
-.smc-pop-section-diff .smc-pop-section-h{color:#854F0B;}
+.smc-pop-title{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);font-weight:700;margin-bottom:12px;}
+.smc-pop-section{margin-bottom:0;}
 .smc-pop-text{margin:0;font-size:13px;color:var(--t1);line-height:1.55;letter-spacing:-.005em;}
 .smc-pop-text strong{font-weight:600;color:var(--accent);background:var(--accentLL);padding:1px 6px;border-radius:4px;font-size:12px;letter-spacing:0;}
-.smc-pop-section-diff{padding:10px 12px;background:#FDF6EA;border-radius:8px;border-left:2px solid #EF9F27;}
-.smc-pop-section-diff .smc-pop-text{color:var(--t2);font-size:12.5px;}
-
-/* Inline thumbs in the card footer. Small enough not to compete
-   with the primary "View full story" link, but obvious enough to
-   invite the quick rating. Active state mirrors the modal: green
-   for up, red for down. A brief flash class confirms saves
-   without a full toast. */
-.smc-rate{display:inline-flex;align-items:center;gap:2px;padding:2px;border-radius:8px;transition:background .2s;}
-.smc-rate.flash{background:#E1F5EE;}
-.smc-rate-btn{display:grid;place-items:center;width:30px;height:30px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--t3);cursor:pointer;transition:all .12s;}
-.smc-rate-btn:hover:not(:disabled){border-color:var(--border);color:var(--t1);background:#fff;}
-.smc-rate-btn:disabled{opacity:.5;cursor:not-allowed;}
-.smc-rate-btn.active.up{background:#dcfce7;border-color:#86efac;color:#15803d;}
-.smc-rate-btn.active.down{background:#fee2e2;border-color:#fca5a5;color:#b91c1c;}
 `;
