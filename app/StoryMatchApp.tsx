@@ -280,7 +280,24 @@ type Filters = Record<string, string[]>;
 
 // Sort modes available in the library. "custom" = admin drag-reorder.
 // "az" / "za" = title alphabetical. "recent" / "oldest" = date created.
-type SortBy = "custom" | "recent" | "oldest" | "az" | "za";
+// "date-desc" / "date-asc" = Vimeo publish date (column-driven).
+// "vis-asc" / "vis-desc" = publication status alphabetical.
+// "status-asc" / "status-desc" = cleared level (green → yellow → red).
+type SortBy =
+  | "custom"
+  | "recent" | "oldest"
+  | "az" | "za"
+  | "date-desc" | "date-asc"
+  | "vis-asc" | "vis-desc"
+  | "status-asc" | "status-desc";
+
+// Column-header quick filters — apply ON TOP of the regular Filters
+// modal. Both default to null = "show all rows". Visibility quick
+// filter pins the displayed assets to a single publication state.
+// Status quick filter pins them to a single cleared-level / freshness
+// bucket. State lives in StoryMatchApp so it survives view switches.
+type VisibilityQuickFilter = null | "published" | "draft" | "archived";
+type StatusQuickFilter = null | "cleared" | "attention" | "blocked" | "expired";
 
 interface Route {
   page: "home" | "detail" | "shares" | "feedback";
@@ -882,7 +899,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    properties; the head + every row read from the same vars so widths
    stay in sync without prop drilling. Defaults below match the
    previous grid-template-columns sizes. */
-.lv{--lv-grid:72px 320px 130px 200px 160px;}
+.lv{--lv-grid:72px 320px 130px 130px 200px 160px;}
 /* Five columns: thumb | title | vertical | merged-status | actions.
    The merged-status column groups Publication + Cleared into one block.
    min-width on both head + row prevents horizontal squish — when the
@@ -890,8 +907,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Six grid tracks: thumb | title | vertical | visibility | status | actions.
    Visibility is content-sized (just the dropdown), Status takes the remaining
    space so the cleared trigger has room to breathe. */
-.lv-head{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:920px;}
-.lv-row{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:920px;}
+.lv-head{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);border-radius:var(--r2) var(--r2) 0 0;min-width:1060px;}
+.lv-row{display:grid;grid-template-columns:var(--lv-grid);gap:14px;padding:10px 14px;align-items:center;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .15s;position:relative;min-width:1060px;}
 /* Header cells are click-to-sort buttons. The right edge has a thin
    drag handle to resize the column. Both behaviors coexist — clicks
    on the label open the menu; pointer events on the handle drive
@@ -908,6 +925,11 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-h-menu-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;cursor:pointer;font-size:12.5px;color:var(--t1);text-transform:none;font-weight:500;letter-spacing:0;}
 .lv-h-menu-item:hover{background:var(--bg2);}
 .lv-h-menu-divider{height:1px;background:var(--border);margin:4px 0;}
+.lv-h-menu-section{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);padding:4px 10px 2px;}
+.lv-h-menu-item.active{color:var(--accent);font-weight:600;}
+.lv-h-menu-check{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:3px;border:1.5px solid var(--border2);background:#fff;color:#fff;flex-shrink:0;}
+.lv-h-menu-check.on{background:var(--accent);border-color:var(--accent);}
+.lv-h-filter-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:2px;display:inline-block;}
 .lv-hidden-toolbar{padding:6px 14px;font-size:11.5px;color:var(--t3);background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .lv-hidden-restore{background:none;border:none;color:var(--accent);font-family:var(--font);font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:4px;cursor:pointer;}
 .lv-hidden-restore:hover{background:var(--accentLL);}
@@ -931,6 +953,7 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-title{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .lv-title-h{font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-title-c{font-size:11.5px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv-date{font-size:12.5px;color:var(--t2);font-variant-numeric:tabular-nums;white-space:nowrap;}
 
 /* YouTube-style tooltip shown when a truncated label is hovered.
    Portal-rendered with position:fixed so it escapes any clipping
@@ -2299,6 +2322,13 @@ interface ListViewProps {
   // doesn't own the sort state; it just dispatches the change.
   sortBy?: SortBy;
   onSortChange?: (next: SortBy) => void;
+  // Quick filters driven by the Visibility + Status column headers.
+  // ListView reads these to mark which option is active in the menu;
+  // the parent applies them when building displayAssets.
+  visibilityQuickFilter?: VisibilityQuickFilter;
+  onVisibilityQuickFilter?: (next: VisibilityQuickFilter) => void;
+  statusQuickFilter?: StatusQuickFilter;
+  onStatusQuickFilter?: (next: StatusQuickFilter) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
   orgSettings: OrgSettings;
   // Distinct (color, label) tags used elsewhere in the org — surfaced in
@@ -3516,7 +3546,7 @@ function PublicationSelectCell({
 // (--lvw-<key>) so column widths can be flipped via inline style on
 // the wrapper. `sortable` columns get Sort asc/desc in their header
 // menu; `hideable` controls whether the menu shows the Hide option.
-type ListViewColumnKey = "thumb" | "title" | "vis" | "status" | "actions";
+type ListViewColumnKey = "thumb" | "title" | "date" | "vis" | "status" | "actions";
 
 interface ListViewColumn {
   key: ListViewColumnKey;
@@ -3529,17 +3559,22 @@ interface ListViewColumn {
   // present for sortable columns.
   sortAscKey?: SortBy;
   sortDescKey?: SortBy;
+  // Columns that offer "Show only X" quick filters use this flag —
+  // the menu picks up the additional Visibility / Status options
+  // based on the column key.
+  hasQuickFilter?: boolean;
 }
 
 const LIST_VIEW_COLUMNS: ListViewColumn[] = [
   { key: "thumb", label: "", defaultWidth: 72, minWidth: 56, sortable: false, hideable: false },
   { key: "title", label: "Title", defaultWidth: 320, minWidth: 160, sortable: true, hideable: false, sortAscKey: "az", sortDescKey: "za" },
-  { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: false, hideable: true },
-  { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: false, hideable: true },
-  { key: "actions", label: "Actions", defaultWidth: 160, minWidth: 100, sortable: false, hideable: false },
+  { key: "date", label: "Date", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "date-asc", sortDescKey: "date-desc" },
+  { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "vis-asc", sortDescKey: "vis-desc", hasQuickFilter: true },
+  { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: true, hideable: true, sortAscKey: "status-asc", sortDescKey: "status-desc", hasQuickFilter: true },
+  { key: "actions", label: "", defaultWidth: 160, minWidth: 100, sortable: false, hideable: false },
 ];
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, orgSettings, knownCustomTags }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, orgSettings, knownCustomTags }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state — widths + which columns are hidden. Both
@@ -3649,21 +3684,40 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
       )}
       <div className="lv-head">
         {visibleColumns.map(col => {
-          if (col.key === "thumb") {
-            // The thumb column has no label and no menu — it's just
-            // there so the per-row thumbnail aligns with the head.
-            return <div key={col.key} className="lv-h-cell"/>;
+          // Columns without a label, sort, hide, or quick filter have
+          // nothing useful to put behind a menu — render an empty
+          // cell instead. Currently: thumb (no label) and actions
+          // (label intentionally dropped). Still want them clickable
+          // to resize via the right edge handle.
+          const hasMenu = !!col.label && (col.sortable || col.hideable || col.hasQuickFilter);
+          if (!hasMenu) {
+            return (
+              <div key={col.key} className="lv-h-cell">
+                {col.label ? <span style={{ alignSelf: "center" }}>{col.label}</span> : null}
+                {col.key !== "thumb" && col.key !== "actions" && (
+                  <div
+                    className={`lv-h-resize${resizingKey === col.key ? " dragging" : ""}`}
+                    onPointerDown={(e) => beginResize(col.key, e)}
+                    title="Drag to resize"
+                  />
+                )}
+              </div>
+            );
           }
           const isSorting = !!col.sortable && (sortBy === col.sortAscKey || sortBy === col.sortDescKey);
+          const visFilterActive = col.key === "vis" && !!visibilityQuickFilter;
+          const statusFilterActive = col.key === "status" && !!statusQuickFilter;
+          const filterActive = visFilterActive || statusFilterActive;
           return (
             <div key={col.key} className="lv-h-cell">
               <button
                 type="button"
-                className={`lv-h-btn${isSorting ? " sorting" : ""}`}
+                className={`lv-h-btn${isSorting || filterActive ? " sorting" : ""}`}
                 onClick={(e) => { e.stopPropagation(); setOpenHeaderMenu(o => o === col.key ? null : col.key); }}
-                title={col.sortable ? "Click for sort / hide options" : "Click for column options"}
+                title="Click for sort, filter, and column options"
               >
                 <span>{col.label}</span>
+                {filterActive && <span className="lv-h-filter-dot" aria-hidden="true"/>}
                 <svg className="lv-h-caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="6 9 12 15 18 9"/>
                 </svg>
@@ -3694,15 +3748,80 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                       </div>
                     </>
                   )}
-                  {col.sortable && col.hideable && <div className="lv-h-menu-divider"/>}
+                  {/* Visibility column — quick-filter to a single
+                      publication state. "All" clears the filter. */}
+                  {col.key === "vis" && (
+                    <>
+                      {(col.sortable || col.hideable) && <div className="lv-h-menu-divider"/>}
+                      <div className="lv-h-menu-section">Show only</div>
+                      {([
+                        { v: null, label: "All visibilities" },
+                        { v: "published", label: "Public" },
+                        { v: "draft", label: "Private" },
+                        { v: "archived", label: "Archived" },
+                      ] as { v: VisibilityQuickFilter; label: string }[]).map(opt => {
+                        const on = visibilityQuickFilter === opt.v;
+                        return (
+                          <div
+                            key={String(opt.v)}
+                            className={`lv-h-menu-item${on ? " active" : ""}`}
+                            onClick={() => { onVisibilityQuickFilter?.(opt.v); setOpenHeaderMenu(null); }}
+                          >
+                            <span className={`lv-h-menu-check${on ? " on" : ""}`}>
+                              {on && (
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                              )}
+                            </span>
+                            {opt.label}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                  {/* Status column — quick-filter to a single cleared
+                      bucket. "Expired" is a freshness-specific cut
+                      that pulls the assets flagged by the org's
+                      freshness rule (regardless of overall level). */}
+                  {col.key === "status" && (
+                    <>
+                      {(col.sortable || col.hideable) && <div className="lv-h-menu-divider"/>}
+                      <div className="lv-h-menu-section">Show only</div>
+                      {([
+                        { v: null, label: "All statuses" },
+                        { v: "cleared", label: "Cleared" },
+                        { v: "attention", label: "Needs attention" },
+                        { v: "blocked", label: "Blocked" },
+                        { v: "expired", label: "Expired" },
+                      ] as { v: StatusQuickFilter; label: string }[]).map(opt => {
+                        const on = statusQuickFilter === opt.v;
+                        return (
+                          <div
+                            key={String(opt.v)}
+                            className={`lv-h-menu-item${on ? " active" : ""}`}
+                            onClick={() => { onStatusQuickFilter?.(opt.v); setOpenHeaderMenu(null); }}
+                          >
+                            <span className={`lv-h-menu-check${on ? " on" : ""}`}>
+                              {on && (
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                              )}
+                            </span>
+                            {opt.label}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
                   {col.hideable && (
-                    <div
-                      className="lv-h-menu-item"
-                      onClick={() => { setHidden(h => { const n = new Set(h); n.add(col.key); return n; }); setOpenHeaderMenu(null); }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-10-8-10-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
-                      Hide column
-                    </div>
+                    <>
+                      <div className="lv-h-menu-divider"/>
+                      <div
+                        className="lv-h-menu-item"
+                        onClick={() => { setHidden(h => { const n = new Set(h); n.add(col.key); return n; }); setOpenHeaderMenu(null); }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-10-8-10-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+                        Hide column
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -3757,6 +3876,22 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                     <TruncatedDiv className="lv-title-c">{a.company || a.clientName || "—"}</TruncatedDiv>
                   </div>
                 );
+              }
+              if (col.key === "date") {
+                // Vimeo publish date, formatted human-friendly.
+                // Falls back to em-dash when the asset was created
+                // outside of Vimeo (publishedAt is null).
+                const iso = a.publishedAt || null;
+                let display = "—";
+                if (iso) {
+                  try {
+                    const d = new Date(iso);
+                    if (!Number.isNaN(d.getTime())) {
+                      display = d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+                    }
+                  } catch { /* fall through to em-dash */ }
+                }
+                return <div key={col.key} className="lv-date">{display}</div>;
               }
               if (col.key === "vis") {
                 return (
@@ -5966,6 +6101,11 @@ export default function App(){
   // Library bar: which dropdown is open (Filter, Sort, or +Add) and the
   // current sort. Null = nothing open.
   const[sortBy,setSortBy]=useState<SortBy>("recent");
+  // Column-header quick filters — orthogonal to the regular Filters
+  // modal. Both null = no quick filter active. Set via the Status
+  // and Visibility column dropdowns in ListView.
+  const[visibilityQuickFilter,setVisibilityQuickFilter]=useState<VisibilityQuickFilter>(null);
+  const[statusQuickFilter,setStatusQuickFilter]=useState<StatusQuickFilter>(null);
   const[libMenuOpen,setLibMenuOpen]=useState<"filter"|"sort"|"add"|null>(null);
   const[filtersModalOpen,setFiltersModalOpen]=useState(false);
   // Modal state for standalone quote creation. Opened from the
@@ -6653,6 +6793,24 @@ export default function App(){
     displayAssets=assets.filter(a=>{
       if(a.status === "deleted") return false; // soft-deleted: hidden everywhere
       if(!showAllStatuses && a.status !== "published") return false;
+      // Visibility quick-filter (column header): pin to one
+      // publication state.
+      if(visibilityQuickFilter && a.status !== visibilityQuickFilter) return false;
+      // Status quick-filter (column header): pin to a single cleared
+      // bucket OR specifically to "expired" assets (which can happen
+      // independently of the cleared-level computation).
+      if(statusQuickFilter){
+        if(statusQuickFilter === "expired"){
+          if(!isAssetExpiredFE(a, orgSettings)) return false;
+        } else {
+          const lvl = computeCleared(a, orgSettings).level;
+          // "cleared" → green, "attention" → yellow, "blocked" → red
+          const want = statusQuickFilter === "cleared" ? "green"
+            : statusQuickFilter === "attention" ? "yellow"
+            : "red";
+          if(lvl !== want) return false;
+        }
+      }
       // Every field with an active filter must pass. System fields read
       // from the asset's mapped property (FieldDef.key is camelCase and
       // already aligns with the FE Asset shape — e.g. "companySize");
@@ -6945,11 +7103,44 @@ export default function App(){
       if (bo == null) return -1;
       return ao - bo;
     };
+    // Publish-date comparator (Vimeo's published_at, distinct from
+    // dateCreated which is when the asset was imported). NULLS LAST
+    // so unsynced assets fall to the bottom regardless of direction.
+    const cmpPublished = (a: Asset, b: Asset) => {
+      const pa = a.publishedAt ? new Date(a.publishedAt).getTime() : NaN;
+      const pb = b.publishedAt ? new Date(b.publishedAt).getTime() : NaN;
+      const aNull = !Number.isFinite(pa);
+      const bNull = !Number.isFinite(pb);
+      if (aNull && bNull) return 0;
+      if (aNull) return 1;
+      if (bNull) return -1;
+      return pb - pa; // desc by default; we flip for asc below.
+    };
+    // Visibility comparator — alphabetical on the status string
+    // ("archived" < "draft" < "published"). Good enough for grouping
+    // similar states together at the top vs the bottom.
+    const cmpVisibility = (a: Asset, b: Asset) =>
+      (a.status || "").localeCompare(b.status || "", undefined, { sensitivity: "base" });
+    // Status comparator — sort by cleared level (green=0, yellow=1,
+    // red=2). Used when admin picks Sort asc/desc from the Status
+    // column header.
+    const levelRank = (a: Asset): number => {
+      const lvl = computeCleared(a, orgSettings).level;
+      return lvl === "green" ? 0 : lvl === "yellow" ? 1 : 2;
+    };
+    const cmpStatus = (a: Asset, b: Asset) => levelRank(a) - levelRank(b);
+
     if (sortBy === "custom") displayAssets = [...displayAssets].sort(cmpCustom);
     else if (sortBy === "recent") displayAssets = [...displayAssets].sort(cmpDate);
     else if (sortBy === "oldest") displayAssets = [...displayAssets].sort((a, b) => -cmpDate(a, b));
     else if (sortBy === "az") displayAssets = [...displayAssets].sort(cmpHeadline);
     else if (sortBy === "za") displayAssets = [...displayAssets].sort((a, b) => -cmpHeadline(a, b));
+    else if (sortBy === "date-desc") displayAssets = [...displayAssets].sort(cmpPublished);
+    else if (sortBy === "date-asc") displayAssets = [...displayAssets].sort((a, b) => -cmpPublished(a, b));
+    else if (sortBy === "vis-asc") displayAssets = [...displayAssets].sort(cmpVisibility);
+    else if (sortBy === "vis-desc") displayAssets = [...displayAssets].sort((a, b) => -cmpVisibility(a, b));
+    else if (sortBy === "status-asc") displayAssets = [...displayAssets].sort(cmpStatus);
+    else if (sortBy === "status-desc") displayAssets = [...displayAssets].sort((a, b) => -cmpStatus(a, b));
   }
   const detailAsset=route.page==="detail"?assets.find(a=>a.id===route.id)||null:null;
 
@@ -7488,7 +7679,19 @@ export default function App(){
                       onClick={() => setLibMenuOpen(libMenuOpen === "sort" ? null : "sort")}
                     >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
-                      Sort: {sortBy === "recent" ? "Recent" : sortBy === "oldest" ? "Oldest" : sortBy === "az" ? "A–Z" : sortBy === "za" ? "Z–A" : "Custom"}
+                      Sort: {
+                        sortBy === "recent" ? "Recent"
+                          : sortBy === "oldest" ? "Oldest"
+                          : sortBy === "az" ? "A–Z"
+                          : sortBy === "za" ? "Z–A"
+                          : sortBy === "date-desc" ? "Date ↓"
+                          : sortBy === "date-asc" ? "Date ↑"
+                          : sortBy === "vis-asc" ? "Visibility ↑"
+                          : sortBy === "vis-desc" ? "Visibility ↓"
+                          : sortBy === "status-asc" ? "Status ↑"
+                          : sortBy === "status-desc" ? "Status ↓"
+                          : "Custom"
+                      }
                     </button>
                     {libMenuOpen === "sort" && (
                       <div className="lib-menu">
@@ -7588,10 +7791,14 @@ export default function App(){
                   <p style={{color:"var(--t4)"}}>
                     {smResults?"Try broadening your search":"Adjust your filters above to see more stories."}
                   </p>
-                  {anyFilter && !smResults && (
+                  {(anyFilter || visibilityQuickFilter || statusQuickFilter) && !smResults && (
                     <button
                       type="button"
-                      onClick={() => setFilters({})}
+                      onClick={() => {
+                        setFilters({});
+                        setVisibilityQuickFilter(null);
+                        setStatusQuickFilter(null);
+                      }}
                       style={{marginTop:14,padding:"8px 18px",border:"none",borderRadius:8,background:"var(--accent)",color:"#fff",fontFamily:"var(--font)",fontSize:13,fontWeight:600,cursor:"pointer"}}
                     >Clear all filters</button>
                   )}
@@ -7615,6 +7822,10 @@ export default function App(){
                   onRate={(a)=>setRatingAssetId(a.id)}
                   sortBy={sortBy}
                   onSortChange={setSortBy}
+                  visibilityQuickFilter={visibilityQuickFilter}
+                  onVisibilityQuickFilter={setVisibilityQuickFilter}
+                  statusQuickFilter={statusQuickFilter}
+                  onStatusQuickFilter={setStatusQuickFilter}
                   orgSettings={orgSettings}
                   knownCustomTags={knownCustomTags}
                 />
