@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useAuth } from "@/lib/auth-context";
 import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
+import FeedbackView from "./components/FeedbackView";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./components/FeaturedQuoteRotator";
@@ -188,6 +189,9 @@ interface OrgSettings {
   defaultApprovalStatus: string;
   // Trigger → action map for publication state automation.
   publicationRules: Record<string, PublicationRule>;
+  // Whether sales-rep thumbs-up/down votes nudge StoryMatch ranking.
+  // Defaults to false — admins opt in once feedback warms up.
+  feedbackAffectsRanking: boolean;
 }
 
 interface Source {
@@ -273,7 +277,7 @@ const STORYMATCH_FACTOR_WEIGHTS = {
 type Filters = Record<string, string[]>;
 
 interface Route {
-  page: "home" | "detail" | "shares";
+  page: "home" | "detail" | "shares" | "feedback";
   id: string | null;
 }
 
@@ -4094,8 +4098,37 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
             </button>
           )}
         </RuleCard>
+
+        {/* Sales-rep feedback as a ranking signal. When on, the
+            StoryMatch backend nudges relevance by aggregate thumbs.
+            Off by default — admins flip it on once enough reps have
+            voted that the signal is meaningful. Same on/off card
+            pattern as Expiration / Visibility. */}
+        <RuleCard
+          icon={<ThumbsIcon/>}
+          title="Sales feedback affects ranking"
+          enabled={!!settings.feedbackAffectsRanking}
+          onToggle={(on) => onSave({ ...settings, feedbackAffectsRanking: on })}
+        >
+          <div className="rule-sentence" style={{ fontSize: 12.5, color: "var(--t2)", lineHeight: 1.5 }}>
+            <span>
+              Sales-rep thumbs up and thumbs down nudge StoryMatch ranking on close calls. Requires at least 3 votes per asset before signal applies. Feedback is always collected in the Feedback view — this only controls whether votes also influence search results.
+            </span>
+          </div>
+        </RuleCard>
       </div>
     </div>
+  );
+}
+
+// Thumbs-up glyph for the feedback rule card. Matches the visual
+// weight of TimerIcon + EyeIcon — same stroke + sizing.
+function ThumbsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
+      <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
+    </svg>
   );
 }
 
@@ -5469,6 +5502,7 @@ export default function App(){
     freshnessWarnBeforeDate:null,
     defaultApprovalStatus:"unset",
     publicationRules:{},
+    feedbackAffectsRanking:false,
   });
 
   // Per-org field schema. Loaded once on mount; the Manage Fields panel
@@ -5490,6 +5524,7 @@ export default function App(){
       const hash=window.location.hash.slice(1);
       if(hash.startsWith("/asset/"))setRoute({page:"detail",id:hash.split("/asset/")[1]});
       else if(hash.startsWith("/shares"))setRoute({page:"shares",id:null});
+      else if(hash.startsWith("/feedback"))setRoute({page:"feedback",id:null});
       else setRoute({page:"home",id:null});
       // /rules hash opens the Rules panel from anywhere (e.g. the cleared popover's
       // "Configure freshness Rule →" link). Clear the hash after consuming so back
@@ -6442,6 +6477,30 @@ export default function App(){
     </div></React.Fragment>);
   }
 
+  if(route.page==="feedback"){
+    // Feedback view is accessible to both admins and sales reps. The
+    // view itself branches on role so admins see aggregates + comments
+    // while reps see only their own ratings.
+    return(<React.Fragment><style>{css}</style><div style={{minHeight:"100vh",background:"var(--bg)"}}>
+      <header className="hdr"><div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}></div><div className="hdr-r"><span className="badge">{assets.length} assets</span></div></header>
+      <FeedbackView
+        assets={assets.map(a => ({
+          id: a.id,
+          headline: a.headline,
+          company: a.company,
+          clientName: a.clientName,
+          vertical: a.vertical,
+          thumbnail: a.thumbnail,
+          assetType: a.assetType,
+          status: a.status,
+        }))}
+        role={org?.role === "admin" ? "admin" : "sales"}
+        authHeaders={authHeaders}
+        onBack={goHome}
+      />
+    </div></React.Fragment>);
+  }
+
   return (
     <React.Fragment>
       <style>{css}</style>
@@ -6488,6 +6547,17 @@ export default function App(){
                   <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
                 </svg>
                 My shares
+              </button>
+              <button
+                onClick={()=>{window.location.hash="/feedback";}}
+                title={org?.role === "admin" ? "See aggregate feedback from your sales team" : "Rate testimonials anonymously"}
+                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--accent)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)",marginRight:6,display:"inline-flex",alignItems:"center",gap:5}}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
+                  <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
+                </svg>
+                Feedback
               </button>
               {!(isAdmin && adminMode) && (
                 <button

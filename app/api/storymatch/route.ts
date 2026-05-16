@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { fetchOrgAggregates, FEEDBACK_MIN_VOTES_FOR_RANKING, type FeedbackAggregate } from "@/lib/feedback-dal";
 
 async function getCurrentUserOrg(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -113,6 +114,23 @@ function weightedRelevance(f: FactorScores): number {
     + f.painPoints * FACTOR_WEIGHTS.painPoints
     + f.quoteMatch * FACTOR_WEIGHTS.quoteMatch,
   );
+}
+
+// Map an aggregate of sales-rep feedback into a relevance-score
+// adjustment. The shape: a single thumbs-up shifts +1.5; thumbs-down
+// shifts -1.5; capped at ±10 so a brigading run can never override
+// genuine semantic match. Assets with fewer than the confidence floor
+// votes contribute 0 — they're treated as "no signal" rather than
+// being penalized for newness.
+//
+// This is deliberately a small effect — feedback is a tie-breaker, not
+// a primary signal. The point is to nudge close calls based on which
+// testimonials reps have actually used successfully.
+function feedbackBoost(agg: FeedbackAggregate | undefined): number {
+  if (!agg) return 0;
+  if (agg.total < FEEDBACK_MIN_VOTES_FOR_RANKING) return 0;
+  const raw = agg.netScore * 1.5;
+  return Math.max(-10, Math.min(10, raw));
 }
 
 // ───────────────────────────────────────────────────────────
@@ -486,8 +504,47 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
+  // ── Feedback ranking pass ──────────────────────────────────
+  // Read the org's flag and, if on, fold sales-rep feedback into
+  // the final relevance score. Run AFTER Claude's synthesis so we
+  // don't bias the LLM's reasoning with raw counts (the LLM is too
+  // easily steered by numbers). Deterministic math here keeps the
+  // effect explainable + capped.
+  const { data: orgFlag } = await supabaseAdmin
+    .from("organizations")
+    .select("feedback_affects_ranking")
+    .eq("id", ctx.orgId)
+    .maybeSingle();
+  let feedbackAdjusted: { match: AIMatch; adjustedScore: number; agg?: FeedbackAggregate }[] = matches.map(m => ({ match: m, adjustedScore: m.relevanceScore }));
+  if (orgFlag?.feedback_affects_ranking) {
+    const aggregates = await fetchOrgAggregates(ctx.orgId);
+    feedbackAdjusted = matches.map(m => {
+      const agg = aggregates.get(m.id);
+      const boost = feedbackBoost(agg);
+      return {
+        match: m,
+        adjustedScore: Math.max(0, Math.min(100, m.relevanceScore + boost)),
+        agg,
+      };
+    });
+    // Re-sort by adjusted score so the rank order reflects feedback.
+    feedbackAdjusted.sort((a, b) => b.adjustedScore - a.adjustedScore);
+  }
+
   return NextResponse.json({
-    matches: matches.map((m, i) => ({ ...m, rank: i + 1 })),
+    matches: feedbackAdjusted.map((entry, i) => ({
+      ...entry.match,
+      relevanceScore: entry.adjustedScore,
+      rank: i + 1,
+      // Surface aggregate counts so the FE can show them in the
+      // hover popover without an extra round trip. Always present
+      // when the org's flag is on; undefined when feedback isn't
+      // affecting ranking (FE hides the indicator entirely).
+      feedback: orgFlag?.feedback_affects_ranking && entry.agg
+        ? { up: entry.agg.up, down: entry.agg.down, total: entry.agg.total }
+        : undefined,
+    })),
     candidatesFound: filteredCandidates.length,
+    feedbackAffectsRanking: !!orgFlag?.feedback_affects_ranking,
   });
 }

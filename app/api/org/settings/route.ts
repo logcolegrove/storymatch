@@ -50,6 +50,11 @@ type OrgSettingsFE = {
   defaultApprovalStatus: string;
   // Publication rules — trigger → action mappings.
   publicationRules: Record<string, PublicationRule>;
+  // Sales-rep feedback ranking signal. When true, the StoryMatch
+  // backend nudges relevance scores based on aggregate thumbs-up/down
+  // per asset (requires ≥3 votes per asset to take effect; capped at
+  // ±10 points). Default false — admins opt in once feedback warms up.
+  feedbackAffectsRanking: boolean;
 };
 
 export async function GET(req: NextRequest) {
@@ -57,7 +62,7 @@ export async function GET(req: NextRequest) {
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { data, error } = await supabaseAdmin
     .from("organizations")
-    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules")
+    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules, feedback_affects_ranking")
     .eq("id", ctx.orgId)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -66,6 +71,7 @@ export async function GET(req: NextRequest) {
     freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
     defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
     publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
+    feedbackAffectsRanking: !!data?.feedback_affects_ranking,
   };
   return NextResponse.json(settings);
 }
@@ -105,6 +111,7 @@ export async function PUT(req: NextRequest) {
     freshness_warn_before_date?: string | null;
     default_approval_status?: string;
     publication_rules?: Record<string, PublicationRule>;
+    feedback_affects_ranking?: boolean;
   };
   const updates: DbUpdates = {};
   if (body.freshnessWarnAfterMonths !== undefined) {
@@ -132,6 +139,12 @@ export async function PUT(req: NextRequest) {
     }
     updates.publication_rules = body.publicationRules;
   }
+  if (body.feedbackAffectsRanking !== undefined) {
+    if (typeof body.feedbackAffectsRanking !== "boolean") {
+      return NextResponse.json({ error: "feedbackAffectsRanking must be a boolean" }, { status: 400 });
+    }
+    updates.feedback_affects_ranking = body.feedbackAffectsRanking;
+  }
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
@@ -140,7 +153,7 @@ export async function PUT(req: NextRequest) {
     .from("organizations")
     .update(updates)
     .eq("id", ctx.orgId)
-    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules")
+    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules, feedback_affects_ranking")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -184,6 +197,7 @@ export async function PUT(req: NextRequest) {
     freshnessWarnBeforeDate: (data?.freshness_warn_before_date as string | null) ?? null,
     defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
     publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
+    feedbackAffectsRanking: !!data?.feedback_affects_ranking,
   };
   return NextResponse.json(settings);
 }
