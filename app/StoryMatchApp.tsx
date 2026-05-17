@@ -10,6 +10,7 @@ import RateAssetModal from "./components/RateAssetModal";
 import AssetFeedbackModal from "./components/AssetFeedbackModal";
 import FiltersModal from "./components/FiltersModal";
 import InsightsView from "./components/InsightsView";
+import ShowcasesView from "./components/ShowcasesView";
 import ColumnControlPanel from "./components/ColumnControlPanel";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
@@ -8450,13 +8451,17 @@ export default function App(){
                 </svg>
                 Insights
               </button>
-              <button className="rail-btn disabled" title="Embed (coming soon)">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <polyline points="16 18 22 12 16 6"/>
-                  <polyline points="8 6 2 12 8 18"/>
+              <button
+                className={`rail-btn ${adminSection==="showcases"?"on":""}`}
+                onClick={()=>setAdminSection(adminSection==="showcases"?null:"showcases")}
+                title="Showcases — bundle assets into branded shareable pages"
+              >
+                {/* Stacked rectangles — evokes "a collection of pages". */}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="7" y="3" width="14" height="14" rx="2"/>
+                  <path d="M3 7v12a2 2 0 0 0 2 2h12"/>
                 </svg>
-                Embed
-                <span className="rail-soon">SOON</span>
+                Showcases
               </button>
               <div className="rail-spacer"/>
               <div className="rail-foot">
@@ -8688,6 +8693,22 @@ export default function App(){
                     setSearch(query);
                   }
                 }}
+              />
+            </div>
+          ) : isAdmin && adminMode && adminSection === "showcases" ? (
+            <div className="main-area">
+              <ShowcasesView
+                authHeaders={authHeaders}
+                assets={assets.map(a => ({
+                  id: a.id,
+                  headline: a.headline,
+                  company: a.company,
+                  clientName: a.clientName,
+                  thumbnail: a.thumbnail,
+                  status: a.status,
+                  assetType: a.assetType,
+                }))}
+                onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); }}
               />
             </div>
           ) : (
