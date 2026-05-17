@@ -942,9 +942,17 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    on the label open the menu; pointer events on the handle drive
    resize. */
 .lv-h-cell{position:relative;display:flex;align-items:center;height:42px;}
-.lv-h-cell.draggable{cursor:grab;}
-.lv-h-cell.draggable:active,.lv-h-cell.dragging{cursor:grabbing;}
-.lv-h-cell.dragging{z-index:5;}
+/* No grab cursor on draggable cells/rows by default — Logan's feedback:
+   most of the time users are clicking to open or sort, not reordering.
+   Showing a grab affordance unprompted is more noise than signal.
+   The dragging state still uses grabbing to confirm the action. */
+.lv-h-cell.dragging{z-index:5;cursor:grabbing;}
+
+/* When a drag is in progress anywhere in the table, suppress text
+   selection globally so the user's drag doesn't accidentally
+   highlight cell text as they pass over rows. The is-dragging class
+   gets toggled on document.body via the drag handlers below. */
+body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-user-select:none !important;}
 
 /* Floating clone of the dragged column header — portal-rendered
    so it escapes the table overflow. Compact chip that wraps just
@@ -956,9 +964,8 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 /* Floating clone of the dragged row — same idea but stacked
    (company on top of headline) so admins know which asset is
    in flight. Sized to its content; doesn't try to mirror the
-   full row's columns. */
-.lv-row.reorderable{cursor:grab;}
-.lv-row.reorderable:active{cursor:grabbing;}
+   full row's columns. Cursor stays default until an actual
+   drag is in progress (see body.lv-is-dragging). */
 .lv-row-drag-clone{display:flex;flex-direction:column;gap:2px;padding:10px 16px;background:#fff;border:1px solid var(--accent);border-radius:9px;box-shadow:0 14px 32px rgba(0,0,0,.22);font-family:var(--font);pointer-events:none;z-index:1200;max-width:340px;}
 .lv-row-drag-clone-co{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);font-weight:700;}
 .lv-row-drag-clone-h{font-size:14px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -3893,6 +3900,12 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         if (Math.abs(dx) < 5) return;
         started = true;
         setOpenHeaderMenu(null); // make sure menu doesn't pop
+        // Suppress text selection while the drag is active so the
+        // user's gesture doesn't accidentally highlight cell content
+        // as it sweeps across the table.
+        if (typeof document !== "undefined") {
+          document.body.classList.add("lv-is-dragging");
+        }
       }
       // Compute drop target by walking the (unmoved) header cell
       // rects and finding which midpoint the pointer is past.
@@ -3926,6 +3939,9 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     const onUp = () => {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      if (typeof document !== "undefined") {
+        document.body.classList.remove("lv-is-dragging");
+      }
       if (started && lastTargetIdx !== fromIdx) {
         const next = [...reorderableKeys];
         const [m] = next.splice(fromIdx, 1);
@@ -3983,6 +3999,12 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
       if (!started) {
         if (Math.abs(dy) < 5) return;
         started = true;
+        // Globally suppress text selection while the drag is live —
+        // otherwise sweeping the pointer down across rows highlights
+        // cell text as a selection.
+        if (typeof document !== "undefined") {
+          document.body.classList.add("lv-is-dragging");
+        }
       }
       // Walk row rects and find the slot whose midpoint the pointer
       // is past. Skip the dragged row itself.
@@ -4013,6 +4035,9 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     const onUp = () => {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      if (typeof document !== "undefined") {
+        document.body.classList.remove("lv-is-dragging");
+      }
       if (started && lastTargetIdx !== fromIdx) {
         // Suppress the click-to-open that fires after pointerup.
         rowDragJustEnded.current = true;
