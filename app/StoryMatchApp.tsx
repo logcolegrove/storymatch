@@ -8,7 +8,7 @@ import MySharesView from "./components/MySharesView";
 import FeedbackView from "./components/FeedbackView";
 import RateAssetModal from "./components/RateAssetModal";
 import FiltersModal from "./components/FiltersModal";
-import SearchLogsView from "./components/SearchLogsView";
+import InsightsView from "./components/InsightsView";
 import ColumnControlPanel from "./components/ColumnControlPanel";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
@@ -380,6 +380,10 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .rail-spacer{flex:1;}
 
 .admin-panel{width:340px;background:#fff;border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;animation:fadeIn .2s ease;position:sticky;top:56px;height:calc(100vh - 56px);align-self:flex-start;z-index:15;}
+/* Insights is no longer a slide-in admin panel — it owns the main
+   area as a full-page view (rendered inside .main-area). The rail
+   button still toggles adminSection === "insights", but the panel
+   itself short-circuits and the library content swaps out instead. */
 .ap-head{padding:18px 20px 14px;border-bottom:1px solid var(--border);}
 .ap-title{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;}
 .ap-sub{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4;}
@@ -8096,7 +8100,7 @@ export default function App(){
             </aside>
           )}
 
-          {isAdmin && adminMode && adminSection && (
+          {isAdmin && adminMode && adminSection && adminSection !== "insights" && (
             <aside className="admin-panel">
               {adminSection==="import" && (
                 <SourcesPanel
@@ -8245,27 +8249,8 @@ export default function App(){
                   authHeaders={authHeaders}
                 />
               )}
-              {adminSection==="insights" && (
-                <SearchLogsView
-                  authHeaders={authHeaders}
-                  onRerunSearch={(query, source) => {
-                    // Close the admin panel so the results are
-                    // immediately visible behind it.
-                    setAdminSection(null);
-                    if (source === "storymatch") {
-                      setSmQuery(query);
-                      runStoryMatch(query);
-                    } else {
-                      // Library search: clear any active StoryMatch
-                      // results so the library view re-takes the
-                      // canvas, then drop the query into the search
-                      // field so the filter applies live.
-                      if (smResults) clearSm();
-                      setSearch(query);
-                    }
-                  }}
-                />
-              )}
+              {/* Insights is now a main-area view, not a slide-in panel.
+                  See the InsightsView mount inside .main-area below. */}
               {adminSection==="rules" && (
                 <RulesPanel
                   settings={orgSettings}
@@ -8309,6 +8294,29 @@ export default function App(){
             </aside>
           )}
 
+          {isAdmin && adminMode && adminSection === "insights" ? (
+            <div className="main-area">
+              <InsightsView
+                authHeaders={authHeaders}
+                assets={assets}
+                fieldDefs={fieldDefs}
+                onRerunSearch={(query, source) => {
+                  // Switch back to the library canvas so the rerun's
+                  // results are immediately visible. The rail button
+                  // stays clickable, so the admin can pop back to
+                  // Insights with one click after they're done.
+                  setAdminSection(null);
+                  if (source === "storymatch") {
+                    setSmQuery(query);
+                    runStoryMatch(query);
+                  } else {
+                    if (smResults) clearSm();
+                    setSearch(query);
+                  }
+                }}
+              />
+            </div>
+          ) : (
           <div className="main-area">
 
             <div className="search-area">
@@ -8917,6 +8925,7 @@ export default function App(){
             </div>
 
           </div>
+          )}
         </div>
 
         {toast && <div className="toast">{toast}</div>}
