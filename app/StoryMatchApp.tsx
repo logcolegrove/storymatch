@@ -2525,6 +2525,15 @@ interface ListViewProps {
   // columnOrder). Lets the parent know the current state so the
   // "Save as default" affordance can grab it.
   onLayoutChange?: (current: { columnOrder: string[]; hidden: string[]; widths: Record<string, number> }) => void;
+  // True when an admin is in "Preview as sales rep" mode. Changes
+  // ListView behavior in two ways: (1) the initial state seeds from
+  // orgDefaults (not the admin's personal localStorage), so the
+  // admin actually sees what a sales rep would see, and (2) layout
+  // changes don't persist to localStorage — preview is ephemeral.
+  // Parent should also pass a key tied to this flag so React
+  // remounts ListView on the transition, giving us a fresh state
+  // initialization each time.
+  previewMode?: boolean;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -3811,7 +3820,7 @@ function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): Lis
   return null;
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, canManage = true, orgDefaults, onLayoutChange }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, canManage = true, orgDefaults, onLayoutChange, previewMode = false }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state. All three persist to localStorage so admins
@@ -3822,13 +3831,19 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
   //                  except the pinned thumb + title pair). Custom
   //                  field keys live here too once added.
   // Resolution order for each piece of layout state, on first mount:
+  //
+  // In preview-as-sales mode (previewMode=true):
+  //   org default → hardcoded fallback. localStorage is SKIPPED so the
+  //   admin actually sees what a fresh sales rep would see.
+  //
+  // Normally (previewMode=false):
   //   1. user's localStorage  — they've customized; their preference wins
   //   2. org default          — admin-curated baseline (new sales reps)
   //   3. hardcoded fallback   — built-in defaults when neither exists
   const [widths, setWidths] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
     for (const c of BUILT_IN_LIST_VIEW_COLUMNS) init[c.key] = c.defaultWidth;
-    if (typeof window !== "undefined") {
+    if (!previewMode && typeof window !== "undefined") {
       try {
         const raw = localStorage.getItem("storymatch.lv.widths");
         if (raw) {
@@ -3840,7 +3855,6 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         }
       } catch { /* fall through to org default */ }
     }
-    // No user localStorage → fall back to org default if present.
     if (orgDefaults?.widths) {
       for (const [k, v] of Object.entries(orgDefaults.widths)) {
         if (typeof v === "number" && v >= 80) init[k] = v;
@@ -3849,7 +3863,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     return init;
   });
   const [hidden, setHidden] = useState<Set<string>>(() => {
-    if (typeof window !== "undefined") {
+    if (!previewMode && typeof window !== "undefined") {
       try {
         const raw = localStorage.getItem("storymatch.lv.hidden");
         if (raw) return new Set(JSON.parse(raw) as string[]);
@@ -3859,7 +3873,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     return new Set();
   });
   const [columnOrder, setColumnOrder] = useState<string[]>(() => {
-    if (typeof window !== "undefined") {
+    if (!previewMode && typeof window !== "undefined") {
       try {
         const raw = localStorage.getItem("storymatch.lv.columnOrder");
         if (raw) {
@@ -3873,18 +3887,21 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     }
     return [...DEFAULT_REORDERABLE_KEYS];
   });
+  // Persistence is suppressed in preview-as-sales mode — the admin is
+  // curating what the team default should look like, and their tweaks
+  // should NOT bleed back into their personal admin layout.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (previewMode || typeof window === "undefined") return;
     try { localStorage.setItem("storymatch.lv.widths", JSON.stringify(widths)); } catch { /* quota etc — non-fatal */ }
-  }, [widths]);
+  }, [widths, previewMode]);
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (previewMode || typeof window === "undefined") return;
     try { localStorage.setItem("storymatch.lv.hidden", JSON.stringify(Array.from(hidden))); } catch { /* non-fatal */ }
-  }, [hidden]);
+  }, [hidden, previewMode]);
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (previewMode || typeof window === "undefined") return;
     try { localStorage.setItem("storymatch.lv.columnOrder", JSON.stringify(columnOrder)); } catch { /* non-fatal */ }
-  }, [columnOrder]);
+  }, [columnOrder, previewMode]);
   // Push every layout change up to the parent so the "Save as
   // default" affordance can grab the current state on demand.
   useEffect(() => {
@@ -7190,10 +7207,44 @@ export default function App(){
   // Persist viewMode whenever it changes. Once set, this localStorage
   // entry takes precedence over the admin default on subsequent loads
   // — so the user's choice sticks even after admin re-saves defaults.
+  //
+  // Skipped while an admin is in "Preview as sales rep" mode so their
+  // preview-only viewMode tweaks don't poison their personal admin
+  // layout. The same view-toggle pill changes both because they share
+  // the same React state — but the persistence-side gate keeps preview
+  // ephemeral.
   useEffect(()=>{
     if (typeof window === "undefined") return;
+    if (isAdmin && !adminMode) return;
     try { localStorage.setItem("storymatch.lv.viewMode", viewMode); } catch { /* non-fatal */ }
-  },[viewMode]);
+  },[viewMode, isAdmin, adminMode]);
+
+  // When an admin enters preview-as-sales (adminMode flips true→false),
+  // reset viewMode to the org-saved default so the preview reflects
+  // what a fresh sales rep would actually land on. When they exit
+  // preview (false→true), restore from their personal localStorage so
+  // their admin-mode preference comes back. Ref-guarded so we don't
+  // re-fire on every render.
+  const previousAdminMode = React.useRef(adminMode);
+  useEffect(()=>{
+    if (!isAdmin) return;
+    if (previousAdminMode.current === adminMode) return;
+    const wasAdmin = previousAdminMode.current;
+    previousAdminMode.current = adminMode;
+    if (wasAdmin && !adminMode) {
+      // Entering preview — seed from org default if present.
+      const saved = orgSettings.defaultListView?.viewMode;
+      if (saved === "grid" || saved === "list") setViewMode(saved);
+    } else if (!wasAdmin && adminMode) {
+      // Exiting preview — restore admin's personal pick.
+      if (typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem("storymatch.lv.viewMode");
+          if (raw === "grid" || raw === "list") setViewMode(raw);
+        } catch { /* ignore */ }
+      }
+    }
+  },[adminMode, isAdmin, orgSettings.defaultListView]);
 
   // Load the org's field schema on mount. Server auto-seeds defaults
   // for new orgs so first read always returns a populated array.
@@ -8763,15 +8814,20 @@ export default function App(){
                     )}
                   </div>
 
-                  {/* "Save as default" pill — admin-only, visible when
-                      the admin's current viewMode + column layout
-                      differs from the saved org default (or when no
-                      default exists yet). Clicking PUTs the current
-                      state to /api/org/settings; new sales reps with
-                      no localStorage layout pick it up on next load.
-                      Hidden during preview-as-sales mode — saving
-                      from a preview-curated state would be misleading. */}
-                  {isAdmin && adminMode && (() => {
+                  {/* "Save as default" pill — appears ONLY while an
+                      admin is in "Preview as sales rep" mode AND
+                      their preview-mode layout differs from the
+                      saved org default. The admin's workflow:
+                      enter preview, tweak the layout to what they
+                      want sales to see, hit save. Clicking PUTs the
+                      current state to /api/org/settings; new sales
+                      reps with no localStorage layout pick it up on
+                      next load. Disappears after a successful save
+                      (current now matches default → no diff).
+                      Hidden entirely in admin mode — the admin's
+                      personal layout shouldn't drive what the team
+                      sees by default. */}
+                  {isAdmin && !adminMode && (() => {
                     const saved = orgSettings.defaultListView;
                     const dirty = !saved
                       || saved.viewMode !== viewMode
@@ -8996,6 +9052,8 @@ export default function App(){
                   canManage={isAdmin && adminMode}
                   orgDefaults={orgSettings.defaultListView}
                   onLayoutChange={setCurrentListLayout}
+                  previewMode={isAdmin && !adminMode}
+                  key={isAdmin && !adminMode ? "lv-preview" : "lv-admin"}
                 />
               ) : (
                 (() => {
