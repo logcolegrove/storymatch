@@ -945,6 +945,23 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .lv-h-cell.draggable{cursor:grab;}
 .lv-h-cell.draggable:active,.lv-h-cell.dragging{cursor:grabbing;}
 .lv-h-cell.dragging{z-index:5;}
+
+/* Floating clone of the dragged column header — portal-rendered
+   so it escapes the table overflow. Compact chip that wraps just
+   the label + caret, lifted with a shadow so it reads as "in
+   flight." Sized to its content rather than the full column width
+   so the visual feels balanced regardless of column width. */
+.lv-h-drag-clone{display:inline-flex;align-items:center;gap:5px;padding:0 14px;background:#fff;border:1px solid var(--accent);border-radius:7px;box-shadow:0 10px 28px rgba(0,0,0,.22);color:var(--accent);font-family:var(--font);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;pointer-events:none;z-index:1200;white-space:nowrap;transform:translateY(-1px);}
+
+/* Floating clone of the dragged row — same idea but stacked
+   (company on top of headline) so admins know which asset is
+   in flight. Sized to its content; doesn't try to mirror the
+   full row's columns. */
+.lv-row.reorderable{cursor:grab;}
+.lv-row.reorderable:active{cursor:grabbing;}
+.lv-row-drag-clone{display:flex;flex-direction:column;gap:2px;padding:10px 16px;background:#fff;border:1px solid var(--accent);border-radius:9px;box-shadow:0 14px 32px rgba(0,0,0,.22);font-family:var(--font);pointer-events:none;z-index:1200;max-width:340px;}
+.lv-row-drag-clone-co{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);font-weight:700;}
+.lv-row-drag-clone-h{font-size:14px;font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-h-btn{display:inline-flex;align-items:center;gap:5px;background:none;border:none;padding:0;cursor:pointer;color:var(--t3);font:inherit;text-transform:inherit;letter-spacing:inherit;}
 .lv-h-btn:hover{color:var(--t1);}
 .lv-h-btn .lv-h-caret{opacity:0;transition:opacity .12s;}
@@ -2423,6 +2440,10 @@ interface ListViewProps {
   // "Manage fields →" link. Defined here so the panel can use it
   // without ListView needing to know about adminSection state.
   onOpenFieldsPanel?: () => void;
+  // Called on row drag-reorder with the new ordering of asset IDs
+  // (in display order). Parent persists via /api/assets/reorder +
+  // flips sortBy to "custom" so the new order sticks.
+  onReorderRows?: (newOrderIds: string[]) => void;
   // Org-level Rules that drive the freshness signal in the Cleared popover.
   orgSettings: OrgSettings;
   // Distinct (color, label) tags used elsewhere in the org — surfaced in
@@ -3708,7 +3729,7 @@ function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): Lis
   return null;
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, orgSettings, knownCustomTags }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state. All three persist to localStorage so admins
@@ -3845,6 +3866,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     pointerX: number;      // viewport x of pointer
     startX: number;        // pointer x at drag start
     dragColWidth: number;  // width of dragged column (drives shift distance)
+    cellRect: DOMRect;     // rect of the dragged header at drag start
   } | null>(null);
   const headerCellRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
@@ -3859,6 +3881,8 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     const dragCol = resolveColumnByKey(key, fieldDefs);
     if (!dragCol) return;
     const dragColWidth = widths[key] ?? dragCol.defaultWidth;
+    const cellEl = headerCellRefs.current.get(key);
+    const cellRect = cellEl ? cellEl.getBoundingClientRect() : new DOMRect(0, 0, dragColWidth, 42);
     const startX = e.clientX;
     let started = false;
     let lastTargetIdx = fromIdx;
@@ -3896,6 +3920,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         pointerX: ev.clientX,
         startX,
         dragColWidth,
+        cellRect,
       });
     };
     const onUp = () => {
@@ -3912,6 +3937,109 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     };
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
+  };
+
+  // ── Row drag-reorder ─────────────────────────────────────────
+  // Same pattern as the column header drag: threshold-based click /
+  // drag discrimination, floating portal clone follows the cursor,
+  // other rows magic-rearrange via translateY. On drop, the new
+  // order propagates upward via onReorderRows — the parent persists
+  // through /api/assets/reorder and flips sortBy to "custom" so the
+  // order sticks.
+  const [rowDrag, setRowDrag] = useState<{
+    assetId: string;
+    fromIdx: number;
+    targetIdx: number;
+    pointerY: number;
+    startY: number;
+    rowRect: DOMRect;
+    rowHeight: number;
+    headline: string;
+    company: string;
+  } | null>(null);
+  const rowElsRef = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  // After a real drag (>5px) ends, suppress the upcoming click so
+  // the row doesn't navigate to the asset detail page on drop.
+  const rowDragJustEnded = useRef(false);
+
+  const beginRowDrag = (assetId: string, fromIdx: number, e: React.PointerEvent) => {
+    // Bail when the pointer landed on an interactive element inside
+    // the row — buttons, selects, the dropdown menus, the hover
+    // action icons, etc. Those have their own behavior and we
+    // don't want a drag to swallow them.
+    const target = e.target as HTMLElement;
+    if (target.closest("button, select, input, a, [role='switch'], .lv-pub-select, .dots-pop")) return;
+    if (!onReorderRows) return;
+    const rowEl = rowElsRef.current.get(assetId);
+    if (!rowEl) return;
+    const rowRect = rowEl.getBoundingClientRect();
+    const startY = e.clientY;
+    let started = false;
+    let lastTargetIdx = fromIdx;
+    const asset = assets[fromIdx];
+
+    const onMove = (ev: PointerEvent) => {
+      const dy = ev.clientY - startY;
+      if (!started) {
+        if (Math.abs(dy) < 5) return;
+        started = true;
+      }
+      // Walk row rects and find the slot whose midpoint the pointer
+      // is past. Skip the dragged row itself.
+      let target = assets.length - 1;
+      for (let i = 0; i < assets.length; i++) {
+        const a = assets[i];
+        if (a.id === assetId) continue;
+        const el = rowElsRef.current.get(a.id);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        const mid = r.top + r.height / 2;
+        if (ev.clientY < mid) { target = i; break; }
+      }
+      if (target > fromIdx) target -= 1;
+      lastTargetIdx = target;
+      setRowDrag({
+        assetId,
+        fromIdx,
+        targetIdx: target,
+        pointerY: ev.clientY,
+        startY,
+        rowRect,
+        rowHeight: rowRect.height,
+        headline: asset?.headline || "",
+        company: asset?.company || asset?.clientName || "",
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      if (started && lastTargetIdx !== fromIdx) {
+        // Suppress the click-to-open that fires after pointerup.
+        rowDragJustEnded.current = true;
+        setTimeout(() => { rowDragJustEnded.current = false; }, 200);
+        const visibleIds = assets.map(a => a.id);
+        const next = [...visibleIds];
+        const [moved] = next.splice(fromIdx, 1);
+        next.splice(lastTargetIdx, 0, moved);
+        onReorderRows?.(next);
+      }
+      setRowDrag(null);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  };
+
+  const transformForRow = (idx: number, assetId: string): string | undefined => {
+    if (!rowDrag) return undefined;
+    if (assetId === rowDrag.assetId) return undefined;
+    const { fromIdx, targetIdx, rowHeight } = rowDrag;
+    if (targetIdx > fromIdx && idx > fromIdx && idx <= targetIdx) {
+      return `translateY(-${rowHeight}px)`;
+    }
+    if (targetIdx < fromIdx && idx >= targetIdx && idx < fromIdx) {
+      return `translateY(${rowHeight}px)`;
+    }
+    return undefined;
   };
 
   // Per-column transform during drag. Magic-rearrange: every
@@ -3969,22 +4097,17 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
           const draggable = col.key !== "thumb" && col.key !== "title";
           const isDragging = colDrag?.key === col.key;
           // Two distinct visual treatments during a drag:
-          //   • Dragged cell: follows the cursor in real time via
-          //     translateX(pointerX - startX), elevated z-index +
-          //     subtle shadow so it reads as "this is being dragged."
-          //     No transition so it tracks the pointer instantly.
+          //   • Dragged cell (source): fades to a faint placeholder
+          //     in its original grid slot so the user can see where
+          //     it came from. A floating clone (rendered separately
+          //     via portal) is the visible piece that follows the
+          //     cursor.
           //   • Other cells: magic-rearrange via the transformForCol
           //     helper, smooth transition.
-          const cellStyle: React.CSSProperties = isDragging && colDrag ? {
-            transform: `translateX(${colDrag.pointerX - colDrag.startX}px)`,
-            opacity: 0.92,
-            zIndex: 20,
-            position: "relative",
-            background: "var(--bg)",
-            boxShadow: "0 6px 18px rgba(0,0,0,.18)",
-            borderRadius: 6,
+          const cellStyle: React.CSSProperties = isDragging ? {
+            opacity: 0.25,
             transition: "none",
-            cursor: "grabbing",
+            pointerEvents: "none",
           } : {
             transform: transformForCol(col.key),
             transition: colDrag ? "transform .15s ease" : undefined,
@@ -4247,7 +4370,59 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
           onOpenFieldsPanel={onOpenFieldsPanel}
         />
       )}
-      {assets.map((a) => {
+      {/* Floating clone of the dragged ROW. Compact chip showing the
+          asset's company + headline, follows the cursor's Y from
+          drag start. Source row stays in the table as a faded
+          placeholder; other rows magic-rearrange via translateY. */}
+      {rowDrag && typeof document !== "undefined" && createPortal(
+        (() => {
+          const dy = rowDrag.pointerY - rowDrag.startY;
+          return (
+            <div
+              className="lv-row-drag-clone"
+              style={{
+                position: "fixed",
+                top: rowDrag.rowRect.top + dy,
+                left: rowDrag.rowRect.left + 24,
+              }}
+            >
+              <span className="lv-row-drag-clone-co">{rowDrag.company || "—"}</span>
+              <span className="lv-row-drag-clone-h">{rowDrag.headline || "Untitled"}</span>
+            </div>
+          );
+        })(),
+        document.body,
+      )}
+      {/* Floating clone of the dragged column header. Rendered via
+          portal so it escapes the table's overflow + scroll. Shows
+          a compact chip with the column's label + caret, follows
+          the cursor's X position from drag start. The source cell
+          stays in the grid as a faded placeholder. */}
+      {colDrag && typeof document !== "undefined" && createPortal(
+        (() => {
+          const col = resolveColumnByKey(colDrag.key, fieldDefs);
+          if (!col) return null;
+          const dx = colDrag.pointerX - colDrag.startX;
+          return (
+            <div
+              className="lv-h-drag-clone"
+              style={{
+                position: "fixed",
+                top: colDrag.cellRect.top,
+                left: colDrag.cellRect.left + dx,
+                height: colDrag.cellRect.height,
+              }}
+            >
+              <span>{col.label}</span>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </div>
+          );
+        })(),
+        document.body,
+      )}
+      {assets.map((a, rowIdx) => {
         const isArchived = a.status === "archived";
         const isDraft = a.status === "draft";
         const statusCls = isArchived ? " archived" : isDraft ? " draft" : "";
@@ -4259,6 +4434,16 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         if (!thumb && vid?.p === "yt") thumb = ytThumb(vid.id);
         if (!thumb) thumb = "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=160&h=90&fit=crop";
         const pubStatus = (a.status || "published") as "published" | "draft" | "archived";
+        const isRowDragging = rowDrag?.assetId === a.id;
+        const rowTransform = transformForRow(rowIdx, a.id);
+        const rowStyle: React.CSSProperties = isRowDragging ? {
+          opacity: 0.25,
+          transition: "none",
+          pointerEvents: "none",
+        } : rowTransform ? {
+          transform: rowTransform,
+          transition: rowDrag ? "transform .15s ease" : undefined,
+        } : (rowDrag ? { transition: "transform .15s ease" } : {});
         // Each cell renders only when its column is visible, so
         // hiding a column drops the corresponding cell across every
         // row in lock-step with the header. Order matches
@@ -4266,8 +4451,14 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
         return (
           <div
             key={a.id}
-            className={`lv-row${statusCls}${isSelected ? " selected" : ""}`}
-            onClick={() => onClick(a)}
+            ref={el => { rowElsRef.current.set(a.id, el); }}
+            className={`lv-row${statusCls}${isSelected ? " selected" : ""}${onReorderRows ? " reorderable" : ""}`}
+            style={rowStyle}
+            onPointerDown={onReorderRows ? (e) => beginRowDrag(a.id, rowIdx, e) : undefined}
+            onClick={() => {
+              if (rowDragJustEnded.current) return;
+              onClick(a);
+            }}
           >
             {visibleColumns.map(col => {
               if (col.key === "thumb") {
@@ -8445,6 +8636,13 @@ export default function App(){
                   onDateRangeFilter={setDateRangeFilter}
                   fieldDefs={fieldDefs}
                   onOpenFieldsPanel={() => setAdminSection("fields")}
+                  onReorderRows={(ids) => {
+                    // Same flow as grid card drag: switch to custom
+                    // sort so the new order sticks, then persist via
+                    // the shared reorder helper.
+                    setSortBy("custom");
+                    void persistCardReorder(ids);
+                  }}
                   orgSettings={orgSettings}
                   knownCustomTags={knownCustomTags}
                 />
