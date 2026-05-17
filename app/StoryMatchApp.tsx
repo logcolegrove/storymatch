@@ -8043,7 +8043,7 @@ export default function App(){
         // Share button is for internal use (admins in admin mode, or sales reps).
         // Hidden in the admin's "Public" preview because that simulates what an
         // external customer sees, and customers don't share testimonials.
-        onCopyShareLink={((isAdmin && adminMode) || org?.role === "sales") ? (a)=>copyShareLink(a as Asset) : undefined}
+        onCopyShareLink={(isAdmin || org?.role === "sales") ? (a)=>copyShareLink(a as Asset) : undefined}
       />}
     </div></React.Fragment>);
   }
@@ -8463,7 +8463,7 @@ export default function App(){
                   onChange={e=>{setSearch(e.target.value);if(smResults)clearSm();}}
                   onFocus={()=>{if(smOpen)setSmOpen(false);}}
                 />
-                {((isAdmin && adminMode) || org?.role === "sales") && (
+                {(isAdmin || org?.role === "sales") && (
                   <button
                     className={`sm-btn ${smOpen||smLoading||smResults?"active":""}`}
                     onClick={()=>setSmOpen(o => !o)}
@@ -8474,7 +8474,7 @@ export default function App(){
                 )}
               </div>
 
-              {((isAdmin && adminMode) || org?.role === "sales") && (smOpen||smLoading) && (
+              {(isAdmin || org?.role === "sales") && (smOpen||smLoading) && (
                 <div className="sm-dropdown-wrap">
                   <div className="sm-dropdown">
                     <div className="sm-inner">
@@ -9010,7 +9010,7 @@ export default function App(){
                     })();
                     const cardSelected = selectedIds.has(a.id);
                     const cardToggle = adminMgmt ? toggleSelected : undefined;
-                    const share = ((isAdmin && adminMode) || org?.role === "sales") ? copyShareLink : undefined;
+                    const share = (isAdmin || org?.role === "sales") ? copyShareLink : undefined;
                     const cardCleared = adminMgmt ? (() => {
                       const c = computeCleared(a, orgSettings);
                       return {
