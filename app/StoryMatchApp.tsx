@@ -201,6 +201,20 @@ interface OrgSettings {
   // Whether sales-rep thumbs-up/down votes nudge StoryMatch ranking.
   // Defaults to false — admins opt in once feedback warms up.
   feedbackAffectsRanking: boolean;
+  // Admin-set default layout for the library view. New sales reps
+  // (and anyone with no localStorage layout) start here. Each user
+  // can still customize their own view afterward — their per-
+  // browser localStorage takes precedence over this default.
+  // Null when no admin has saved a default yet — the FE falls back
+  // to the hardcoded baseline (grid view + DEFAULT_REORDERABLE_KEYS).
+  defaultListView: DefaultListView | null;
+}
+
+interface DefaultListView {
+  viewMode: "grid" | "list";
+  columnOrder: string[];          // reorderable keys only (no thumb/title)
+  hidden: string[];               // keys the admin wants hidden by default
+  widths: Record<string, number>; // per-column width in px
 }
 
 interface Source {
@@ -425,6 +439,13 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .rule-card-icon{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--bg2);color:var(--t2);}
 .rule-card.on .rule-card-icon{background:var(--accentLL);color:var(--accent);}
 .rule-card-body{padding:14px;display:flex;flex-direction:column;gap:8px;background:var(--bg);}
+/* "What sales reps see" — informational, no toggle, no
+   interactivity. Slightly tinted body so it reads as a fact-of-
+   the-system rather than a configurable policy. */
+.rule-card-info .rule-card-head{border-bottom:1px solid var(--border);}
+.rule-info-text{font-size:12.5px;color:var(--t2);line-height:1.55;margin:0;}
+.rule-info-text strong{color:var(--t1);font-weight:600;}
+.rule-info-text em{color:var(--accent);font-style:normal;font-weight:600;}
 
 /* On/off toggle — pill switch with sliding thumb. Off is muted; on is
    accent-colored. Standard role=switch for a11y. */
@@ -872,6 +893,11 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .sm-clear-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;letter-spacing:-.005em;}
 .sm-clear-btn:hover{background:var(--accent2);}
 
+/* "Save as default" pill — admin-only, appears only when the
+   current layout differs from the saved team default. Accent-
+   tinted so it stands out from the neutral toggle next to it. */
+.lv-save-default{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accentLL);color:var(--accent);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;transition:background .12s;}
+.lv-save-default:hover{background:var(--accentL);}
 .view-toggle{display:flex;height:32px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff;}
 .view-toggle-btn{height:100%;padding:0 10px;background:none;border:none;cursor:pointer;color:var(--t3);display:grid;place-items:center;}
 .view-toggle-btn.on{background:var(--accentLL);color:var(--accent);}
@@ -2490,6 +2516,15 @@ interface ListViewProps {
   // and for admins in "Preview as sales rep" mode. Defaults to true
   // for back-compat with any older call sites.
   canManage?: boolean;
+  // Admin-saved default layout. Used to seed the user's view when
+  // they have no localStorage state yet — i.e. new sales reps land
+  // on the layout the admin curated. Once a user customizes, their
+  // localStorage wins.
+  orgDefaults?: DefaultListView | null;
+  // Fires whenever the local layout changes (widths / hidden /
+  // columnOrder). Lets the parent know the current state so the
+  // "Save as default" affordance can grab it.
+  onLayoutChange?: (current: { columnOrder: string[]; hidden: string[]; widths: Record<string, number> }) => void;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -3776,7 +3811,7 @@ function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): Lis
   return null;
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, canManage = true }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, canManage = true, orgDefaults, onLayoutChange }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state. All three persist to localStorage so admins
@@ -3786,6 +3821,10 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
   //   columnOrder  — sequence of REORDERABLE keys (everything
   //                  except the pinned thumb + title pair). Custom
   //                  field keys live here too once added.
+  // Resolution order for each piece of layout state, on first mount:
+  //   1. user's localStorage  — they've customized; their preference wins
+  //   2. org default          — admin-curated baseline (new sales reps)
+  //   3. hardcoded fallback   — built-in defaults when neither exists
   const [widths, setWidths] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
     for (const c of BUILT_IN_LIST_VIEW_COLUMNS) init[c.key] = c.defaultWidth;
@@ -3797,29 +3836,42 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
           for (const [k, v] of Object.entries(parsed)) {
             if (typeof v === "number" && v >= 80) init[k] = v;
           }
+          return init;
         }
-      } catch { /* ignore parse errors — fall back to defaults */ }
+      } catch { /* fall through to org default */ }
+    }
+    // No user localStorage → fall back to org default if present.
+    if (orgDefaults?.widths) {
+      for (const [k, v] of Object.entries(orgDefaults.widths)) {
+        if (typeof v === "number" && v >= 80) init[k] = v;
+      }
     }
     return init;
   });
   const [hidden, setHidden] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set();
-    try {
-      const raw = localStorage.getItem("storymatch.lv.hidden");
-      if (!raw) return new Set();
-      const arr = JSON.parse(raw) as string[];
-      return new Set(arr);
-    } catch { return new Set(); }
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("storymatch.lv.hidden");
+        if (raw) return new Set(JSON.parse(raw) as string[]);
+      } catch { /* fall through */ }
+    }
+    if (orgDefaults?.hidden) return new Set(orgDefaults.hidden);
+    return new Set();
   });
   const [columnOrder, setColumnOrder] = useState<string[]>(() => {
-    if (typeof window === "undefined") return [...DEFAULT_REORDERABLE_KEYS];
-    try {
-      const raw = localStorage.getItem("storymatch.lv.columnOrder");
-      if (!raw) return [...DEFAULT_REORDERABLE_KEYS];
-      const arr = JSON.parse(raw) as string[];
-      if (!Array.isArray(arr)) return [...DEFAULT_REORDERABLE_KEYS];
-      return arr;
-    } catch { return [...DEFAULT_REORDERABLE_KEYS]; }
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("storymatch.lv.columnOrder");
+        if (raw) {
+          const arr = JSON.parse(raw) as string[];
+          if (Array.isArray(arr)) return arr;
+        }
+      } catch { /* fall through */ }
+    }
+    if (orgDefaults?.columnOrder && orgDefaults.columnOrder.length > 0) {
+      return [...orgDefaults.columnOrder];
+    }
+    return [...DEFAULT_REORDERABLE_KEYS];
   });
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3833,6 +3885,12 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     if (typeof window === "undefined") return;
     try { localStorage.setItem("storymatch.lv.columnOrder", JSON.stringify(columnOrder)); } catch { /* non-fatal */ }
   }, [columnOrder]);
+  // Push every layout change up to the parent so the "Save as
+  // default" affordance can grab the current state on demand.
+  useEffect(() => {
+    if (!onLayoutChange) return;
+    onLayoutChange({ columnOrder, hidden: Array.from(hidden), widths });
+  }, [columnOrder, hidden, widths, onLayoutChange]);
 
   // Resolve the final column list for rendering. Order is:
   //   1. thumb (pinned)
@@ -5426,6 +5484,28 @@ function RulesPanel({ settings, onSave }: RulesPanelProps) {
           )}
         </RuleCard>
 
+        {/* Sales-rep visibility — informational card explaining what
+            sales reps can see by default. Read-only: this is a hard
+            rule of the system, not a toggle. Sits in Rules because
+            it's adjacent to the other governance policies the admin
+            cares about. */}
+        <div className="rule-card on rule-card-info">
+          <div className="rule-card-head">
+            <div className="rule-card-title">
+              <span className="rule-card-icon"><EyeIcon/></span>
+              <span>What sales reps see</span>
+            </div>
+          </div>
+          <div className="rule-card-body">
+            <p className="rule-info-text">
+              Sales reps only see assets with <strong>Visibility = Public</strong>. <strong>Private</strong> and <strong>Archive</strong> stay hidden from them — they never appear in the library, in StoryMatch results, or anywhere else. Sales reps also can&apos;t archive, delete, or edit assets; those controls are admin-only.
+            </p>
+            <p className="rule-info-text">
+              Use the <em>Preview as sales rep</em> option in your account menu (bottom-left avatar) to see the library exactly as a sales rep does.
+            </p>
+          </div>
+        </div>
+
         {/* Sales-rep feedback as a ranking signal. When on, the
             StoryMatch backend nudges relevance by aggregate thumbs.
             Off by default — admins flip it on once enough reps have
@@ -6847,7 +6927,27 @@ export default function App(){
   const[adminSection,setAdminSection]=useState<string|null>(null); // assets | import | null (collapsed)
   // Admins (in admin mode) always see archived assets greyed out inline.
   // No toggle needed — library is one source of truth.
-  const[viewMode,setViewMode]=useState<"grid"|"list">("list"); // admin-only; sales/public always see grid
+  // viewMode resolution mirrors the ListView column-state pattern:
+  //   1. user's localStorage  — persisted preference wins
+  //   2. org default (admin)  — applied lazily in the settings-load
+  //                             effect below if localStorage is empty
+  //   3. hardcoded "list"     — fallback
+  // Every later toggle persists to localStorage so the user's choice
+  // sticks across sessions.
+  const[viewMode,setViewMode]=useState<"grid"|"list">(()=>{
+    if (typeof window === "undefined") return "list";
+    try {
+      const raw = localStorage.getItem("storymatch.lv.viewMode");
+      if (raw === "grid" || raw === "list") return raw;
+    } catch { /* fall through */ }
+    return "list";
+  });
+  // Live snapshot of the ListView's current column layout — kept in
+  // sync via onLayoutChange. Drives the "Save as default" affordance.
+  const[currentListLayout,setCurrentListLayout]=useState<{columnOrder:string[];hidden:string[];widths:Record<string,number>}>({columnOrder:[],hidden:[],widths:{}});
+  // Whether we've already shown a "Saved" toast — gates the success
+  // message so it shows once per save click, not on every render.
+  const saveAsDefaultPending = React.useRef(false);
   // Featured quotes powering the hero rotator. Fetched on mount and
   // refreshed after any save that could change the featured set
   // (asset edit, standalone quote create, rotation curation).
@@ -6974,6 +7074,7 @@ export default function App(){
     defaultApprovalStatus:"unset",
     publicationRules:{},
     feedbackAffectsRanking:false,
+    defaultListView:null,
   });
 
   // Per-org field schema. Loaded once on mount; the Manage Fields panel
@@ -7061,7 +7162,10 @@ export default function App(){
   },[]);
 
   // Load org Rules settings on mount. Used by computeCleared to flag
-  // testimonials whose publish age exceeds the org's freshness threshold.
+  // testimonials whose publish age exceeds the org's freshness
+  // threshold, and to seed first-time users with the admin-curated
+  // default ListView layout (column order + visibility + widths +
+  // grid/list mode).
   useEffect(()=>{
     (async()=>{
       try{
@@ -7070,9 +7174,26 @@ export default function App(){
         if(!r.ok)return; // Non-fatal — defaults stay in place
         const data=await r.json() as OrgSettings;
         setOrgSettings(data);
+        // Seed viewMode from the admin's default only if the user
+        // has no persisted preference yet. The settings response
+        // may arrive after first paint so this is a setState rather
+        // than an initializer.
+        if (data.defaultListView && typeof window !== "undefined") {
+          let userPick: string | null = null;
+          try { userPick = localStorage.getItem("storymatch.lv.viewMode"); } catch { /* ignore */ }
+          if (!userPick) setViewMode(data.defaultListView.viewMode);
+        }
       }catch(e){console.error("Failed to load org settings",e);}
     })();
   },[]);
+
+  // Persist viewMode whenever it changes. Once set, this localStorage
+  // entry takes precedence over the admin default on subsequent loads
+  // — so the user's choice sticks even after admin re-saves defaults.
+  useEffect(()=>{
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem("storymatch.lv.viewMode", viewMode); } catch { /* non-fatal */ }
+  },[viewMode]);
 
   // Load the org's field schema on mount. Server auto-seeds defaults
   // for new orgs so first read always returns a populated array.
@@ -8642,6 +8763,67 @@ export default function App(){
                     )}
                   </div>
 
+                  {/* "Save as default" pill — admin-only, visible when
+                      the admin's current viewMode + column layout
+                      differs from the saved org default (or when no
+                      default exists yet). Clicking PUTs the current
+                      state to /api/org/settings; new sales reps with
+                      no localStorage layout pick it up on next load.
+                      Hidden during preview-as-sales mode — saving
+                      from a preview-curated state would be misleading. */}
+                  {isAdmin && adminMode && (() => {
+                    const saved = orgSettings.defaultListView;
+                    const dirty = !saved
+                      || saved.viewMode !== viewMode
+                      || JSON.stringify(saved.columnOrder) !== JSON.stringify(currentListLayout.columnOrder)
+                      || JSON.stringify([...saved.hidden].sort()) !== JSON.stringify([...currentListLayout.hidden].sort())
+                      || JSON.stringify(saved.widths) !== JSON.stringify(currentListLayout.widths);
+                    if (!dirty) return null;
+                    return (
+                      <button
+                        type="button"
+                        className="lv-save-default"
+                        title={saved
+                          ? "Update the team default to match your current layout. Sales reps without a saved layout will land here."
+                          : "Set the current layout as the team default. New sales reps will land here."}
+                        onClick={async () => {
+                          if (saveAsDefaultPending.current) return;
+                          saveAsDefaultPending.current = true;
+                          const newDefault = {
+                            viewMode,
+                            columnOrder: currentListLayout.columnOrder,
+                            hidden: currentListLayout.hidden,
+                            widths: currentListLayout.widths,
+                          };
+                          try {
+                            setToast("Saving default…");
+                            const r = await fetch("/api/org/settings", {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+                              body: JSON.stringify({ defaultListView: newDefault }),
+                            });
+                            if (!r.ok) throw new Error("Save failed");
+                            const updated = await r.json() as OrgSettings;
+                            setOrgSettings(updated);
+                            setToast("Saved as team default");
+                          } catch (e) {
+                            console.error("Failed to save default", e);
+                            setToast("Couldn't save default");
+                          } finally {
+                            setTimeout(() => setToast(null), 1800);
+                            saveAsDefaultPending.current = false;
+                          }
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                          <polyline points="17 21 17 13 7 13 7 21"/>
+                          <polyline points="7 3 7 8 15 8"/>
+                        </svg>
+                        Save as default
+                      </button>
+                    );
+                  })()}
                   {/* When StoryMatch results are active, the grid/list
                       toggle is meaningless (cards force-render in a
                       2-up grid). Swap it out for a prominent "Clear
@@ -8812,6 +8994,8 @@ export default function App(){
                   feedbackByAsset={feedbackByAsset}
                   onShowFeedback={(id) => setFeedbackModalAssetId(id)}
                   canManage={isAdmin && adminMode}
+                  orgDefaults={orgSettings.defaultListView}
+                  onLayoutChange={setCurrentListLayout}
                 />
               ) : (
                 (() => {

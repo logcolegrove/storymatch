@@ -41,6 +41,12 @@ async function getCurrentUserOrg(req: NextRequest) {
 //   "approval_denied"      — fires when admin sets approval to denied
 // Each value: { action: "none" | "draft" | "archive", auto_revert: boolean }
 type PublicationRule = { action: "none" | "draft" | "archive"; auto_revert: boolean };
+type DefaultListView = {
+  viewMode: "grid" | "list";
+  columnOrder: string[];
+  hidden: string[];
+  widths: Record<string, number>;
+};
 type OrgSettingsFE = {
   freshnessWarnAfterMonths: number | null;
   freshnessWarnBeforeDate: string | null;
@@ -55,6 +61,10 @@ type OrgSettingsFE = {
   // per asset (requires ≥3 votes per asset to take effect; capped at
   // ±10 points). Default false — admins opt in once feedback warms up.
   feedbackAffectsRanking: boolean;
+  // Admin-curated default ListView layout. New users (no localStorage
+  // layout) bootstrap from this; existing users keep their own
+  // localStorage layout. Null when no admin has saved a default yet.
+  defaultListView: DefaultListView | null;
 };
 
 export async function GET(req: NextRequest) {
@@ -62,7 +72,7 @@ export async function GET(req: NextRequest) {
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { data, error } = await supabaseAdmin
     .from("organizations")
-    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules, feedback_affects_ranking")
+    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules, feedback_affects_ranking, default_list_view")
     .eq("id", ctx.orgId)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -72,6 +82,7 @@ export async function GET(req: NextRequest) {
     defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
     publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
     feedbackAffectsRanking: !!data?.feedback_affects_ranking,
+    defaultListView: (data?.default_list_view as DefaultListView | null) ?? null,
   };
   return NextResponse.json(settings);
 }
@@ -112,6 +123,7 @@ export async function PUT(req: NextRequest) {
     default_approval_status?: string;
     publication_rules?: Record<string, PublicationRule>;
     feedback_affects_ranking?: boolean;
+    default_list_view?: DefaultListView | null;
   };
   const updates: DbUpdates = {};
   if (body.freshnessWarnAfterMonths !== undefined) {
@@ -145,6 +157,32 @@ export async function PUT(req: NextRequest) {
     }
     updates.feedback_affects_ranking = body.feedbackAffectsRanking;
   }
+  if (body.defaultListView !== undefined) {
+    // null is allowed (resets to "no default set" — new users will
+    // fall back to the hardcoded baseline). Otherwise validate the
+    // shape conservatively so a malformed admin save can't poison
+    // every new user's first paint.
+    if (body.defaultListView !== null) {
+      const dv = body.defaultListView;
+      if (typeof dv !== "object" || dv === null) {
+        return NextResponse.json({ error: "defaultListView must be an object or null" }, { status: 400 });
+      }
+      const v = dv as Partial<DefaultListView>;
+      if (v.viewMode !== "grid" && v.viewMode !== "list") {
+        return NextResponse.json({ error: "defaultListView.viewMode must be 'grid' or 'list'" }, { status: 400 });
+      }
+      if (!Array.isArray(v.columnOrder) || !v.columnOrder.every(s => typeof s === "string")) {
+        return NextResponse.json({ error: "defaultListView.columnOrder must be string[]" }, { status: 400 });
+      }
+      if (!Array.isArray(v.hidden) || !v.hidden.every(s => typeof s === "string")) {
+        return NextResponse.json({ error: "defaultListView.hidden must be string[]" }, { status: 400 });
+      }
+      if (typeof v.widths !== "object" || v.widths === null) {
+        return NextResponse.json({ error: "defaultListView.widths must be Record<string,number>" }, { status: 400 });
+      }
+    }
+    updates.default_list_view = body.defaultListView;
+  }
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
@@ -153,7 +191,7 @@ export async function PUT(req: NextRequest) {
     .from("organizations")
     .update(updates)
     .eq("id", ctx.orgId)
-    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules, feedback_affects_ranking")
+    .select("freshness_warn_after_months, freshness_warn_before_date, default_approval_status, publication_rules, feedback_affects_ranking, default_list_view")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -198,6 +236,7 @@ export async function PUT(req: NextRequest) {
     defaultApprovalStatus: (data?.default_approval_status as string | null) || "unset",
     publicationRules: (data?.publication_rules as Record<string, PublicationRule>) || {},
     feedbackAffectsRanking: !!data?.feedback_affects_ranking,
+    defaultListView: (data?.default_list_view as DefaultListView | null) ?? null,
   };
   return NextResponse.json(settings);
 }
