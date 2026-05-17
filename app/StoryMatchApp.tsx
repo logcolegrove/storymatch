@@ -364,6 +364,12 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
 .mode-toggle{display:flex;gap:2px;background:var(--bg2);padding:2px;border-radius:8px;border:1px solid var(--border);}
 .mode-btn{padding:5px 12px;border-radius:6px;border:none;background:none;color:var(--t3);font-family:var(--font);font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;}
 .mode-btn.on{background:#fff;color:var(--t1);box-shadow:0 1px 2px rgba(0,0,0,.06);}
+/* Sales-preview banner — shown only when an admin is in
+   "Preview as sales rep" mode. Accent-tinted so it's
+   impossible to miss; clicking the pill flips them back. */
+.preview-banner{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:99px;border:1px solid var(--accent);background:var(--accentLL);color:var(--accent);font-family:var(--font);font-size:11px;font-weight:600;cursor:pointer;transition:background .12s;}
+.preview-banner:hover{background:var(--accentL);}
+.preview-banner-exit{text-decoration:underline;}
 
 /* ── ADMIN LEFT RAIL + PANEL ── */
 .layout{display:flex;min-height:calc(100vh - 56px);}
@@ -2479,6 +2485,11 @@ interface ListViewProps {
   // Open the per-asset feedback modal — surfaced when an admin
   // clicks a Feedback cell.
   onShowFeedback?: (assetId: string) => void;
+  // Whether the current viewer can perform management actions
+  // (edit / archive / delete / multi-select). False for sales reps
+  // and for admins in "Preview as sales rep" mode. Defaults to true
+  // for back-compat with any older call sites.
+  canManage?: boolean;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -3765,7 +3776,7 @@ function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): Lis
   return null;
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, canManage = true }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state. All three persist to localStorage so admins
@@ -4518,14 +4529,16 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
               if (col.key === "thumb") {
                 return (
                   <div key={col.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input
-                      type="checkbox"
-                      className="lv-check"
-                      checked={isSelected}
-                      onChange={() => { /* handled by onClick to capture shift key */ }}
-                      onClick={(e) => { e.stopPropagation(); onToggleSelect(a.id, e.shiftKey); }}
-                      title="Shift-click to select a range"
-                    />
+                    {canManage && (
+                      <input
+                        type="checkbox"
+                        className="lv-check"
+                        checked={isSelected}
+                        onChange={() => { /* handled by onClick to capture shift key */ }}
+                        onClick={(e) => { e.stopPropagation(); onToggleSelect(a.id, e.shiftKey); }}
+                        title="Shift-click to select a range"
+                      />
+                    )}
                     <div className="lv-thumb">
                       <img src={thumb} alt={a.company} loading="lazy" />
                     </div>
@@ -4556,18 +4569,20 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
                         </svg>
                       </button>
-                      <button
-                        type="button"
-                        className="lv-title-act"
-                        onClick={(e) => { e.stopPropagation(); onEdit(a); }}
-                        title="Edit details"
-                        aria-label="Edit details"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                          <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                        </svg>
-                      </button>
+                      {canManage && (
+                        <button
+                          type="button"
+                          className="lv-title-act"
+                          onClick={(e) => { e.stopPropagation(); onEdit(a); }}
+                          title="Edit details"
+                          aria-label="Edit details"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                          </svg>
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="lv-title-act"
@@ -4597,19 +4612,33 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                           <line x1="3" y1="20" x2="21" y2="20"/>
                         </svg>
                       </button>
-                      <DotsMenu items={[
-                        { label: "Open", onClick: () => onClick(a) },
-                        { label: "Edit details", onClick: () => onEdit(a) },
-                        { label: "Copy share link", onClick: () => onCopyShareLink(a) },
-                        { divider: true },
-                        { label: "Rate this asset", onClick: () => onRate(a) },
-                        { divider: true },
-                        isArchived
-                          ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
-                          : { label: "Archive", onClick: () => onSetPublicationStatus(a, "archived") },
-                        { divider: true },
-                        { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) onDelete(a.id); }, danger: true },
-                      ]}/>
+                      <DotsMenu items={(() => {
+                        // Menu items are role-aware. Sales reps + admins-
+                        // in-preview-mode get the read-only subset (no
+                        // edit, archive, delete). Admins get everything.
+                        const items: MenuItem[] = [
+                          { label: "Open", onClick: () => onClick(a) },
+                        ];
+                        if (canManage) {
+                          items.push({ label: "Edit details", onClick: () => onEdit(a) });
+                        }
+                        items.push(
+                          { label: "Copy share link", onClick: () => onCopyShareLink(a) },
+                          { divider: true },
+                          { label: "Rate this asset", onClick: () => onRate(a) },
+                        );
+                        if (canManage) {
+                          items.push(
+                            { divider: true },
+                            isArchived
+                              ? { label: "Restore", onClick: () => onSetPublicationStatus(a, "published") }
+                              : { label: "Archive", onClick: () => onSetPublicationStatus(a, "archived") },
+                            { divider: true },
+                            { label: "Delete", onClick: () => { if (confirm(`Delete "${a.headline || "this asset"}"? This can't be undone.`)) onDelete(a.id); }, danger: true },
+                          );
+                        }
+                        return items;
+                      })()}/>
                     </div>
                   </div>
                 );
@@ -8062,19 +8091,26 @@ export default function App(){
             {/* Count badge moved to the library control bar above the content.
                 Show-archived toggle removed — admins always see archived assets
                 inline (greyed out) so the library is one source of truth. */}
-            {isAdmin && (
-              <div className="mode-toggle">
-                <button
-                  className={`mode-btn ${adminMode?"on":""}`}
-                  onClick={()=>setAdminMode(true)}
-                  title="Admin view: manage assets and use StoryMatch"
-                >Admin</button>
-                <button
-                  className={`mode-btn ${!adminMode?"on":""}`}
-                  onClick={()=>setAdminMode(false)}
-                  title="Public view: what your customers see"
-                >Public</button>
-              </div>
+            {/* Admin/Public toggle removed from the header. The
+                equivalent ("Preview as sales rep") now lives inside
+                AccountMenu — admins flip it on to temporarily see
+                the library as a sales rep would, then flip back.
+                When previewing, we show a "Exit preview" pill here
+                so admins always have a one-click escape — the
+                admin rail (which hosts the AccountMenu) is hidden
+                in preview mode by design. */}
+            {isAdmin && !adminMode && (
+              <button
+                className="preview-banner"
+                onClick={() => setAdminMode(true)}
+                title="Return to admin view"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                Previewing as sales · <span className="preview-banner-exit">Exit</span>
+              </button>
             )}
             <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:8,paddingLeft:12,borderLeft:"1px solid var(--border)"}}>
               {/* Email/workspace/sign-out moved to AccountMenu in the rail bottom
@@ -8188,6 +8224,8 @@ export default function App(){
                   isAdmin={isAdmin}
                   onSignOut={signOut}
                   authHeaders={authHeaders}
+                  previewingAsSales={!adminMode}
+                  onTogglePreviewAsSales={() => setAdminMode(m => !m)}
                 />
               </div>
             </aside>
@@ -8623,7 +8661,7 @@ export default function App(){
                       </svg>
                       Clear results
                     </button>
-                  ) : isAdmin && adminMode && (
+                  ) : (
                     <div className="view-toggle" title="Toggle grid/list view">
                       <button
                         className={`view-toggle-btn ${viewMode === "grid" ? "on" : ""}`}
@@ -8735,7 +8773,7 @@ export default function App(){
                     )}
                   </div>
                 )
-              ) : (isAdmin && adminMode && viewMode === "list" && !smResults) ? (
+              ) : (viewMode === "list" && !smResults) ? (
                 <ListView
                   assets={displayAssets}
                   selectedIds={selectedIds}
@@ -8773,6 +8811,7 @@ export default function App(){
                   knownCustomTags={knownCustomTags}
                   feedbackByAsset={feedbackByAsset}
                   onShowFeedback={(id) => setFeedbackModalAssetId(id)}
+                  canManage={isAdmin && adminMode}
                 />
               ) : (
                 (() => {

@@ -18,6 +18,13 @@ interface Props {
   isAdmin: boolean;
   onSignOut: () => void;
   authHeaders: () => Promise<HeadersInit>;
+  // Admin-only "Preview as sales rep" affordance — replaces the
+  // old top-of-page Admin/Public toggle. When `previewingAsSales`
+  // is true, the admin's library view is gated down to what a
+  // sales rep sees. Toggling it sends the new boolean to the
+  // parent, which updates the canonical state.
+  previewingAsSales?: boolean;
+  onTogglePreviewAsSales?: () => void;
 }
 
 // Build a 1-2 character avatar label from the user's email. "logan.colegrove@..."
@@ -41,7 +48,7 @@ function colorFromEmail(email: string): string {
   return `hsl(${hue}, 55%, 48%)`;
 }
 
-export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, onSignOut, authHeaders }: Props) {
+export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, onSignOut, authHeaders, previewingAsSales, onTogglePreviewAsSales }: Props) {
   const [open, setOpen] = useState(false);
   const [popPos, setPopPos] = useState<{ left: number; bottom: number } | null>(null);
   const [teamOpen, setTeamOpen] = useState(false);
@@ -110,6 +117,21 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
                   <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                 </svg>
                 Manage team
+              </button>
+            )}
+            {isAdmin && onTogglePreviewAsSales && (
+              <button
+                className={`am-item${previewingAsSales ? " on" : ""}`}
+                onClick={() => { setOpen(false); onTogglePreviewAsSales(); }}
+                title={previewingAsSales
+                  ? "Return to admin view — restores full management controls"
+                  : "Temporarily see the library the way a sales rep does — no archived assets, no batch ops, no destructive controls"}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                {previewingAsSales ? "Exit sales preview" : "Preview as sales rep"}
               </button>
             )}
             <button className="am-item" onClick={() => { setOpen(false); setHelpOpen(true); }}>
@@ -593,6 +615,11 @@ const css = `
 .am-divider{height:1px;background:var(--border);margin:4px 0;}
 .am-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;background:none;border:none;border-radius:6px;cursor:pointer;color:var(--t1);font-family:var(--font);font-size:12.5px;text-align:left;}
 .am-item:hover{background:var(--bg2);}
+/* Active state for stateful toggles (e.g. Preview as sales rep
+   while it's active). Accent-tinted background + accent text so
+   the admin sees at a glance that they're in a non-default mode. */
+.am-item.on{background:var(--accentLL);color:var(--accent);font-weight:600;}
+.am-item.on:hover{background:var(--accentL);}
 .am-item.danger{color:var(--red);}
 .am-item.danger:hover{background:#fef2f2;}
 .am-item svg{flex-shrink:0;color:var(--t3);}
