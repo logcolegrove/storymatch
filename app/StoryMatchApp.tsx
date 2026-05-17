@@ -1113,6 +1113,10 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
 .lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-pub-select{font-family:var(--font);font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);cursor:pointer;width:auto;}
 .lv-pub-select:hover{background:var(--bg2);}
+/* Read-only Visibility pill for sales reps + admins-in-preview.
+   Renders the value (always "Public" since sales only see those)
+   without the dropdown affordance. */
+.lv-pub-readonly{font-family:var(--font);font-size:12px;color:var(--t2);font-weight:500;padding:5px 0;}
 .lv-actions{display:flex;align-items:center;gap:4px;justify-content:flex-end;}
 
 /* Hover-revealed icon row in the Actions cell. Fades in when the
@@ -2918,8 +2922,13 @@ interface ClearedCellProps {
   onSetApproval: (a: Asset, patch: { status?: ApprovalStatus; note?: string }) => void;
   onMarkVerified: (a: Asset) => void;
   knownCustomTags?: { color: string; label: string }[];
+  // When true, render the dot + flagged-text as visual signal only —
+  // click-to-open-popover is suppressed so sales reps can see what's
+  // up with an asset but can't twiddle approval/freshness/client
+  // status. Same pattern as PublicationSelectCell.readOnly.
+  readOnly?: boolean;
 }
-function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified, knownCustomTags }: ClearedCellProps) {
+function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshnessRuleActive, isInMultiSelection, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onSetClientStatus, onSetApproval, onMarkVerified, knownCustomTags, readOnly }: ClearedCellProps) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
 
   // Visible inline text next to the dot — just the joined reasons (no
@@ -2953,9 +2962,10 @@ function ClearedCell({ asset, cleared, open, onToggle, onClose, libraryFreshness
     <div className="cl-cell" onClick={(e) => e.stopPropagation()}>
       <div
         ref={triggerRef}
-        className={`cl-trigger${open ? " open" : ""}${cleared.level !== "unset" ? " " + cleared.level : " unset"}${triggerCollapsed ? " collapsed" : ""}`}
-        onClick={onToggle}
-        title={title}
+        className={`cl-trigger${open ? " open" : ""}${cleared.level !== "unset" ? " " + cleared.level : " unset"}${triggerCollapsed ? " collapsed" : ""}${readOnly ? " readonly" : ""}`}
+        onClick={readOnly ? undefined : onToggle}
+        title={readOnly ? title.replace(/Click to /g, "") : title}
+        style={readOnly ? { cursor: "default" } : undefined}
       >
         {triggerCollapsed ? null : cleared.level === "unset" ? (
           <span className="cl-circle cl-circle-empty"/>
@@ -3716,16 +3726,29 @@ function PublicationSelectCell({
   pubStatus,
   onSetPublicationStatus,
   isInMultiSelection,
+  readOnly,
 }: {
   asset: Asset;
   pubStatus: "published" | "draft" | "archived";
   onSetPublicationStatus: (a: Asset, next: "published" | "draft" | "archived") => void;
   isInMultiSelection: boolean;
+  // When true, render a non-interactive label of the current
+  // visibility — sales reps + admins-in-preview can SEE the value
+  // but can't change it. The library role-gating contract is "sales
+  // reps only see Public assets and can't move things between
+  // visibility states." This is the read-only enforcement at the UI.
+  readOnly?: boolean;
 }) {
   const handlers = useSameValueAwareSelect(
     isInMultiSelection,
     (v) => onSetPublicationStatus(asset, v as "published" | "draft" | "archived"),
   );
+  if (readOnly) {
+    const label = pubStatus === "published" ? "Public"
+      : pubStatus === "draft" ? "Private"
+      : "Archive";
+    return <span className="lv-pub-readonly">{label}</span>;
+  }
   return (
     <div onClick={(e) => e.stopPropagation()}>
       <select
@@ -3793,19 +3816,27 @@ const BUILT_IN_LIST_VIEW_COLUMNS: ListViewColumn[] = [
 // intentionally omitted so it starts hidden.
 const DEFAULT_REORDERABLE_KEYS = ["vis", "status", "date"];
 
-// What a brand-new sales rep would land on if NO admin has saved an
-// org default yet. Mirrors the values the ListView's useState
-// initializers fall through to when both localStorage and orgDefaults
-// are absent. Used by the "Save as default" dirty-check so the pill
-// only appears once the admin in preview mode actually deviates from
-// this baseline — not just because no default has ever been saved.
-function hardcodedListViewBaseline(): DefaultListView {
+// Computes the layout a sales rep would see if they had no
+// localStorage of their own. Mirrors ListView's actual init logic:
+// start with the hardcoded built-in defaults, then layer the
+// admin-saved org default on top (when present). Used by the
+// "Save as default" dirty-check so the pill only appears once the
+// admin in preview mode actually deviates from this baseline — not
+// just because the saved-vs-effective shapes happen to differ.
+function effectiveBaseline(orgDefaults: DefaultListView | null): DefaultListView {
   const widths: Record<string, number> = {};
   for (const c of BUILT_IN_LIST_VIEW_COLUMNS) widths[c.key] = c.defaultWidth;
+  if (orgDefaults?.widths) {
+    for (const [k, v] of Object.entries(orgDefaults.widths)) {
+      if (typeof v === "number" && v >= 80) widths[k] = v;
+    }
+  }
   return {
-    viewMode: "list",
-    columnOrder: [...DEFAULT_REORDERABLE_KEYS],
-    hidden: [],
+    viewMode: orgDefaults?.viewMode ?? "list",
+    columnOrder: orgDefaults?.columnOrder?.length
+      ? [...orgDefaults.columnOrder]
+      : [...DEFAULT_REORDERABLE_KEYS],
+    hidden: orgDefaults?.hidden ? [...orgDefaults.hidden] : [],
     widths,
   };
 }
@@ -4759,6 +4790,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                       pubStatus={pubStatus}
                       onSetPublicationStatus={onSetPublicationStatus}
                       isInMultiSelection={selectedIds.size > 1 && selectedIds.has(a.id)}
+                      readOnly={!canManage}
                     />
                   </div>
                 );
@@ -4781,14 +4813,15 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                       onSetApproval={onSetApproval}
                       onMarkVerified={onMarkVerified}
                       knownCustomTags={knownCustomTags}
+                      readOnly={!canManage}
                     />
                     <FlagChips
                       flags={(a.customFlags as CustomFlag[]) || []}
                       dense
-                      onClick={(e) => {
+                      onClick={canManage ? (e) => {
                         e.stopPropagation();
                         setOpenClearedFor(open ? null : a.id);
-                      }}
+                      } : undefined}
                     />
                   </div>
                 );
@@ -7249,11 +7282,22 @@ export default function App(){
     const wasAdmin = previousAdminMode.current;
     previousAdminMode.current = adminMode;
     if (wasAdmin && !adminMode) {
-      // Entering preview — seed from org default if present, else
-      // from the hardcoded baseline so the preview is faithful to
-      // what a fresh sales rep would actually see.
-      const baseline = orgSettings.defaultListView ?? hardcodedListViewBaseline();
+      // Entering preview — seed both viewMode AND the live layout
+      // snapshot to the baseline. We MUST do both: the dirty-check
+      // reads `currentListLayout`, which would otherwise still hold
+      // the admin's pre-preview layout and falsely trigger the
+      // "Save as default" pill on first render. ListView's own
+      // onLayoutChange will fire shortly after when it remounts
+      // (if list view is the active mode), but resetting here
+      // guarantees the dirty check is correct from frame zero, even
+      // when the ListView isn't currently mounted (e.g. grid mode).
+      const baseline = effectiveBaseline(orgSettings.defaultListView);
       setViewMode(baseline.viewMode);
+      setCurrentListLayout({
+        columnOrder: baseline.columnOrder,
+        hidden: baseline.hidden,
+        widths: baseline.widths,
+      });
     } else if (!wasAdmin && adminMode) {
       // Exiting preview — restore admin's personal pick.
       if (typeof window !== "undefined") {
@@ -8894,7 +8938,7 @@ export default function App(){
                       Hidden entirely in admin mode — the admin's
                       personal layout shouldn't drive the team default. */}
                   {isAdmin && !adminMode && (() => {
-                    const baseline = orgSettings.defaultListView ?? hardcodedListViewBaseline();
+                    const baseline = effectiveBaseline(orgSettings.defaultListView);
                     const dirty = baseline.viewMode !== viewMode
                       || JSON.stringify(baseline.columnOrder) !== JSON.stringify(currentListLayout.columnOrder)
                       || JSON.stringify([...baseline.hidden].sort()) !== JSON.stringify([...currentListLayout.hidden].sort())
