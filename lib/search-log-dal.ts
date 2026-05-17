@@ -4,17 +4,20 @@
 // "what are our reps actually looking for?" and "where do they get
 // zero results?" — i.e. demand signal + library gap signal.
 //
-// Anonymity contract: the row stores user_id (we need it for
-// de-dupe across users + potential per-rep analytics later), but
-// no public-facing helper here returns it. The admin Insights view
-// sees query text, source, result count, and timestamp — never who
-// ran the search.
+// Attribution model: the admin Insights view sees who ran each
+// search (email). Earlier iterations anonymized this for privacy,
+// but the org admin needs to know which reps are searching for
+// what — both to coach reps and to assess whether the library
+// gaps they hit are widespread or isolated. Sales reps NEVER see
+// other reps' searches; the only consumer of these helpers is the
+// admin-only /api/search-logs endpoint.
 
 import { supabaseAdmin } from "./supabase-server";
 
 export type SearchSource = "library" | "storymatch";
 
-// Anonymized log entry — the only shape ever returned to /api.
+// Log entry returned to admin /api consumers. Includes the
+// searcher's email so admins can identify which rep ran the query.
 export interface SearchLogEntry {
   id: string;
   query: string;
@@ -22,6 +25,8 @@ export interface SearchLogEntry {
   resultCount: number;
   topResultIds: string[];
   createdAt: string;
+  userId: string | null;     // raw id — used for grouping in the FE
+  userEmail: string | null;  // null if the user record was deleted
 }
 
 // Aggregate row for the "Top queries" panel.
@@ -69,25 +74,56 @@ export async function logSearch(params: {
 }
 
 // Recent activity feed for the admin Insights view. Returns up to
-// `limit` rows, newest first, anonymized.
+// `limit` rows, newest first, with the searcher's email joined in.
+//
+// Email join strategy: pull the row set first, collect the distinct
+// user_ids, then make a single `auth.admin.listUsers` call to build
+// an id→email map. This avoids N+1 queries and matches the pattern
+// used by /api/share/list. Deleted users come back with email=null
+// rather than dropping the row, so the admin still sees the search
+// occurred (just without attribution).
 export async function fetchRecentLogs(params: {
   orgId: string;
   limit?: number;
   source?: SearchSource;
+  sinceIso?: string;
+  untilIso?: string;
 }): Promise<SearchLogEntry[]> {
   const limit = Math.min(Math.max(params.limit ?? 200, 1), 500);
   let q = supabaseAdmin
     .from("search_logs")
-    .select("id, query, source, result_count, top_result_ids, created_at")
+    .select("id, user_id, query, source, result_count, top_result_ids, created_at")
     .eq("org_id", params.orgId)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (params.source) q = q.eq("source", params.source);
+  if (params.sinceIso) q = q.gte("created_at", params.sinceIso);
+  if (params.untilIso) q = q.lte("created_at", params.untilIso);
   const { data, error } = await q;
   if (error || !data) {
     if (error) console.error("[search-log-dal] fetchRecentLogs failed", error);
     return [];
   }
+
+  // Build the user_id → email map. Skipped entirely when the result
+  // set is empty so we don't pay the auth admin RTT for nothing.
+  const emailMap = new Map<string, string>();
+  if (data.length > 0) {
+    try {
+      const { data: usersData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 200 });
+      if (usersData?.users) {
+        const wanted = new Set(data.map(r => r.user_id as string));
+        for (const u of usersData.users) {
+          if (wanted.has(u.id) && u.email) emailMap.set(u.id, u.email);
+        }
+      }
+    } catch (e) {
+      // Email lookup is best-effort. If it fails we still return
+      // rows with email=null rather than failing the whole request.
+      console.warn("[search-log-dal] email map lookup failed", e);
+    }
+  }
+
   return data.map(r => ({
     id: r.id as string,
     query: r.query as string,
@@ -95,6 +131,8 @@ export async function fetchRecentLogs(params: {
     resultCount: (r.result_count as number) ?? 0,
     topResultIds: (r.top_result_ids as string[]) || [],
     createdAt: r.created_at as string,
+    userId: (r.user_id as string) || null,
+    userEmail: emailMap.get(r.user_id as string) || null,
   }));
 }
 

@@ -47,13 +47,30 @@ export async function GET(req: NextRequest) {
   }
 
   const url = req.nextUrl;
+
+  // Range supports two shapes:
+  //   ?days=N           — rolling window ending now (shortcut)
+  //   ?from=ISO&to=ISO  — explicit custom range. Either is optional;
+  //                       passing only one bounds is allowed (e.g.
+  //                       just `from` to mean "since this date").
+  // If both `days` and `from/to` are passed, `from/to` wins because
+  // it's the more explicit signal.
   const days = (() => {
     const raw = url.searchParams.get("days");
     if (!raw) return null;
     const n = parseInt(raw, 10);
     return Number.isFinite(n) && n > 0 ? n : null;
   })();
-  const sinceIso = days ? new Date(Date.now() - days * 86400000).toISOString() : null;
+  const parseIso = (raw: string | null): string | null => {
+    if (!raw) return null;
+    const t = Date.parse(raw);
+    if (!Number.isFinite(t)) return null;
+    return new Date(t).toISOString();
+  };
+  const fromIso = parseIso(url.searchParams.get("from"));
+  const toIso = parseIso(url.searchParams.get("to"));
+  const sinceIso = fromIso ?? (days ? new Date(Date.now() - days * 86400000).toISOString() : null);
+  const untilIso = toIso;
 
   // Build three head-only count queries in parallel. The
   // `count: "exact", head: true` shape tells PostgREST to skip
@@ -65,6 +82,7 @@ export async function GET(req: NextRequest) {
       .select("*", { count: "exact", head: true })
       .eq("org_id", ctx.orgId);
     if (sinceIso) q = q.gte("created_at", sinceIso);
+    if (untilIso) q = q.lte("created_at", untilIso);
     const { count, error } = await q;
     if (error) {
       console.error(`[insights/summary] count failed for ${table}`, error);

@@ -68,6 +68,18 @@ export async function GET(req: NextRequest) {
   const scope = req.nextUrl.searchParams.get("scope");
   const orgWide = scope === "org";
 
+  // Optional date range — used by the Insights view so the team
+  // share list narrows in lockstep with the top counter. Both
+  // params are optional and parsed defensively.
+  const parseIso = (raw: string | null): string | undefined => {
+    if (!raw) return undefined;
+    const t = Date.parse(raw);
+    if (!Number.isFinite(t)) return undefined;
+    return new Date(t).toISOString();
+  };
+  const fromIso = parseIso(req.nextUrl.searchParams.get("from"));
+  const toIso = parseIso(req.nextUrl.searchParams.get("to"));
+
   // Pull share_links — own (default) or org-wide (admin only)
   let q = supabaseAdmin
     .from("share_links")
@@ -76,6 +88,8 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: false })
     .limit(200);
   if (!orgWide) q = q.eq("sender_user_id", ctx.userId);
+  if (fromIso) q = q.gte("created_at", fromIso);
+  if (toIso) q = q.lte("created_at", toIso);
 
   const { data: shares, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

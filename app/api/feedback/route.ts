@@ -62,19 +62,29 @@ export async function GET(req: NextRequest) {
   const assetId = url.searchParams.get("asset_id");
 
   // Admin-only org-wide summary used by the Feedback dashboard view.
-  // Returns every asset with at least one vote.
+  // Returns every asset with at least one vote. Optional ?from=ISO
+  // &to=ISO narrows the window — used by the Insights view so the
+  // team feedback list lines up with the top counter.
   if (summary === "true") {
     if (ctx.role !== "admin") {
       return NextResponse.json({ error: "Admins only" }, { status: 403 });
     }
-    const bundle = await fetchOrgFeedbackBundle(ctx.orgId);
+    const parseIso = (raw: string | null): string | undefined => {
+      if (!raw) return undefined;
+      const t = Date.parse(raw);
+      if (!Number.isFinite(t)) return undefined;
+      return new Date(t).toISOString();
+    };
+    const sinceIso = parseIso(url.searchParams.get("from"));
+    const untilIso = parseIso(url.searchParams.get("to"));
+    const bundle = await fetchOrgFeedbackBundle(ctx.orgId, { sinceIso, untilIso });
     const out: Array<{
       assetId: string;
       up: number;
       down: number;
       total: number;
       netScore: number;
-      comments: Array<{ rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string }>;
+      comments: Array<{ rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string; userId: string | null; userEmail: string | null }>;
     }> = [];
     for (const [, b] of bundle) {
       out.push({
@@ -105,7 +115,7 @@ export async function GET(req: NextRequest) {
     down: number;
     total: number;
     myVote: { rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string } | null;
-    comments?: Array<{ rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string }>;
+    comments?: Array<{ rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string; userId: string | null; userEmail: string | null }>;
   } = {
     assetId,
     up: agg.up,
@@ -128,6 +138,8 @@ export async function GET(req: NextRequest) {
         comment: c.comment,
         createdAt: c.createdAt,
         updatedAt: c.updatedAt,
+        userId: c.userId,
+        userEmail: c.userEmail,
       }));
   }
   return NextResponse.json(payload);

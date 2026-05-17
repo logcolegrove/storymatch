@@ -6,11 +6,11 @@
 // every helper here either upserts against that constraint or deletes
 // the user's existing row.
 //
-// Anonymity model:
-//   Admins see counts + comment text but NOT which user wrote it. The
-//   DB stores user_id (we need it for upsert + de-dup), but no helper
-//   here returns it in any shape that crosses the API boundary except
-//   `findUserVote`, which is scoped to the calling user themselves.
+// Attribution model:
+//   Admins see counts + comment text AND who left each one (email).
+//   This used to be anonymized but the org admin needs to know which
+//   rep flagged a problem to follow up. Sales reps still only ever
+//   see their own row + aggregate counts — never another rep's vote.
 //
 // All queries filter on org_id first so a misconfigured caller can't
 // accidentally cross tenant boundaries.
@@ -32,14 +32,20 @@ interface FeedbackRow {
   updated_at: string;
 }
 
-// Comment + rating for the admin view. Intentionally omits user_id
-// and id so admins can't reverse-engineer authorship from order or
-// internal ids.
+// Comment + rating for the admin view. Surfaces user attribution
+// (email) so admins can identify who left each note. Sales reps
+// never see this shape — only their own MyFeedback row.
+//
+// Name retained as `AnonymizedFeedback` for callsite stability;
+// effectively now "AdminFeedbackComment". TODO: rename if/when we
+// next sweep.
 export interface AnonymizedFeedback {
   rating: FeedbackRating;
   comment: string | null;
   createdAt: string;
   updatedAt: string;
+  userId: string | null;
+  userEmail: string | null;
 }
 
 // Per-asset rollup used by the dashboard list and the StoryMatch
@@ -166,16 +172,37 @@ export async function findUserVote(params: {
   };
 }
 
-// Fetch the anonymized comment + rating list for a single asset. This
-// is the admin-facing shape — comments without authorship. Sorted
-// newest first so recent reactions surface immediately.
+// Shared helper: build a user_id → email map for the given set of
+// ids via the auth admin API. Mirrors the pattern used by
+// search-log-dal and /api/share/list. Failures are swallowed with a
+// warning — admins still see the comment, just without attribution.
+async function lookupEmailMap(userIds: Iterable<string>): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const wanted = new Set<string>();
+  for (const id of userIds) if (id) wanted.add(id);
+  if (wanted.size === 0) return map;
+  try {
+    const { data: usersData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 200 });
+    if (usersData?.users) {
+      for (const u of usersData.users) {
+        if (wanted.has(u.id) && u.email) map.set(u.id, u.email);
+      }
+    }
+  } catch (e) {
+    console.warn("[feedback-dal] email map lookup failed", e);
+  }
+  return map;
+}
+
+// Fetch the comment + rating list for a single asset. Admin-facing —
+// each row includes user attribution (email). Sorted newest first.
 export async function fetchAssetFeedback(params: {
   orgId: string;
   assetId: string;
 }): Promise<AnonymizedFeedback[]> {
   const { data, error } = await supabaseAdmin
     .from("asset_feedback")
-    .select("rating, comment, created_at, updated_at")
+    .select("user_id, rating, comment, created_at, updated_at")
     .eq("org_id", params.orgId)
     .eq("asset_id", params.assetId)
     .order("created_at", { ascending: false });
@@ -183,11 +210,14 @@ export async function fetchAssetFeedback(params: {
     if (error) console.error("[feedback-dal] fetch asset failed", error);
     return [];
   }
+  const emailMap = await lookupEmailMap(data.map(r => r.user_id as string));
   return data.map(r => ({
     rating: r.rating as FeedbackRating,
     comment: r.comment as string | null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
+    userId: (r.user_id as string) || null,
+    userEmail: emailMap.get(r.user_id as string) || null,
   }));
 }
 
@@ -225,19 +255,25 @@ export interface AssetFeedbackBundle {
 
 export async function fetchOrgFeedbackBundle(
   orgId: string,
-  opts?: { maxCommentsPerAsset?: number },
+  opts?: { maxCommentsPerAsset?: number; sinceIso?: string; untilIso?: string },
 ): Promise<Map<string, AssetFeedbackBundle>> {
   const maxComments = opts?.maxCommentsPerAsset ?? 25;
-  const { data, error } = await supabaseAdmin
+  let q = supabaseAdmin
     .from("asset_feedback")
-    .select("asset_id, rating, comment, created_at, updated_at")
+    .select("asset_id, user_id, rating, comment, created_at, updated_at")
     .eq("org_id", orgId)
     .order("created_at", { ascending: false });
+  if (opts?.sinceIso) q = q.gte("created_at", opts.sinceIso);
+  if (opts?.untilIso) q = q.lte("created_at", opts.untilIso);
+  const { data, error } = await q;
   const out = new Map<string, AssetFeedbackBundle>();
   if (error || !data) {
     if (error) console.error("[feedback-dal] bundle failed", error);
     return out;
   }
+  // Build the email map once for all rows in this bundle. Cheaper
+  // than per-asset lookups and the user set is small.
+  const emailMap = await lookupEmailMap(data.map(r => r.user_id as string));
   for (const r of data) {
     const aid = r.asset_id as string;
     let bundle = out.get(aid);
@@ -259,6 +295,8 @@ export async function fetchOrgFeedbackBundle(
         comment: r.comment as string | null,
         createdAt: r.created_at as string,
         updatedAt: r.updated_at as string,
+        userId: (r.user_id as string) || null,
+        userEmail: emailMap.get(r.user_id as string) || null,
       });
     }
   }

@@ -57,10 +57,20 @@ export async function GET(req: NextRequest) {
     const n = parseInt(raw, 10);
     return Number.isFinite(n) && n > 0 ? n : null;
   })();
-  const sinceIso = days ? new Date(Date.now() - days * 86400000).toISOString() : undefined;
+  const parseIso = (raw: string | null): string | undefined => {
+    if (!raw) return undefined;
+    const t = Date.parse(raw);
+    if (!Number.isFinite(t)) return undefined;
+    return new Date(t).toISOString();
+  };
+  const fromIso = parseIso(url.searchParams.get("from"));
+  const toIso = parseIso(url.searchParams.get("to"));
+  // Explicit from/to wins over rolling days.
+  const sinceIso = fromIso ?? (days ? new Date(Date.now() - days * 86400000).toISOString() : undefined);
+  const untilIso = toIso;
 
   const [recent, top] = await Promise.all([
-    fetchRecentLogs({ orgId: ctx.orgId, limit: 200, source }),
+    fetchRecentLogs({ orgId: ctx.orgId, limit: 200, source, sinceIso, untilIso }),
     fetchTopQueries({ orgId: ctx.orgId, limit: 25, sinceIso, source }),
   ]);
 

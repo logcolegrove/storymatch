@@ -1,9 +1,9 @@
 "use client";
 
-// Feedback view — anonymized asset rating + comments for sales reps,
-// and a feedback dashboard for admins. Both roles share the same list
-// of assets; the admin view adds aggregate counts + a per-asset
-// comment stream (without attribution).
+// Feedback view — asset rating + comments for sales reps, and a
+// feedback dashboard for admins. Both roles share the same list of
+// assets; the admin view adds aggregate counts + a per-asset
+// comment stream with user attribution (email).
 //
 // Submission UX:
 //   • Clicking a thumbs control auto-saves the rating immediately.
@@ -12,9 +12,10 @@
 // One vote per user per asset is enforced by the DB unique constraint
 // (asset_id, user_id) — the server-side upsert handles the round-trip.
 //
-// Anonymity contract: the API never returns user_id alongside comments
-// for non-self rows. Sales reps see only their own ratings + comments;
-// admins see aggregate counts plus an anonymized comment list per asset.
+// Attribution: admins see who left each rating/comment so they can
+// follow up with the rep that flagged a problem. Sales reps only see
+// their own row + the aggregate up/down counts — never another rep's
+// vote or note.
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -43,7 +44,7 @@ interface AdminAggregate {
   down: number;
   total: number;
   netScore: number;
-  comments: Array<{ rating: Rating; comment: string | null; createdAt: string; updatedAt: string }>;
+  comments: Array<{ rating: Rating; comment: string | null; createdAt: string; updatedAt: string; userId: string | null; userEmail: string | null }>;
 }
 
 interface Props {
@@ -388,7 +389,12 @@ export default function FeedbackView({ assets, role, authHeaders, onBack }: Prop
                     {agg.comments.map((c, i) => (
                       <div key={i} className={`fbv-comment-row ${c.rating}`}>
                         <span className={`fbv-pill ${c.rating}`}>{c.rating === "up" ? "👍" : "👎"}</span>
-                        <span className="fbv-comment-text">{c.comment}</span>
+                        <div className="fbv-comment-body">
+                          {c.userEmail && (
+                            <div className="fbv-comment-author" title={c.userEmail}>{c.userEmail}</div>
+                          )}
+                          <div className="fbv-comment-text">{c.comment}</div>
+                        </div>
                         <span className="fbv-comment-time">{timeAgo(c.createdAt)}</span>
                       </div>
                     ))}
@@ -445,6 +451,8 @@ const css = `
 .fbv-comment-row{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg);border-radius:7px;font-size:12.5px;color:var(--t1);}
 .fbv-comment-row.down{background:#fef2f2;}
 .fbv-comment-row.up{background:#f0fdf4;}
+.fbv-comment-body{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;}
+.fbv-comment-author{font-size:10.5px;font-weight:700;color:var(--t3);text-transform:none;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .fbv-pill{font-size:13px;flex-shrink:0;}
 .fbv-comment-text{flex:1;line-height:1.45;}
 .fbv-comment-time{font-size:10.5px;color:var(--t4);white-space:nowrap;}
