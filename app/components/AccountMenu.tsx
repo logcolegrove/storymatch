@@ -25,6 +25,12 @@ interface Props {
   // parent, which updates the canonical state.
   previewingAsSales?: boolean;
   onTogglePreviewAsSales?: () => void;
+  // Where the popup opens relative to the avatar trigger.
+  //   "above" (default): popup floats up — used by the admin rail
+  //                      placement (avatar sits at the bottom).
+  //   "below":           popup drops down — used by the top-right
+  //                      placement in the page header.
+  placement?: "above" | "below";
 }
 
 // Build a 1-2 character avatar label from the user's email. "logan.colegrove@..."
@@ -48,9 +54,13 @@ function colorFromEmail(email: string): string {
   return `hsl(${hue}, 55%, 48%)`;
 }
 
-export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, onSignOut, authHeaders, previewingAsSales, onTogglePreviewAsSales }: Props) {
+export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, onSignOut, authHeaders, previewingAsSales, onTogglePreviewAsSales, placement = "above" }: Props) {
   const [open, setOpen] = useState(false);
-  const [popPos, setPopPos] = useState<{ left: number; bottom: number } | null>(null);
+  // Position is a sparse set of CSS sides — the placement logic only
+  // fills the two that matter ("bottom + left" for above-style,
+  // "top + right" for below-style), and we spread the object onto
+  // the popup's inline style. Keeps the JSX rendering branchless.
+  const [popPos, setPopPos] = useState<{ left?: number; right?: number; top?: number; bottom?: number } | null>(null);
   const [teamOpen, setTeamOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -61,13 +71,26 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
   // Toggle the popup; on open, compute the fixed-position coordinates from the
   // trigger's bounding rect. This is required because the admin rail uses
   // overflow:auto, which would otherwise clip an absolutely-positioned child.
+  // The two placements pin different corners of the popup to the trigger:
+  //   "above"  — popup's bottom-left near trigger's top-left
+  //   "below"  — popup's top-right near trigger's bottom-right (so the
+  //              popup hangs off the right edge of the avatar, fitting the
+  //              top-right header use case where the avatar is itself near
+  //              the right edge of the screen).
   const toggleOpen = () => {
     if (!open && triggerRef.current) {
       const r = triggerRef.current.getBoundingClientRect();
-      setPopPos({
-        left: r.left,
-        bottom: window.innerHeight - r.top + 8, // 8px gap above the avatar
-      });
+      if (placement === "below") {
+        setPopPos({
+          top: r.bottom + 8,
+          right: Math.max(8, window.innerWidth - r.right),
+        });
+      } else {
+        setPopPos({
+          left: r.left,
+          bottom: window.innerHeight - r.top + 8,
+        });
+      }
     }
     setOpen(o => !o);
   };
@@ -101,7 +124,7 @@ export default function AccountMenu({ userEmail, workspaceName, role, isAdmin, o
           <span className="am-avatar" style={{ background: color }}>{initials}</span>
         </button>
         {open && popPos && (
-          <div className="am-pop" ref={popRef} style={{ left: popPos.left, bottom: popPos.bottom }}>
+          <div className="am-pop" ref={popRef} style={popPos}>
             <div className="am-pop-head">
               <span className="am-avatar lg" style={{ background: color }}>{initials}</span>
               <div className="am-pop-head-text">

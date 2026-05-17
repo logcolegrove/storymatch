@@ -3793,6 +3793,23 @@ const BUILT_IN_LIST_VIEW_COLUMNS: ListViewColumn[] = [
 // intentionally omitted so it starts hidden.
 const DEFAULT_REORDERABLE_KEYS = ["vis", "status", "date"];
 
+// What a brand-new sales rep would land on if NO admin has saved an
+// org default yet. Mirrors the values the ListView's useState
+// initializers fall through to when both localStorage and orgDefaults
+// are absent. Used by the "Save as default" dirty-check so the pill
+// only appears once the admin in preview mode actually deviates from
+// this baseline — not just because no default has ever been saved.
+function hardcodedListViewBaseline(): DefaultListView {
+  const widths: Record<string, number> = {};
+  for (const c of BUILT_IN_LIST_VIEW_COLUMNS) widths[c.key] = c.defaultWidth;
+  return {
+    viewMode: "list",
+    columnOrder: [...DEFAULT_REORDERABLE_KEYS],
+    hidden: [],
+    widths,
+  };
+}
+
 // Synthesise a column descriptor for a custom field. Width defaults
 // reflect a moderately compact display; admin can resize as needed.
 function fieldDefToColumn(def: FieldDef): ListViewColumn {
@@ -7232,9 +7249,11 @@ export default function App(){
     const wasAdmin = previousAdminMode.current;
     previousAdminMode.current = adminMode;
     if (wasAdmin && !adminMode) {
-      // Entering preview — seed from org default if present.
-      const saved = orgSettings.defaultListView?.viewMode;
-      if (saved === "grid" || saved === "list") setViewMode(saved);
+      // Entering preview — seed from org default if present, else
+      // from the hardcoded baseline so the preview is faithful to
+      // what a fresh sales rep would actually see.
+      const baseline = orgSettings.defaultListView ?? hardcodedListViewBaseline();
+      setViewMode(baseline.viewMode);
     } else if (!wasAdmin && adminMode) {
       // Exiting preview — restore admin's personal pick.
       if (typeof window !== "undefined") {
@@ -8285,19 +8304,10 @@ export default function App(){
               </button>
             )}
             <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:8,paddingLeft:12,borderLeft:"1px solid var(--border)"}}>
-              {/* Email/workspace/sign-out moved to AccountMenu in the rail bottom
-                  for admins-in-admin-mode. Show the inline header info only when
-                  the rail isn't visible (sales reps, or admin previewing public). */}
-              {!(isAdmin && adminMode) && (
-                <div style={{fontSize:11,color:"var(--t3)",textAlign:"right",lineHeight:1.3}}>
-                  <div style={{fontWeight:600,color:"var(--t2)"}}>{user?.email}</div>
-                  <div>{org?.name||"No workspace"} · {org?.role||"—"}</div>
-                </div>
-              )}
               <button
                 onClick={()=>{window.location.hash="/shares";}}
                 title="See your shared links and engagement"
-                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--accent)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)",marginRight:6,display:"inline-flex",alignItems:"center",gap:5}}
+                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--accent)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)",display:"inline-flex",alignItems:"center",gap:5}}
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -8305,17 +8315,27 @@ export default function App(){
                 </svg>
                 My shares
               </button>
-              {/* Standalone Feedback nav button removed — feedback now
-                  lives inside Insights → "Feedback given" tab for
-                  admins, and individual rating happens through the
-                  3-dot menu on any asset card/row. Keeps the header
-                  uncluttered. */}
+              {/* Identity + sign-out for sales reps and admins
+                  previewing as sales. Replaces the older inline
+                  email/workspace/sign-out trio with the same
+                  avatar-popover used in the admin rail — clicking
+                  the circle reveals email, workspace, sign-out, and
+                  (for admins) "Exit sales preview". The admin rail
+                  hosts its own AccountMenu in admin mode and the
+                  rail itself is hidden in preview, so the two
+                  placements never overlap. */}
               {!(isAdmin && adminMode) && (
-                <button
-                  onClick={signOut}
-                  title="Sign out"
-                  style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--t3)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}
-                >Sign out</button>
+                <AccountMenu
+                  userEmail={user?.email || ""}
+                  workspaceName={org?.name || "No workspace"}
+                  role={org?.role || ""}
+                  isAdmin={isAdmin}
+                  onSignOut={signOut}
+                  authHeaders={authHeaders}
+                  previewingAsSales={isAdmin && !adminMode}
+                  onTogglePreviewAsSales={() => setAdminMode(m => !m)}
+                  placement="below"
+                />
               )}
             </div>
           </div>
@@ -8814,72 +8834,6 @@ export default function App(){
                     )}
                   </div>
 
-                  {/* "Save as default" pill — appears ONLY while an
-                      admin is in "Preview as sales rep" mode AND
-                      their preview-mode layout differs from the
-                      saved org default. The admin's workflow:
-                      enter preview, tweak the layout to what they
-                      want sales to see, hit save. Clicking PUTs the
-                      current state to /api/org/settings; new sales
-                      reps with no localStorage layout pick it up on
-                      next load. Disappears after a successful save
-                      (current now matches default → no diff).
-                      Hidden entirely in admin mode — the admin's
-                      personal layout shouldn't drive what the team
-                      sees by default. */}
-                  {isAdmin && !adminMode && (() => {
-                    const saved = orgSettings.defaultListView;
-                    const dirty = !saved
-                      || saved.viewMode !== viewMode
-                      || JSON.stringify(saved.columnOrder) !== JSON.stringify(currentListLayout.columnOrder)
-                      || JSON.stringify([...saved.hidden].sort()) !== JSON.stringify([...currentListLayout.hidden].sort())
-                      || JSON.stringify(saved.widths) !== JSON.stringify(currentListLayout.widths);
-                    if (!dirty) return null;
-                    return (
-                      <button
-                        type="button"
-                        className="lv-save-default"
-                        title={saved
-                          ? "Update the team default to match your current layout. Sales reps without a saved layout will land here."
-                          : "Set the current layout as the team default. New sales reps will land here."}
-                        onClick={async () => {
-                          if (saveAsDefaultPending.current) return;
-                          saveAsDefaultPending.current = true;
-                          const newDefault = {
-                            viewMode,
-                            columnOrder: currentListLayout.columnOrder,
-                            hidden: currentListLayout.hidden,
-                            widths: currentListLayout.widths,
-                          };
-                          try {
-                            setToast("Saving default…");
-                            const r = await fetch("/api/org/settings", {
-                              method: "PUT",
-                              headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-                              body: JSON.stringify({ defaultListView: newDefault }),
-                            });
-                            if (!r.ok) throw new Error("Save failed");
-                            const updated = await r.json() as OrgSettings;
-                            setOrgSettings(updated);
-                            setToast("Saved as team default");
-                          } catch (e) {
-                            console.error("Failed to save default", e);
-                            setToast("Couldn't save default");
-                          } finally {
-                            setTimeout(() => setToast(null), 1800);
-                            saveAsDefaultPending.current = false;
-                          }
-                        }}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                          <polyline points="17 21 17 13 7 13 7 21"/>
-                          <polyline points="7 3 7 8 15 8"/>
-                        </svg>
-                        Save as default
-                      </button>
-                    );
-                  })()}
                   {/* When StoryMatch results are active, the grid/list
                       toggle is meaningless (cards force-render in a
                       2-up grid). Swap it out for a prominent "Clear
@@ -8929,6 +8883,68 @@ export default function App(){
                       </button>
                     </div>
                   )}
+
+                  {/* "Save as default" pill — only appears while an
+                      admin is in "Preview as sales rep" mode AND
+                      they've made a change vs. the baseline that
+                      preview started on (either the saved org
+                      default, or the hardcoded baseline when no
+                      default has ever been saved). Disappears after
+                      a save (current now matches saved → no diff).
+                      Hidden entirely in admin mode — the admin's
+                      personal layout shouldn't drive the team default. */}
+                  {isAdmin && !adminMode && (() => {
+                    const baseline = orgSettings.defaultListView ?? hardcodedListViewBaseline();
+                    const dirty = baseline.viewMode !== viewMode
+                      || JSON.stringify(baseline.columnOrder) !== JSON.stringify(currentListLayout.columnOrder)
+                      || JSON.stringify([...baseline.hidden].sort()) !== JSON.stringify([...currentListLayout.hidden].sort())
+                      || JSON.stringify(baseline.widths) !== JSON.stringify(currentListLayout.widths);
+                    if (!dirty) return null;
+                    return (
+                      <button
+                        type="button"
+                        className="lv-save-default"
+                        title={orgSettings.defaultListView
+                          ? "Update the team default to match your current layout. Sales reps without a saved layout will land here."
+                          : "Set the current layout as the team default. New sales reps will land here."}
+                        onClick={async () => {
+                          if (saveAsDefaultPending.current) return;
+                          saveAsDefaultPending.current = true;
+                          const newDefault = {
+                            viewMode,
+                            columnOrder: currentListLayout.columnOrder,
+                            hidden: currentListLayout.hidden,
+                            widths: currentListLayout.widths,
+                          };
+                          try {
+                            setToast("Saving default…");
+                            const r = await fetch("/api/org/settings", {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+                              body: JSON.stringify({ defaultListView: newDefault }),
+                            });
+                            if (!r.ok) throw new Error("Save failed");
+                            const updated = await r.json() as OrgSettings;
+                            setOrgSettings(updated);
+                            setToast("Saved as team default");
+                          } catch (e) {
+                            console.error("Failed to save default", e);
+                            setToast("Couldn't save default");
+                          } finally {
+                            setTimeout(() => setToast(null), 1800);
+                            saveAsDefaultPending.current = false;
+                          }
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                          <polyline points="17 21 17 13 7 13 7 21"/>
+                          <polyline points="7 3 7 8 15 8"/>
+                        </svg>
+                        Save as default
+                      </button>
+                    );
+                  })()}
 
                   {/* "+ Add" button removed — adding assets is admin
                       work that lives in the left rail (Import → Add a
