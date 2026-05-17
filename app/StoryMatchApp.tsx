@@ -8348,17 +8348,24 @@ export default function App(){
               </button>
             )}
             <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:8,paddingLeft:12,borderLeft:"1px solid var(--border)"}}>
-              <button
-                onClick={()=>{window.location.hash="/shares";}}
-                title="See your shared links and engagement"
-                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--accent)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)",display:"inline-flex",alignItems:"center",gap:5}}
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                </svg>
-                My shares
-              </button>
+              {/* "My shares" is sales-rep-only in the header. Admins see
+                  this data in Insights → "Links shared" tab, where a
+                  scope toggle flips between team-wide and self-only.
+                  Keeps the header lean for admins, who already have
+                  the side rail + AccountMenu + preview pill. */}
+              {!isAdmin && (
+                <button
+                  onClick={()=>{window.location.hash="/shares";}}
+                  title="See your shared links and engagement"
+                  style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--accent)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)",display:"inline-flex",alignItems:"center",gap:5}}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                  </svg>
+                  My shares
+                </button>
+              )}
               {/* Identity + sign-out for sales reps and admins
                   previewing as sales. Replaces the older inline
                   email/workspace/sign-out trio with the same

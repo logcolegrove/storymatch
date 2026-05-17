@@ -1,0 +1,128 @@
+// /api/showcases/[id] — single-showcase read, update, delete.
+//
+//   GET    → { showcase: Showcase, assets: ShowcaseAssetSlim[], droppedCount }
+//     Public — anyone with the URL can open. The resolved-assets
+//     list silently drops references whose underlying asset no
+//     longer exists or isn't published, so sales rep links never
+//     hard-error when admins later archive content.
+//
+//   PUT    → { showcase: Showcase }
+//     Authenticated, tenant-scoped. Admins can update any showcase
+//     in their org; sales reps only their own. Updatable fields:
+//     name, description, asset_ids (full replacement).
+//
+//   DELETE → { ok: true }
+//     Same permission gating as PUT. Hard delete (no soft-delete in
+//     v1 — if a sales rep deletes their playlist, the link 404s,
+//     which is the expected behavior for an intentional removal).
+
+import { NextRequest, NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase-server";
+import {
+  fetchShowcase,
+  resolveShowcase,
+  updateShowcase,
+  deleteShowcase,
+} from "@/lib/showcase-dal";
+
+async function getCurrentUserOrg(req: NextRequest) {
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const token = authHeader.slice(7);
+  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !user) return null;
+  const { data: membership } = await supabaseAdmin
+    .from("org_members")
+    .select("org_id, role")
+    .eq("user_id", user.id)
+    .limit(1)
+    .maybeSingle();
+  if (!membership) return null;
+  return {
+    userId: user.id,
+    orgId: membership.org_id as string,
+    role: membership.role as "admin" | "sales",
+  };
+}
+
+// ── GET (public) ─────────────────────────────────────────────────
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  const resolved = await resolveShowcase(id);
+  if (!resolved) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Strip internal-only fields from the public response. Owner +
+  // org IDs are infrastructure detail; the public viewer doesn't
+  // need them. droppedCount stays because the admin editor uses
+  // this same endpoint to fetch its own showcase data.
+  return NextResponse.json({
+    showcase: {
+      id: resolved.id,
+      name: resolved.name,
+      description: resolved.description,
+      assetIds: resolved.assetIds,
+      createdAt: resolved.createdAt,
+      updatedAt: resolved.updatedAt,
+      ownerUserId: resolved.ownerUserId,
+      orgId: resolved.orgId,
+    },
+    assets: resolved.assets,
+    droppedCount: resolved.droppedCount,
+  });
+}
+
+// ── PUT (auth required) ──────────────────────────────────────────
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+
+  const ctx = await getCurrentUserOrg(req);
+  if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Permission check — admins can update any showcase in their org,
+  // sales reps only their own.
+  const existing = await fetchShowcase(id);
+  if (!existing || existing.orgId !== ctx.orgId) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  if (ctx.role !== "admin" && existing.ownerUserId !== ctx.userId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const body = await req.json().catch(() => ({})) as {
+    name?: unknown;
+    description?: unknown;
+    asset_ids?: unknown;
+  };
+  const updates: { name?: string; description?: string | null; assetIds?: string[] } = {};
+  if (typeof body.name === "string") updates.name = body.name;
+  if (body.description !== undefined) {
+    updates.description = typeof body.description === "string" ? body.description : null;
+  }
+  if (Array.isArray(body.asset_ids)) {
+    updates.assetIds = body.asset_ids as string[];
+  }
+  const result = await updateShowcase({ id, orgId: ctx.orgId, ...updates });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  return NextResponse.json({ showcase: result.showcase });
+}
+
+// ── DELETE (auth required) ───────────────────────────────────────
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+
+  const ctx = await getCurrentUserOrg(req);
+  if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const existing = await fetchShowcase(id);
+  if (!existing || existing.orgId !== ctx.orgId) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  if (ctx.role !== "admin" && existing.ownerUserId !== ctx.userId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  const result = await deleteShowcase(id, ctx.orgId);
+  if (!result.ok) return NextResponse.json({ error: result.error || "Delete failed" }, { status: 500 });
+  return NextResponse.json({ ok: true });
+}

@@ -513,6 +513,12 @@ function TeamSharesPanel({ authHeaders, range }: {
 }) {
   const [loading, setLoading] = useState(true);
   const [shares, setShares] = useState<ShareRow[]>([]);
+  // Scope toggle — admins by default see the whole team (the
+  // Insights view is about TEAM adoption), but they can flip to
+  // "just my shares" to see only the links they personally sent.
+  // Mirrors the same `scope` param the standalone My Shares page
+  // uses, so the data is identical between the two surfaces.
+  const [scope, setScope] = useState<"org" | "self">("org");
 
   useEffect(() => {
     let cancelled = false;
@@ -520,7 +526,7 @@ function TeamSharesPanel({ authHeaders, range }: {
       setLoading(true);
       try {
         const headers = await authHeaders();
-        const parts: string[] = ["scope=org"];
+        const parts: string[] = [`scope=${scope}`];
         const rq = toQuery(range);
         if (rq) parts.push(rq);
         const r = await fetch(`/api/share/list?${parts.join("&")}`, { headers });
@@ -535,16 +541,29 @@ function TeamSharesPanel({ authHeaders, range }: {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangeKey(range), authHeaders]);
+  }, [rangeKey(range), scope, authHeaders]);
 
   return (
     <div className="iv-feed">
+      <div className="iv-filterbar">
+        {([
+          { v: "org", label: "All team" },
+          { v: "self", label: "Just mine" },
+        ] as { v: "org" | "self"; label: string }[]).map(opt => (
+          <button
+            key={opt.v}
+            type="button"
+            className={`iv-chip${scope === opt.v ? " on" : ""}`}
+            onClick={() => setScope(opt.v)}
+          >{opt.label}</button>
+        ))}
+      </div>
       <div className="iv-list">
         {loading ? (
           <div className="iv-empty">Loading…</div>
         ) : shares.length === 0 ? (
           <div className="iv-empty">
-            <div className="iv-empty-h">No shares in this range</div>
+            <div className="iv-empty-h">{scope === "self" ? "You haven't shared anything in this range" : "No shares in this range"}</div>
             <p className="iv-empty-sub">When your team copies asset links to send to prospects, those shares show up here with engagement data.</p>
           </div>
         ) : shares.map(s => (
