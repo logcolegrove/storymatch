@@ -50,6 +50,10 @@ const BUILT_IN_TOGGLEABLE: BuiltInOption[] = [
   { key: "vis", label: "Visibility" },
   { key: "status", label: "Status" },
   { key: "date", label: "Date" },
+  // Feedback is opt-in — admins add it when they want to see
+  // 👍/👎 counts in the table. Clicking the cell opens the
+  // comments modal. Not in the default layout.
+  { key: "feedback", label: "Feedback" },
 ];
 
 interface Props {

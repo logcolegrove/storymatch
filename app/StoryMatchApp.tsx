@@ -7,6 +7,7 @@ import AssetDetail from "./components/AssetDetail";
 import MySharesView from "./components/MySharesView";
 import FeedbackView from "./components/FeedbackView";
 import RateAssetModal from "./components/RateAssetModal";
+import AssetFeedbackModal from "./components/AssetFeedbackModal";
 import FiltersModal from "./components/FiltersModal";
 import InsightsView from "./components/InsightsView";
 import ColumnControlPanel from "./components/ColumnControlPanel";
@@ -1050,6 +1051,17 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
 .lv-title-act:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .lv-title-actions .dots-btn{margin-left:2px;}
 .lv-date{font-size:12.5px;color:var(--t2);font-variant-numeric:tabular-nums;white-space:nowrap;}
+/* Feedback column — opt-in. Two thumbs-glyph counters in a small
+   pill; the whole cell is one button that opens the comments
+   modal for this asset. Empty state shows an em-dash so the
+   table doesn't read as "0–0" everywhere on first load. */
+.lv-fb-cell{display:flex;align-items:center;}
+.lv-fb-trigger{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border:1px solid var(--border);border-radius:99px;background:#fff;color:var(--t1);font:inherit;font-size:12px;font-weight:600;cursor:pointer;font-variant-numeric:tabular-nums;transition:background .12s,border-color .12s;}
+.lv-fb-trigger:hover{background:var(--accentLL);border-color:var(--accent);}
+.lv-fb-up{display:inline-flex;align-items:center;gap:3px;color:#15803d;}
+.lv-fb-down{display:inline-flex;align-items:center;gap:3px;color:#b91c1c;}
+.lv-fb-empty{background:none;border:none;padding:4px 9px;color:var(--t4);font-size:13px;cursor:pointer;font-family:inherit;}
+.lv-fb-empty:hover{color:var(--t2);}
 
 /* YouTube-style tooltip shown when a truncated label is hovered.
    Portal-rendered with position:fixed so it escapes any clipping
@@ -2460,6 +2472,13 @@ interface ListViewProps {
   // Distinct (color, label) tags used elsewhere in the org — surfaced in
   // the per-row Add custom status form for quick reuse.
   knownCustomTags?: { color: string; label: string }[];
+  // Org-wide feedback aggregate map keyed by asset_id. Drives the
+  // optional Feedback column. Empty map = no badges rendered (sales
+  // reps + first-paint).
+  feedbackByAsset?: Map<string, { up: number; down: number; total: number }>;
+  // Open the per-asset feedback modal — surfaced when an admin
+  // clicks a Feedback cell.
+  onShowFeedback?: (assetId: string) => void;
 }
 
 // Compute the "Cleared for use" composite signal from approval, client status,
@@ -3705,12 +3724,18 @@ const BUILT_IN_LIST_VIEW_COLUMNS: ListViewColumn[] = [
   { key: "vis", label: "Visibility", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "vis-asc", sortDescKey: "vis-desc", hasQuickFilter: true, kind: "builtin" },
   { key: "status", label: "Status", defaultWidth: 200, minWidth: 140, sortable: true, hideable: true, sortAscKey: "status-asc", sortDescKey: "status-desc", hasQuickFilter: true, kind: "builtin" },
   { key: "date", label: "Date", defaultWidth: 130, minWidth: 110, sortable: true, hideable: true, sortAscKey: "date-asc", sortDescKey: "date-desc", hasQuickFilter: true, kind: "builtin" },
+  // Feedback column is opt-in (not in DEFAULT_REORDERABLE_KEYS) so
+  // it doesn't ship in the default layout. Admins add it from the
+  // "+ Add column" picker. Renders 👍 / 👎 counts; row click opens
+  // the comments modal.
+  { key: "feedback", label: "Feedback", defaultWidth: 130, minWidth: 110, sortable: false, hideable: true, kind: "builtin" },
 ];
 
 // Default reorderable section — built-in columns that flow into the
 // column-order array. "thumb" and "title" stay pinned at the front,
 // always present, in that order (title is the row identity column,
-// thumb is its visual anchor — neither should move).
+// thumb is its visual anchor — neither should move). Feedback is
+// intentionally omitted so it starts hidden.
 const DEFAULT_REORDERABLE_KEYS = ["vis", "status", "date"];
 
 // Synthesise a column descriptor for a custom field. Width defaults
@@ -3740,7 +3765,7 @@ function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): Lis
   return null;
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state. All three persist to localStorage so admins
@@ -4644,6 +4669,50 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                         setOpenClearedFor(open ? null : a.id);
                       }}
                     />
+                  </div>
+                );
+              }
+              if (col.key === "feedback") {
+                // Optional column. Renders thumbs-up + thumbs-down
+                // counts; click opens the per-asset feedback modal.
+                // When neither side has votes we show an em-dash
+                // rather than two zeros to keep the table calm.
+                const fb = feedbackByAsset?.get(a.id);
+                const up = fb?.up ?? 0;
+                const down = fb?.down ?? 0;
+                const empty = (fb?.total ?? 0) === 0;
+                return (
+                  <div key={col.key} className="lv-fb-cell">
+                    {empty ? (
+                      <button
+                        type="button"
+                        className="lv-fb-empty"
+                        onClick={(e) => { e.stopPropagation(); onShowFeedback?.(a.id); }}
+                        title="No feedback yet — click to view"
+                      >—</button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="lv-fb-trigger"
+                        onClick={(e) => { e.stopPropagation(); onShowFeedback?.(a.id); }}
+                        title="Click to read the comments"
+                      >
+                        <span className="lv-fb-up" title={`${up} ${up === 1 ? "thumbs up" : "thumbs up"}`}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
+                            <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
+                          </svg>
+                          {up}
+                        </span>
+                        <span className="lv-fb-down" title={`${down} ${down === 1 ? "thumbs down" : "thumbs down"}`}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{transform:"rotate(180deg)"}}>
+                            <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
+                            <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
+                          </svg>
+                          {down}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 );
               }
@@ -6885,6 +6954,15 @@ export default function App(){
   // edit propagates everywhere without a refetch.
   const[fieldDefs,setFieldDefs]=useState<FieldDef[]>([]);
 
+  // Feedback aggregates — admin-only. Keyed by asset_id so the
+  // ListView feedback column can render up/down counts inline
+  // without a per-row API call. Populated lazily after auth: an
+  // empty Map renders no badges, which is the right behavior for
+  // sales reps + first-load latency.
+  const[feedbackByAsset,setFeedbackByAsset]=useState<Map<string,{up:number;down:number;total:number}>>(new Map());
+  // Asset currently open in the AssetFeedbackModal. null = closed.
+  const[feedbackModalAssetId,setFeedbackModalAssetId]=useState<string|null>(null);
+
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
   const[smQuery,setSmQuery]=useState("");
@@ -6980,6 +7058,27 @@ export default function App(){
       }catch(e){console.error("Failed to load field defs",e);}
     })();
   },[]);
+
+  // Load org-wide feedback aggregates so the optional ListView
+  // feedback column can render up/down counts inline. Admin-only —
+  // /api/feedback?summary=true returns 403 for sales reps. Failures
+  // are silent: the column just renders empty, which is acceptable.
+  useEffect(()=>{
+    if(!isAdmin)return;
+    (async()=>{
+      try{
+        const headers=await authHeaders();
+        const r=await fetch("/api/feedback?summary=true",{headers});
+        if(!r.ok)return;
+        const data=await r.json() as { assets: Array<{ assetId: string; up: number; down: number; total: number }> };
+        const m=new Map<string,{up:number;down:number;total:number}>();
+        for(const a of data.assets||[]){
+          m.set(a.assetId,{up:a.up,down:a.down,total:a.total});
+        }
+        setFeedbackByAsset(m);
+      }catch(e){console.error("Failed to load feedback aggregates",e);}
+    })();
+  },[isAdmin]);
 
   const openAsset=(a: Asset)=>{window.location.hash=`/asset/${a.id}`;};
   const goHome=()=>{window.location.hash="/";};
@@ -7998,17 +8097,11 @@ export default function App(){
                 </svg>
                 My shares
               </button>
-              <button
-                onClick={()=>{window.location.hash="/feedback";}}
-                title={org?.role === "admin" ? "See aggregate feedback from your sales team" : "Rate testimonials anonymously"}
-                style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,background:"#fff",color:"var(--accent)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)",marginRight:6,display:"inline-flex",alignItems:"center",gap:5}}
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z"/>
-                  <path d="M7 11l4-7a2 2 0 0 1 4 .8V9h4.4a2 2 0 0 1 1.97 2.35l-1.5 7A2 2 0 0 1 18 20H7"/>
-                </svg>
-                Feedback
-              </button>
+              {/* Standalone Feedback nav button removed — feedback now
+                  lives inside Insights → "Feedback given" tab for
+                  admins, and individual rating happens through the
+                  3-dot menu on any asset card/row. Keeps the header
+                  uncluttered. */}
               {!(isAdmin && adminMode) && (
                 <button
                   onClick={signOut}
@@ -8678,6 +8771,8 @@ export default function App(){
                   }}
                   orgSettings={orgSettings}
                   knownCustomTags={knownCustomTags}
+                  feedbackByAsset={feedbackByAsset}
+                  onShowFeedback={(id) => setFeedbackModalAssetId(id)}
                 />
               ) : (
                 (() => {
@@ -8950,6 +9045,21 @@ export default function App(){
           onClose={()=>setEditingAssetId(null)}
           authHeaders={authHeaders}
           fieldDefs={fieldDefs}
+        />
+        {/* Per-asset feedback modal — opens when the admin clicks a
+            cell in the optional Feedback column. Mounted at app
+            level so the modal floats above all surfaces. */}
+        <AssetFeedbackModal
+          open={!!feedbackModalAssetId}
+          assetId={feedbackModalAssetId}
+          assetMeta={(() => {
+            if (!feedbackModalAssetId) return undefined;
+            const a = assets.find(x => x.id === feedbackModalAssetId);
+            if (!a) return undefined;
+            return { id: a.id, headline: a.headline, company: a.company, thumbnail: a.thumbnail };
+          })()}
+          authHeaders={authHeaders}
+          onClose={() => setFeedbackModalAssetId(null)}
         />
         {standaloneQuoteOpen && (
           <StandaloneQuoteModal
