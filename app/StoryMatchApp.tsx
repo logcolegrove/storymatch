@@ -11,6 +11,7 @@ import AssetFeedbackModal from "./components/AssetFeedbackModal";
 import FiltersModal from "./components/FiltersModal";
 import InsightsView from "./components/InsightsView";
 import ShowcasesView from "./components/ShowcasesView";
+import ShowcaseEditorModal from "./components/ShowcaseEditorModal";
 import ColumnControlPanel from "./components/ColumnControlPanel";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
@@ -368,6 +369,16 @@ const css = `
 body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-height:100vh;-webkit-font-smoothing:antialiased;}
 
 .hdr{display:flex;align-items:center;justify-content:space-between;padding:0 32px;height:56px;background:#fff;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50;}
+/* When the header is hidden (admin-in-admin-mode), every element
+   that was sticky-positioned beneath the 56px header band needs
+   to climb back to the top of the viewport. The no-hdr class on
+   the app shell flips all three at once: layout min-height,
+   admin-rail top + height, admin-panel top + height. Same surface
+   still works exactly the way it did, just with the wasted ~56px
+   reclaimed for canvas. */
+.app-shell.no-hdr .layout{min-height:100vh;}
+.app-shell.no-hdr .admin-rail{top:0;height:100vh;}
+.app-shell.no-hdr .admin-panel{top:0;height:100vh;}
 .logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:17px;letter-spacing:-.4px;cursor:pointer;user-select:none;}
 .logo i{width:26px;height:26px;background:var(--accent);border-radius:7px;display:grid;place-items:center;font-style:normal;font-size:12px;color:#fff;}
 .logo span{color:var(--accent2);}
@@ -893,6 +904,11 @@ body,#root{font-family:var(--font);background:var(--bg);color:var(--t1);min-heig
    too easy to skip). */
 .sm-clear-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;letter-spacing:-.005em;}
 .sm-clear-btn:hover{background:var(--accent2);}
+/* "Share as playlist" pill — sits next to the Clear results
+   button when StoryMatch results are active. Secondary visual
+   weight (outlined accent) so Clear stays the obvious primary. */
+.sm-playlist-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accentLL);color:var(--accent);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;letter-spacing:-.005em;}
+.sm-playlist-btn:hover{background:var(--accentL);}
 
 /* "Save as default" pill — admin-only, appears only when the
    current layout differs from the saved team default. Accent-
@@ -7160,6 +7176,11 @@ export default function App(){
   const[feedbackByAsset,setFeedbackByAsset]=useState<Map<string,{up:number;down:number;total:number}>>(new Map());
   // Asset currently open in the AssetFeedbackModal. null = closed.
   const[feedbackModalAssetId,setFeedbackModalAssetId]=useState<string|null>(null);
+  // Quick-playlist creation flow — fired from "Share as playlist"
+  // in the lib-bar when StoryMatch results are active. Reuses the
+  // full ShowcaseEditorModal pre-populated with the matched assets;
+  // null when closed.
+  const[quickPlaylistDraft,setQuickPlaylistDraft]=useState<{name:string;description:string|null;assetIds:string[]}|null>(null);
 
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
@@ -8318,8 +8339,15 @@ export default function App(){
   return (
     <React.Fragment>
       <style>{css}</style>
-      <div style={{minHeight:"100vh",background:"var(--bg)"}}>
+      <div className={isAdmin && adminMode ? "app-shell no-hdr" : "app-shell"} style={{minHeight:"100vh",background:"var(--bg)"}}>
 
+        {/* Header is hidden for admins-in-admin-mode — their rail
+            already hosts navigation + the AccountMenu, and nothing
+            in the header is admin-relevant. Sales reps + admins in
+            preview mode still need it for My shares + the avatar
+            menu + the preview-exit pill. Recovers ~56px of canvas
+            real estate for the library / Insights / Showcases. */}
+        {!(isAdmin && adminMode) && (
         <header className="hdr">
           <div className="logo" onClick={goHome} style={{cursor:"pointer",fontFamily:"var(--serif)",fontSize:20,fontWeight:500,letterSpacing:-.4,color:"var(--t1)"}}>
           </div>
@@ -8392,6 +8420,7 @@ export default function App(){
             </div>
           </div>
         </header>
+        )}
 
         <div className="layout">
 
@@ -8912,19 +8941,46 @@ export default function App(){
                       results" button so admins always have a one-
                       click escape. When no StoryMatch results, the
                       regular grid/list toggle returns. */}
-                  {isAdmin && adminMode && smResults && smResults.length > 0 ? (
-                    <button
-                      type="button"
-                      className="sm-clear-btn"
-                      onClick={clearSm}
-                      title="Clear StoryMatch results and return to the full library"
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                      </svg>
-                      Clear results
-                    </button>
+                  {smResults && smResults.length > 0 ? (
+                    <>
+                      {/* "Share as playlist" — bundle the matched
+                          assets into a Showcase in one click. The
+                          editor opens pre-populated; the user can
+                          tweak the name + tweak the asset list
+                          before saving. Available to anyone using
+                          StoryMatch (admin or sales rep) since the
+                          shareable-playlist scenario is the killer
+                          use case for both. */}
+                      <button
+                        type="button"
+                        className="sm-playlist-btn"
+                        onClick={() => {
+                          const ids = smResults.map(r => r.id);
+                          const q = smQuery.trim();
+                          const name = q ? `Playlist: ${q}` : "Playlist";
+                          setQuickPlaylistDraft({ name, description: null, assetIds: ids });
+                        }}
+                        title="Bundle these results into a single shareable showcase"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="7" y="3" width="14" height="14" rx="2"/>
+                          <path d="M3 7v12a2 2 0 0 0 2 2h12"/>
+                        </svg>
+                        Share as playlist
+                      </button>
+                      <button
+                        type="button"
+                        className="sm-clear-btn"
+                        onClick={clearSm}
+                        title="Clear StoryMatch results and return to the full library"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="18" y1="6" x2="6" y2="18"/>
+                          <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                        Clear results
+                      </button>
+                    </>
                   ) : (
                     <div className="view-toggle" title="Toggle grid/list view">
                       <button
@@ -9430,6 +9486,63 @@ export default function App(){
           authHeaders={authHeaders}
           onClose={() => setFeedbackModalAssetId(null)}
         />
+        {/* Quick-playlist creation from StoryMatch results — fires
+            when a user (admin or sales rep) clicks "Share as
+            playlist" while results are active. Reuses the full
+            ShowcaseEditorModal pre-populated with the matched
+            assets so the flow is unified between admin showcase
+            creation and rep quick playlists. */}
+        {quickPlaylistDraft && (
+          <ShowcaseEditorModal
+            initial={{
+              name: quickPlaylistDraft.name,
+              description: quickPlaylistDraft.description,
+              assetIds: quickPlaylistDraft.assetIds,
+            }}
+            assets={assets.map(a => ({
+              id: a.id,
+              headline: a.headline,
+              company: a.company,
+              clientName: a.clientName,
+              thumbnail: a.thumbnail,
+              status: a.status,
+              assetType: a.assetType,
+            }))}
+            onSave={async (draft) => {
+              try {
+                const headers = await authHeaders();
+                const isCreate = !draft.id;
+                const url = isCreate ? "/api/showcases" : `/api/showcases/${encodeURIComponent(draft.id!)}`;
+                const method = isCreate ? "POST" : "PUT";
+                const r = await fetch(url, {
+                  method,
+                  headers: { "Content-Type": "application/json", ...headers },
+                  body: JSON.stringify({
+                    name: draft.name,
+                    description: draft.description,
+                    asset_ids: draft.assetIds,
+                  }),
+                });
+                if (!r.ok) {
+                  const body = await r.json().catch(() => ({})) as { error?: string };
+                  return { ok: false as const, error: body.error || "Save failed" };
+                }
+                const data = await r.json() as { showcase: { id: string; orgId: string; ownerUserId: string; name: string; description: string|null; assetIds: string[]; createdAt: string; updatedAt: string } };
+                return { ok: true as const, showcase: data.showcase };
+              } catch (e) {
+                console.error("[quick-playlist] save failed", e);
+                return { ok: false as const, error: "Network error" };
+              }
+            }}
+            onClose={() => setQuickPlaylistDraft(null)}
+            onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); }}
+            onCopyLink={(id) => {
+              if (typeof window === "undefined") return;
+              const u = `${window.location.origin}/showcase/${id}`;
+              try { navigator.clipboard?.writeText(u); setToast("Link copied"); setTimeout(()=>setToast(null),1500); } catch { /* ignore */ }
+            }}
+          />
+        )}
         {standaloneQuoteOpen && (
           <StandaloneQuoteModal
             authHeaders={authHeaders}
