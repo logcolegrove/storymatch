@@ -56,10 +56,13 @@ export async function POST(req: NextRequest) {
     name?: unknown;
     description?: unknown;
     asset_ids?: unknown;
+    template_id?: unknown;
   };
   // Name is optional — the DAL defaults blanks to "Untitled
   // showcase" so the bulk "Add to showcase" flow can ship a
-  // draft straight to disk without prompting.
+  // draft straight to disk without prompting. template_id is
+  // also optional — the DAL validates against the known list and
+  // falls back to null (renderer defaults to "default").
   const name = typeof body.name === "string" ? body.name : "";
   const result = await createShowcase({
     orgId: ctx.orgId,
@@ -67,6 +70,7 @@ export async function POST(req: NextRequest) {
     name,
     description: typeof body.description === "string" ? body.description : null,
     assetIds: Array.isArray(body.asset_ids) ? body.asset_ids as string[] : [],
+    templateId: typeof body.template_id === "string" ? body.template_id : null,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ showcase: result.showcase });

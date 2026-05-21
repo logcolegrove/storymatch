@@ -61,6 +61,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       name: resolved.name,
       description: resolved.description,
       assetIds: resolved.assetIds,
+      templateId: resolved.templateId,
       createdAt: resolved.createdAt,
       updatedAt: resolved.updatedAt,
       ownerUserId: resolved.ownerUserId,
@@ -93,14 +94,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     name?: unknown;
     description?: unknown;
     asset_ids?: unknown;
+    template_id?: unknown;
   };
-  const updates: { name?: string; description?: string | null; assetIds?: string[] } = {};
+  const updates: { name?: string; description?: string | null; assetIds?: string[]; templateId?: string | null } = {};
   if (typeof body.name === "string") updates.name = body.name;
   if (body.description !== undefined) {
     updates.description = typeof body.description === "string" ? body.description : null;
   }
   if (Array.isArray(body.asset_ids)) {
     updates.assetIds = body.asset_ids as string[];
+  }
+  if (body.template_id !== undefined) {
+    updates.templateId = typeof body.template_id === "string" ? body.template_id : null;
   }
   const result = await updateShowcase({ id, orgId: ctx.orgId, ...updates });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });

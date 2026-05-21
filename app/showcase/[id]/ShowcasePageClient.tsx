@@ -12,7 +12,7 @@
 import { useState } from "react";
 import AssetDetail, { type AssetDetailAsset } from "../../components/AssetDetail";
 import ShowcaseRenderer, { type ShowcaseRenderAsset } from "../../components/ShowcaseRenderer";
-import { getTemplate, DEFAULT_TEMPLATE_ID } from "@/lib/showcase-templates";
+import { getTemplate } from "@/lib/showcase-templates";
 
 interface ShowcaseAsset {
   id: string;
@@ -32,6 +32,7 @@ interface Props {
     id: string;
     name: string;
     description: string | null;
+    templateId: string | null;
   };
   assets: ShowcaseAsset[];
 }
@@ -79,10 +80,10 @@ export default function ShowcasePageClient({ showcase, assets }: Props) {
   const [activeAssetId, setActiveAssetId] = useState<string | null>(null);
   const activeAsset = activeAssetId ? assets.find(a => a.id === activeAssetId) || null : null;
 
-  // For v1 every showcase uses the default template. Phase B2.2
-  // will add a template_id column to the showcases table and let
-  // admins pick a different layout.
-  const template = getTemplate(DEFAULT_TEMPLATE_ID);
+  // Showcase's own template ID drives which template renders.
+  // getTemplate falls back to "default" when the ID is null or
+  // unrecognized, so this is safe across schema migrations.
+  const template = getTemplate(showcase.templateId);
 
   return (
     <div className="sp">

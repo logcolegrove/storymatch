@@ -21,7 +21,7 @@
 // "missing" badge in the editor when the gap is detected.
 
 import { useEffect, useMemo, useState } from "react";
-import ShowcaseEditorModal, { type ShowcaseDraft } from "./ShowcaseEditorModal";
+import ShowcaseBuilder from "./ShowcaseBuilder";
 
 // Minimal asset shape — just what the editor needs to render
 // pickable cards. The parent already has full Asset[] in scope;
@@ -44,6 +44,7 @@ interface Showcase {
   name: string;
   description: string | null;
   assetIds: string[];
+  templateId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,7 +73,10 @@ function timeAgo(iso: string | null): string {
 export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [showcases, setShowcases] = useState<Showcase[]>([]);
-  const [editing, setEditing] = useState<{ mode: "create" } | { mode: "edit"; showcase: Showcase } | null>(null);
+  // The builder takes over the full viewport when a showcase is
+  // being edited. Setting this to a Showcase mounts the builder;
+  // closing the builder (back arrow, Esc) resets to null.
+  const [builderShowcase, setBuilderShowcase] = useState<Showcase | null>(null);
 
   const loadShowcases = async () => {
     try {
@@ -119,39 +123,42 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
     }
   };
 
-  // Save handler used by the editor modal — single async path for
-  // both create + update. On success we patch local state so the
-  // list reflects the new/updated showcase without a full refetch.
-  const saveShowcase = async (draft: ShowcaseDraft): Promise<{ ok: true; showcase: Showcase } | { ok: false; error: string }> => {
+  // "New showcase" flow — POSTs an empty draft up front so the
+  // builder always has a backing row to PUT against. The downside
+  // is that aborting without changes leaves an empty "Untitled
+  // showcase" in the list — admins can delete from the row menu.
+  // We accept that trade for simplicity; the alternative is
+  // builder-handles-create which complicates state in two places.
+  const createBlankShowcase = async () => {
     try {
       const headers = await authHeaders();
-      const isCreate = !draft.id;
-      const url = isCreate ? "/api/showcases" : `/api/showcases/${encodeURIComponent(draft.id!)}`;
-      const method = isCreate ? "POST" : "PUT";
-      const r = await fetch(url, {
-        method,
+      const r = await fetch("/api/showcases", {
+        method: "POST",
         headers: { "Content-Type": "application/json", ...headers },
-        body: JSON.stringify({
-          name: draft.name,
-          description: draft.description,
-          asset_ids: draft.assetIds,
-        }),
+        body: JSON.stringify({ name: "", description: null, asset_ids: [] }),
       });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({})) as { error?: string };
-        return { ok: false, error: body.error || "Save failed" };
-      }
+      if (!r.ok) throw new Error("Failed");
       const data = await r.json() as { showcase: Showcase };
+      setShowcases(prev => [data.showcase, ...prev]);
+      setBuilderShowcase(data.showcase);
+    } catch (e) {
+      console.error("[ShowcasesView] create blank failed", e);
+      onToast("Couldn't create showcase");
+    }
+  };
+
+  // Patches the local list after the builder saves. Same shape as
+  // the create flow's response handling — keeps the row order
+  // recent-first by moving the saved one to the top.
+  const handleBuilderClose = (updated?: Showcase) => {
+    if (updated) {
       setShowcases(prev => {
-        const next = prev.filter(s => s.id !== data.showcase.id);
-        next.unshift(data.showcase);
+        const next = prev.filter(s => s.id !== updated.id);
+        next.unshift(updated);
         return next;
       });
-      return { ok: true, showcase: data.showcase };
-    } catch (e) {
-      console.error("[ShowcasesView] save failed", e);
-      return { ok: false, error: "Network error" };
     }
+    setBuilderShowcase(null);
   };
 
   // Map asset_id → ShowcaseAssetRef for the list-row "first few
@@ -171,7 +178,7 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
           <h2>Showcases</h2>
           <p className="sv-page-sub">Curated bundles of assets you can share as a single link. New sales reps inherit the showcases you build here.</p>
         </div>
-        <button className="sv-create-btn" onClick={() => setEditing({ mode: "create" })}>
+        <button className="sv-create-btn" onClick={createBlankShowcase}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"/>
             <line x1="5" y1="12" x2="19" y2="12"/>
@@ -186,7 +193,7 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
         <div className="sv-empty">
           <div className="sv-empty-h">No showcases yet</div>
           <p className="sv-empty-sub">Build one with the assets you want to send to prospects. You can curate a branded landing page or just bundle a few testimonials into one URL.</p>
-          <button className="sv-create-btn primary" onClick={() => setEditing({ mode: "create" })}>
+          <button className="sv-create-btn primary" onClick={createBlankShowcase}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"/>
               <line x1="5" y1="12" x2="19" y2="12"/>
@@ -204,7 +211,7 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
             const previewIds = s.assetIds.slice(0, 4);
             const previewAssets = previewIds.map(id => assetMap.get(id)).filter((x): x is ShowcaseAssetRef => !!x);
             return (
-              <button key={s.id} type="button" className="sv-card" onClick={() => setEditing({ mode: "edit", showcase: s })}>
+              <button key={s.id} type="button" className="sv-card" onClick={() => setBuilderShowcase(s)}>
                 <div className="sv-card-thumbs">
                   {previewAssets.length > 0 ? previewAssets.map(a => (
                     <div key={a.id} className="sv-card-thumb">
@@ -250,19 +257,13 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
         </div>
       )}
 
-      {editing && (
-        <ShowcaseEditorModal
-          initial={editing.mode === "edit" ? {
-            id: editing.showcase.id,
-            name: editing.showcase.name,
-            description: editing.showcase.description,
-            assetIds: editing.showcase.assetIds,
-          } : null}
+      {builderShowcase && (
+        <ShowcaseBuilder
+          showcase={builderShowcase}
           assets={assets}
-          onSave={saveShowcase}
-          onClose={() => setEditing(null)}
+          authHeaders={authHeaders}
+          onClose={handleBuilderClose}
           onToast={onToast}
-          onCopyLink={(id) => copyShareLink(id)}
         />
       )}
     </div>

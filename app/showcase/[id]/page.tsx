@@ -26,6 +26,7 @@ export default async function ShowcasePage({
         id: resolved.id,
         name: resolved.name,
         description: resolved.description,
+        templateId: resolved.templateId,
       }}
       assets={resolved.assets}
     />
