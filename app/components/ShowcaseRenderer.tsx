@@ -78,9 +78,12 @@ function HeroBlock({ props, ctx }: BlockProps<HeroBlockProps>) {
 
 // ── AssetGridBlock ────────────────────────────────────────────────
 // Renders the showcase's resolved assets as a clickable card grid.
+// The clickTarget prop controls whether clicks open AssetDetail
+// inline (default) or pop a new tab to the public asset page.
 function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
   const cols = props.columns || 3;
   const aspect = props.aspect || "16/9";
+  const target = props.clickTarget || "modal";
   if (ctx.assets.length === 0) {
     return (
       <div className="sr-empty">
@@ -88,30 +91,55 @@ function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
       </div>
     );
   }
+  // When target is "newpage", we wrap each card in a real <a> with
+  // target="_blank" so the browser opens a new tab natively (and
+  // middle-click / Cmd-click work). Modal target keeps the button
+  // semantics + calls back into the showcase page's state.
   return (
     <div className={`sr-grid sr-grid-cols-${cols}`}>
-      {ctx.assets.map(a => (
-        <button
-          key={a.id}
-          type="button"
-          className="sr-card"
-          onClick={() => ctx.onAssetClick(a.id)}
-          title={a.headline}
-        >
-          {a.thumbnail
-            ? <img src={a.thumbnail} alt="" className="sr-card-thumb" style={{aspectRatio:aspect}} loading="lazy"/>
-            : <div className="sr-card-thumb sr-card-thumb-empty" style={{aspectRatio:aspect}}/>}
-          <div className="sr-card-body">
-            {props.showCompany !== false && (
-              <div className="sr-card-eyebrow">{a.company || a.client_name}</div>
-            )}
-            <h3 className="sr-card-headline">{a.headline || "Customer story"}</h3>
-            {props.showQuote !== false && a.pull_quote && (
-              <p className="sr-card-quote">&ldquo;{a.pull_quote}&rdquo;</p>
-            )}
-          </div>
-        </button>
-      ))}
+      {ctx.assets.map(a => {
+        const inner = (
+          <>
+            {a.thumbnail
+              ? <img src={a.thumbnail} alt="" className="sr-card-thumb" style={{aspectRatio:aspect}} loading="lazy"/>
+              : <div className="sr-card-thumb sr-card-thumb-empty" style={{aspectRatio:aspect}}/>}
+            <div className="sr-card-body">
+              {props.showCompany !== false && (
+                <div className="sr-card-eyebrow">{a.company || a.client_name}</div>
+              )}
+              <h3 className="sr-card-headline">{a.headline || "Customer story"}</h3>
+              {props.showQuote !== false && a.pull_quote && (
+                <p className="sr-card-quote">&ldquo;{a.pull_quote}&rdquo;</p>
+              )}
+            </div>
+          </>
+        );
+        if (target === "newpage") {
+          return (
+            <a
+              key={a.id}
+              className="sr-card"
+              href={`/asset/${a.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={a.headline}
+            >
+              {inner}
+            </a>
+          );
+        }
+        return (
+          <button
+            key={a.id}
+            type="button"
+            className="sr-card"
+            onClick={() => ctx.onAssetClick(a.id)}
+            title={a.headline}
+          >
+            {inner}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -252,7 +280,7 @@ const css = `
 .sr-grid-cols-2{grid-template-columns:repeat(2, 1fr);}
 .sr-grid-cols-3{grid-template-columns:repeat(auto-fill, minmax(300px, 1fr));}
 .sr-grid-cols-4{grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));}
-.sr-card{display:flex;flex-direction:column;text-align:left;background:#fff;border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer;font:inherit;color:inherit;padding:0;transition:border-color .12s,box-shadow .15s,transform .15s;}
+.sr-card{display:flex;flex-direction:column;text-align:left;background:#fff;border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer;font:inherit;color:inherit;padding:0;transition:border-color .12s,box-shadow .15s,transform .15s;text-decoration:none;}
 .sr-card:hover{border-color:var(--border2);box-shadow:0 8px 24px rgba(0,0,0,.08);transform:translateY(-1px);}
 .sr-card-thumb{width:100%;object-fit:cover;background:var(--bg3);display:block;}
 .sr-card-thumb-empty{background:linear-gradient(135deg,var(--bg2),var(--bg3));}

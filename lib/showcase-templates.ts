@@ -50,6 +50,14 @@ export interface AssetGridBlockProps {
   showCompany?: boolean;
   showQuote?: boolean;
   aspect?: "16/9" | "4/3" | "1/1";
+  // What happens when a viewer clicks an asset card:
+  //   "modal"   — opens AssetDetail inline within the showcase
+  //               page (current default — preserves showcase
+  //               context, asset-detail loads in-place).
+  //   "newpage" — opens the public asset detail page in a new
+  //               tab. Better when admins want the showcase to
+  //               feel more "directory" than "experience."
+  clickTarget?: "modal" | "newpage";
 }
 
 export interface QuoteRotatorBlockProps {
