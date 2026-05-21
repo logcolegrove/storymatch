@@ -19,6 +19,7 @@ import {
   fetchOrgShowcases,
   fetchUserShowcases,
 } from "@/lib/showcase-dal";
+import type { TemplateBlock } from "@/lib/showcase-templates";
 
 async function getCurrentUserOrg(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest) {
     description?: unknown;
     asset_ids?: unknown;
     template_id?: unknown;
+    template_config?: unknown;
   };
   // Name is optional — the DAL defaults blanks to "Untitled
   // showcase" so the bulk "Add to showcase" flow can ship a
@@ -71,6 +73,8 @@ export async function POST(req: NextRequest) {
     description: typeof body.description === "string" ? body.description : null,
     assetIds: Array.isArray(body.asset_ids) ? body.asset_ids as string[] : [],
     templateId: typeof body.template_id === "string" ? body.template_id : null,
+    // DAL validates the shape; we just forward what the FE sent.
+    templateConfig: (body.template_config ?? null) as TemplateBlock[] | null,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ showcase: result.showcase });

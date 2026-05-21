@@ -23,6 +23,7 @@
 // email gating in v1.
 
 import { supabaseAdmin } from "./supabase-server";
+import type { TemplateBlock } from "./showcase-templates";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -40,6 +41,13 @@ export interface Showcase {
   // in lib/showcase-templates.ts TEMPLATES array. Null/missing
   // falls through to the "default" template at render time.
   templateId: string | null;
+  // The showcase's owned block array. Null when the showcase
+  // hasn't been customized yet — in that case the renderer falls
+  // back to the named template (templateId). When set, this
+  // ARRAY drives rendering directly (fork-from-template semantics).
+  // The first per-block edit in the builder clones the template's
+  // blocks here so the showcase owns its own copy.
+  templateConfig: TemplateBlock[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -128,6 +136,7 @@ type DbShowcaseRow = {
   description: string | null;
   asset_ids: string[] | null;
   template_id: string | null;
+  template_config: TemplateBlock[] | null;
   created_at: string;
   updated_at: string;
 };
@@ -141,6 +150,7 @@ function rowToShowcase(row: DbShowcaseRow): Showcase {
     description: row.description,
     assetIds: Array.isArray(row.asset_ids) ? row.asset_ids : [],
     templateId: row.template_id ?? null,
+    templateConfig: Array.isArray(row.template_config) ? row.template_config : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -158,6 +168,32 @@ function sanitizeTemplateId(raw: unknown): string | null {
   return KNOWN_TEMPLATE_IDS.has(trimmed) ? trimmed : null;
 }
 
+// Block-array validation. Each entry must have a known `type` and
+// an object `props`. We trust the props beyond shape — the
+// renderer reads each block defensively (with defaults for missing
+// keys), so junk props just render as the default value. Anything
+// that fails the shape check drops the whole config to null so the
+// renderer falls back to the template_id named template.
+const KNOWN_BLOCK_TYPES = new Set([
+  "hero", "asset-grid", "quote-rotator", "intro-text", "divider", "footer",
+]);
+function sanitizeTemplateConfig(raw: unknown): TemplateBlock[] | null {
+  if (raw === null || raw === undefined) return null;
+  if (!Array.isArray(raw)) return null;
+  const out: TemplateBlock[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const e = entry as { type?: unknown; props?: unknown };
+    if (typeof e.type !== "string" || !KNOWN_BLOCK_TYPES.has(e.type)) return null;
+    if (!e.props || typeof e.props !== "object") return null;
+    // Trust the shape from here — the renderer applies defaults
+    // for any missing/invalid prop values per block.
+    out.push(entry as TemplateBlock);
+    if (out.length > 50) return null; // sanity cap
+  }
+  return out;
+}
+
 // ── CRUD helpers ──────────────────────────────────────────────────
 
 export async function createShowcase(params: {
@@ -167,6 +203,7 @@ export async function createShowcase(params: {
   description?: string | null;
   assetIds?: string[];
   templateId?: string | null;
+  templateConfig?: TemplateBlock[] | null;
 }): Promise<{ ok: true; showcase: Showcase } | { ok: false; error: string }> {
   // Empty name → "Untitled showcase" via sanitizeName. We never
   // reject on missing name; admin can rename later.
@@ -186,8 +223,9 @@ export async function createShowcase(params: {
         description: sanitizeDescription(params.description ?? null),
         asset_ids: sanitizeAssetIds(params.assetIds ?? []),
         template_id: sanitizeTemplateId(params.templateId ?? null),
+        template_config: sanitizeTemplateConfig(params.templateConfig ?? null),
       })
-      .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, created_at, updated_at")
+      .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
       .single();
     if (!error && data) {
       return { ok: true, showcase: rowToShowcase(data as DbShowcaseRow) };
@@ -204,7 +242,7 @@ export async function createShowcase(params: {
 export async function fetchShowcase(id: string): Promise<Showcase | null> {
   const { data, error } = await supabaseAdmin
     .from("showcases")
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
     .eq("id", id)
     .maybeSingle();
   if (error) {
@@ -220,7 +258,7 @@ export async function fetchShowcase(id: string): Promise<Showcase | null> {
 export async function fetchOrgShowcases(orgId: string): Promise<Showcase[]> {
   const { data, error } = await supabaseAdmin
     .from("showcases")
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
     .eq("org_id", orgId)
     .order("updated_at", { ascending: false })
     .limit(500);
@@ -237,7 +275,7 @@ export async function fetchOrgShowcases(orgId: string): Promise<Showcase[]> {
 export async function fetchUserShowcases(orgId: string, userId: string): Promise<Showcase[]> {
   const { data, error } = await supabaseAdmin
     .from("showcases")
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
     .eq("org_id", orgId)
     .eq("owner_user_id", userId)
     .order("updated_at", { ascending: false })
@@ -256,6 +294,7 @@ export async function updateShowcase(params: {
   description?: string | null;
   assetIds?: string[];
   templateId?: string | null;
+  templateConfig?: TemplateBlock[] | null;
 }): Promise<{ ok: true; showcase: Showcase } | { ok: false; error: string }> {
   const updates: Partial<DbShowcaseRow> = { updated_at: new Date().toISOString() };
   if (params.name !== undefined) {
@@ -271,12 +310,15 @@ export async function updateShowcase(params: {
   if (params.templateId !== undefined) {
     updates.template_id = sanitizeTemplateId(params.templateId);
   }
+  if (params.templateConfig !== undefined) {
+    updates.template_config = sanitizeTemplateConfig(params.templateConfig);
+  }
   const { data, error } = await supabaseAdmin
     .from("showcases")
     .update(updates)
     .eq("id", params.id)
     .eq("org_id", params.orgId)
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
     .maybeSingle();
   if (error) {
     console.error("[showcase-dal] update failed", error);

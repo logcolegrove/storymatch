@@ -22,6 +22,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import ShowcaseBuilder from "./ShowcaseBuilder";
+import type { TemplateBlock } from "@/lib/showcase-templates";
 
 // Minimal asset shape — just what the editor needs to render
 // pickable cards. The parent already has full Asset[] in scope;
@@ -45,6 +46,10 @@ interface Showcase {
   description: string | null;
   assetIds: string[];
   templateId: string | null;
+  // Forked template blocks (when admin has customized). Null
+  // means the showcase still uses the named templateId's preset.
+  // The builder reads this and the renderer falls back gracefully.
+  templateConfig: TemplateBlock[] | null;
   createdAt: string;
   updatedAt: string;
 }

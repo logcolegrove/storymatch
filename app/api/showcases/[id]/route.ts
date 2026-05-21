@@ -24,6 +24,7 @@ import {
   updateShowcase,
   deleteShowcase,
 } from "@/lib/showcase-dal";
+import type { TemplateBlock } from "@/lib/showcase-templates";
 
 async function getCurrentUserOrg(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -62,6 +63,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       description: resolved.description,
       assetIds: resolved.assetIds,
       templateId: resolved.templateId,
+      templateConfig: resolved.templateConfig,
       createdAt: resolved.createdAt,
       updatedAt: resolved.updatedAt,
       ownerUserId: resolved.ownerUserId,
@@ -95,8 +97,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     description?: unknown;
     asset_ids?: unknown;
     template_id?: unknown;
+    template_config?: unknown;
   };
-  const updates: { name?: string; description?: string | null; assetIds?: string[]; templateId?: string | null } = {};
+  const updates: { name?: string; description?: string | null; assetIds?: string[]; templateId?: string | null; templateConfig?: TemplateBlock[] | null } = {};
   if (typeof body.name === "string") updates.name = body.name;
   if (body.description !== undefined) {
     updates.description = typeof body.description === "string" ? body.description : null;
@@ -106,6 +109,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
   if (body.template_id !== undefined) {
     updates.templateId = typeof body.template_id === "string" ? body.template_id : null;
+  }
+  if (body.template_config !== undefined) {
+    // DAL validates shape — we forward raw value, null included.
+    updates.templateConfig = (body.template_config ?? null) as TemplateBlock[] | null;
   }
   const result = await updateShowcase({ id, orgId: ctx.orgId, ...updates });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });

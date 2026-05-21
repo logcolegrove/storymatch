@@ -24,7 +24,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import ShowcaseRenderer, { type ShowcaseRenderAsset } from "./ShowcaseRenderer";
-import { getTemplate, TEMPLATES } from "@/lib/showcase-templates";
+import { effectiveTemplate, cloneTemplateBlocks, TEMPLATES, type TemplateBlock, type HeroBlockProps, type AssetGridBlockProps, type QuoteRotatorBlockProps, type IntroTextBlockProps, type DividerBlockProps, type FooterBlockProps } from "@/lib/showcase-templates";
 import type { ShowcaseAssetRef } from "./ShowcasesView";
 
 interface ShowcaseDraft {
@@ -32,6 +32,12 @@ interface ShowcaseDraft {
   description: string | null;
   assetIds: string[];
   templateId: string | null;
+  // The showcase's owned block array. Lives in the draft so per-
+  // block prop edits flow into the preview immediately, then PUT
+  // when the admin saves. Null until the admin actually
+  // customizes — at which point we clone the named template's
+  // blocks and the showcase is "forked."
+  templateConfig: TemplateBlock[] | null;
 }
 
 interface SavedShowcase {
@@ -42,6 +48,7 @@ interface SavedShowcase {
   description: string | null;
   assetIds: string[];
   templateId: string | null;
+  templateConfig: TemplateBlock[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -69,6 +76,7 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
     description: showcase.description,
     assetIds: showcase.assetIds,
     templateId: showcase.templateId,
+    templateConfig: showcase.templateConfig,
   });
   // Saved baseline — what the draft was last persisted as. Drives
   // the dirty-state indicator on the Save button.
@@ -77,6 +85,7 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
     description: showcase.description,
     assetIds: showcase.assetIds,
     templateId: showcase.templateId,
+    templateConfig: showcase.templateConfig,
   });
   const [activeCategory, setActiveCategory] = useState<Category | null>("content");
   const [saving, setSaving] = useState(false);
@@ -103,6 +112,9 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
     for (let i = 0; i < draft.assetIds.length; i++) {
       if (draft.assetIds[i] !== baseline.assetIds[i]) return true;
     }
+    // Compare templateConfig via JSON — block trees are small and
+    // JSON-safe by DSL design. Cheaper than a deep-equal helper.
+    if (JSON.stringify(draft.templateConfig) !== JSON.stringify(baseline.templateConfig)) return true;
     return false;
   }, [draft, baseline]);
 
@@ -134,7 +146,10 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
     return out;
   }, [draft.assetIds, assetMap]);
 
-  const template = getTemplate(draft.templateId);
+  // Effective template the preview renders against. When the
+  // admin has started customizing, this comes from templateConfig;
+  // otherwise from the named templateId.
+  const template = effectiveTemplate(draft.templateConfig, draft.templateId);
 
   // ── Save ──────────────────────────────────────────────────────
   const handleSave = async () => {
@@ -149,6 +164,7 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
           description: draft.description,
           asset_ids: draft.assetIds,
           template_id: draft.templateId,
+          template_config: draft.templateConfig,
         }),
       });
       if (!r.ok) throw new Error("Save failed");
@@ -161,12 +177,14 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
         description: data.showcase.description,
         assetIds: data.showcase.assetIds,
         templateId: data.showcase.templateId,
+        templateConfig: data.showcase.templateConfig,
       });
       setDraft({
         name: data.showcase.name,
         description: data.showcase.description,
         assetIds: data.showcase.assetIds,
         templateId: data.showcase.templateId,
+        templateConfig: data.showcase.templateConfig,
       });
       onToast("Showcase saved");
     } catch (e) {
@@ -310,7 +328,28 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
               {activeCategory === "layout" && (
                 <LayoutPanel
                   templateId={draft.templateId}
-                  onSelect={(id) => setDraft(d => ({ ...d, templateId: id }))}
+                  effectiveBlocks={template.blocks}
+                  onSelectTemplate={(id) => {
+                    // Picking a template clones its blocks into
+                    // templateConfig (fork-from-template). Resets
+                    // any prior per-block customizations.
+                    setDraft(d => ({
+                      ...d,
+                      templateId: id,
+                      templateConfig: cloneTemplateBlocks(id),
+                    }));
+                  }}
+                  onUpdateBlock={(idx, newProps) => {
+                    // Per-block prop edit. If templateConfig is
+                    // still null (admin hasn't customized yet),
+                    // clone the named template's blocks first so
+                    // we have something to mutate.
+                    setDraft(d => {
+                      const base = d.templateConfig ?? cloneTemplateBlocks(d.templateId);
+                      const next = base.map((b, i) => i === idx ? { ...b, props: { ...b.props, ...newProps } } as TemplateBlock : b);
+                      return { ...d, templateConfig: next };
+                    });
+                  }}
                 />
               )}
               {activeCategory === "style" && (
@@ -487,27 +526,64 @@ function ContentPanel({ draft, setDraft, assets }: {
 }
 
 // ─── Layout panel ────────────────────────────────────────────────
-function LayoutPanel({ templateId, onSelect }: {
+// Two-level navigation. Top level shows the template picker + a
+// block list (one row per block in the effective template). Click
+// a block row to drill into its per-block settings; back arrow
+// returns. Mirrors the Vimeo Showcases / Elfsight pattern.
+function LayoutPanel({ templateId, effectiveBlocks, onSelectTemplate, onUpdateBlock }: {
   templateId: string | null;
-  onSelect: (id: string) => void;
+  effectiveBlocks: TemplateBlock[];
+  onSelectTemplate: (id: string) => void;
+  onUpdateBlock: (idx: number, props: Record<string, unknown>) => void;
 }) {
-  // Map each built-in template id to a tiny visual hint — colored
-  // blocks that suggest the rhythm of the template. Better than
-  // generic icons because at a glance admins can see "the one with
-  // the rotator" vs "the dense one" vs "the minimal one."
+  // null = top-level list; a number = drilled into that block's
+  // settings. Reset to null whenever templateId changes (clearer
+  // mental model — switching templates pops you back to the list).
+  const [drillIdx, setDrillIdx] = useState<number | null>(null);
+  useEffect(() => { setDrillIdx(null); }, [templateId]);
+
   const visualFor = (id: string) => {
     if (id === "default")     return ["hero", "grid-3", "footer"];
     if (id === "with-quotes") return ["hero", "rotator", "grid-3", "footer"];
     if (id === "minimal")     return ["hero-l", "grid-2", "footer"];
     return ["hero", "grid-3", "footer"];
   };
+
+  // Drill-in view
+  if (drillIdx !== null && effectiveBlocks[drillIdx]) {
+    const block = effectiveBlocks[drillIdx];
+    return (
+      <div className="sb-content">
+        <button type="button" className="sb-drill-back" onClick={() => setDrillIdx(null)}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"/>
+            <polyline points="12 19 5 12 12 5"/>
+          </svg>
+          Back to layout
+        </button>
+        <div className="sb-drill-head">
+          <span className="sb-drill-icon">{blockIcon(block.type)}</span>
+          <div>
+            <div className="sb-drill-kicker">Block · {drillIdx + 1}</div>
+            <h3 className="sb-drill-h">{blockLabel(block.type)}</h3>
+          </div>
+        </div>
+        <BlockSettings
+          block={block}
+          onChange={(props) => onUpdateBlock(drillIdx, props)}
+        />
+      </div>
+    );
+  }
+
+  // Top-level view: template picker + block list
   return (
     <div className="sb-content">
       <section className="sb-section">
         <header className="sb-section-head">
           <h3>Template</h3>
         </header>
-        <p className="sb-section-help">Pick the layout your showcase renders with. Switch any time — your assets stay in place.</p>
+        <p className="sb-section-help">Pick a starting layout. Each template ships pre-tuned, then you can fine-tune individual blocks below.</p>
         <div className="sb-template-list">
           {TEMPLATES.map(t => {
             const selected = (templateId || "default") === t.id;
@@ -516,7 +592,7 @@ function LayoutPanel({ templateId, onSelect }: {
                 key={t.id}
                 type="button"
                 className={`sb-template${selected ? " on" : ""}`}
-                onClick={() => onSelect(t.id)}
+                onClick={() => onSelectTemplate(t.id)}
               >
                 <div className="sb-template-vis">
                   {visualFor(t.id).map((piece, i) => (
@@ -540,13 +616,287 @@ function LayoutPanel({ templateId, onSelect }: {
 
       <section className="sb-section">
         <header className="sb-section-head">
-          <h3>Block settings</h3>
+          <h3>Blocks</h3>
+          <span className="sb-section-count">{effectiveBlocks.length}</span>
         </header>
-        <div className="sb-coming-soon-inline">
-          Per-block customization (column count, alignment, autoplay speed, etc.) arrives next. For now each template ships pre-tuned defaults.
+        <p className="sb-section-help">Each block has its own settings — click one to dive in.</p>
+        <div className="sb-block-list">
+          {effectiveBlocks.map((b, i) => (
+            <button
+              key={i}
+              type="button"
+              className="sb-block-row"
+              onClick={() => setDrillIdx(i)}
+            >
+              <span className="sb-block-icon">{blockIcon(b.type)}</span>
+              <div className="sb-block-body">
+                <div className="sb-block-h">{blockLabel(b.type)}</div>
+                <div className="sb-block-sub">{blockSummary(b)}</div>
+              </div>
+              <svg className="sb-block-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+          ))}
         </div>
       </section>
     </div>
+  );
+}
+
+// ─── Block metadata helpers ──────────────────────────────────────
+// Friendly labels + brief summaries that appear in the block list
+// row. Keeps the drill-down hierarchy navigable at a glance.
+function blockLabel(type: TemplateBlock["type"]): string {
+  switch (type) {
+    case "hero": return "Hero";
+    case "asset-grid": return "Asset grid";
+    case "quote-rotator": return "Quote rotator";
+    case "intro-text": return "Intro text";
+    case "divider": return "Divider";
+    case "footer": return "Footer";
+  }
+}
+function blockSummary(b: TemplateBlock): string {
+  switch (b.type) {
+    case "hero": return `${b.props.align === "left" ? "Left" : "Center"} aligned · ${b.props.padding || "comfortable"} padding`;
+    case "asset-grid": return `${b.props.columns || 3} columns · ${b.props.aspect || "16/9"} aspect`;
+    case "quote-rotator": return `Every ${b.props.intervalSec ?? 6}s · ${b.props.size === "compact" ? "compact" : "full"} size`;
+    case "intro-text": return b.props.content ? b.props.content.slice(0, 60) + (b.props.content.length > 60 ? "…" : "") : "Empty";
+    case "divider": return `${b.props.spacing || "normal"} spacing`;
+    case "footer": return b.props.showBrand === false ? "Unbranded" : "StoryMatch branded";
+  }
+}
+function blockIcon(type: TemplateBlock["type"]) {
+  const common = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2 as const, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (type) {
+    case "hero":          return <svg {...common}><rect x="3" y="5" width="18" height="9" rx="1"/><line x1="3" y1="19" x2="14" y2="19"/></svg>;
+    case "asset-grid":    return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>;
+    case "quote-rotator": return <svg {...common}><path d="M3 21c0-7 6-13 13-13"/><path d="M14 8a5 5 0 0 1 5 5"/></svg>;
+    case "intro-text":    return <svg {...common}><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>;
+    case "divider":       return <svg {...common}><line x1="3" y1="12" x2="21" y2="12"/></svg>;
+    case "footer":        return <svg {...common}><rect x="3" y="5" width="18" height="9" rx="1"/><line x1="3" y1="19" x2="21" y2="19"/></svg>;
+  }
+}
+
+// ─── Per-block settings ──────────────────────────────────────────
+// Discriminated dispatch — one render path per block type. Each
+// returns a set of typed form controls bound to that block's
+// props. Changes flow up via the onChange callback which the
+// parent merges into templateConfig[idx].props.
+function BlockSettings({ block, onChange }: {
+  block: TemplateBlock;
+  onChange: (newProps: Record<string, unknown>) => void;
+}) {
+  switch (block.type) {
+    case "hero":          return <HeroSettings          props={block.props} onChange={onChange}/>;
+    case "asset-grid":    return <AssetGridSettings     props={block.props} onChange={onChange}/>;
+    case "quote-rotator": return <QuoteRotatorSettings  props={block.props} onChange={onChange}/>;
+    case "intro-text":    return <IntroTextSettings     props={block.props} onChange={onChange}/>;
+    case "divider":       return <DividerSettings       props={block.props} onChange={onChange}/>;
+    case "footer":        return <FooterSettings        props={block.props} onChange={onChange}/>;
+  }
+}
+
+function HeroSettings({ props, onChange }: { props: HeroBlockProps; onChange: (p: Record<string, unknown>) => void }) {
+  return (
+    <div className="sb-bs">
+      <FieldLabel label="Alignment">
+        <RadioGroup
+          value={props.align || "center"}
+          options={[{ value: "left", label: "Left" }, { value: "center", label: "Center" }]}
+          onChange={(v) => onChange({ align: v })}
+        />
+      </FieldLabel>
+      <FieldLabel label="Padding">
+        <Select
+          value={props.padding || "comfortable"}
+          options={[
+            { value: "compact", label: "Compact" },
+            { value: "comfortable", label: "Comfortable" },
+            { value: "spacious", label: "Spacious" },
+          ]}
+          onChange={(v) => onChange({ padding: v })}
+        />
+      </FieldLabel>
+      <FieldLabel label="Show subtitle">
+        <Select
+          value={props.subtitleSource || "showcase.description"}
+          options={[
+            { value: "showcase.description", label: "Use showcase description" },
+            { value: "none", label: "Hide subtitle" },
+          ]}
+          onChange={(v) => onChange({ subtitleSource: v })}
+        />
+      </FieldLabel>
+    </div>
+  );
+}
+
+function AssetGridSettings({ props, onChange }: { props: AssetGridBlockProps; onChange: (p: Record<string, unknown>) => void }) {
+  return (
+    <div className="sb-bs">
+      <FieldLabel label="Columns">
+        <RadioGroup
+          value={String(props.columns || 3)}
+          options={[{ value: "2", label: "2" }, { value: "3", label: "3" }, { value: "4", label: "4" }]}
+          onChange={(v) => onChange({ columns: parseInt(v, 10) })}
+        />
+      </FieldLabel>
+      <FieldLabel label="Thumbnail aspect">
+        <Select
+          value={props.aspect || "16/9"}
+          options={[
+            { value: "16/9", label: "16:9 — Widescreen" },
+            { value: "4/3", label: "4:3 — Classic" },
+            { value: "1/1", label: "1:1 — Square" },
+          ]}
+          onChange={(v) => onChange({ aspect: v })}
+        />
+      </FieldLabel>
+      <Toggle
+        label="Show company name"
+        checked={props.showCompany !== false}
+        onChange={(v) => onChange({ showCompany: v })}
+      />
+      <Toggle
+        label="Show pull-quote excerpt"
+        checked={props.showQuote !== false}
+        onChange={(v) => onChange({ showQuote: v })}
+      />
+    </div>
+  );
+}
+
+function QuoteRotatorSettings({ props, onChange }: { props: QuoteRotatorBlockProps; onChange: (p: Record<string, unknown>) => void }) {
+  return (
+    <div className="sb-bs">
+      <FieldLabel label="Auto-advance interval">
+        <div className="sb-bs-inline">
+          <input
+            type="number"
+            min={2}
+            max={30}
+            value={props.intervalSec ?? 6}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (Number.isFinite(n)) onChange({ intervalSec: Math.max(2, Math.min(30, n)) });
+            }}
+          />
+          <span className="sb-bs-suffix">seconds</span>
+        </div>
+      </FieldLabel>
+      <FieldLabel label="Size">
+        <RadioGroup
+          value={props.size || "full"}
+          options={[{ value: "full", label: "Full" }, { value: "compact", label: "Compact" }]}
+          onChange={(v) => onChange({ size: v })}
+        />
+      </FieldLabel>
+    </div>
+  );
+}
+
+function IntroTextSettings({ props, onChange }: { props: IntroTextBlockProps; onChange: (p: Record<string, unknown>) => void }) {
+  return (
+    <div className="sb-bs">
+      <FieldLabel label="Body">
+        <textarea
+          className="sb-bs-textarea"
+          value={props.content || ""}
+          onChange={(e) => onChange({ content: e.target.value })}
+          rows={6}
+          placeholder="Write a short intro paragraph. Blank lines separate paragraphs."
+        />
+      </FieldLabel>
+      <FieldLabel label="Alignment">
+        <RadioGroup
+          value={props.align || "left"}
+          options={[{ value: "left", label: "Left" }, { value: "center", label: "Center" }]}
+          onChange={(v) => onChange({ align: v })}
+        />
+      </FieldLabel>
+    </div>
+  );
+}
+
+function DividerSettings({ props, onChange }: { props: DividerBlockProps; onChange: (p: Record<string, unknown>) => void }) {
+  return (
+    <div className="sb-bs">
+      <FieldLabel label="Spacing">
+        <Select
+          value={props.spacing || "normal"}
+          options={[
+            { value: "tight", label: "Tight" },
+            { value: "normal", label: "Normal" },
+            { value: "wide", label: "Wide" },
+          ]}
+          onChange={(v) => onChange({ spacing: v })}
+        />
+      </FieldLabel>
+    </div>
+  );
+}
+
+function FooterSettings({ props, onChange }: { props: FooterBlockProps; onChange: (p: Record<string, unknown>) => void }) {
+  return (
+    <div className="sb-bs">
+      <Toggle
+        label="Show &quot;Shared via StoryMatch&quot; brand mark"
+        checked={props.showBrand !== false}
+        onChange={(v) => onChange({ showBrand: v })}
+      />
+    </div>
+  );
+}
+
+// ─── Form primitives ─────────────────────────────────────────────
+// Lightweight shared form controls used by all block-settings
+// panels. Keeps each settings component focused on its semantics,
+// not styling boilerplate.
+function FieldLabel({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="sb-bs-field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+function RadioGroup({ value, options, onChange }: { value: string; options: { value: string; label: string }[]; onChange: (v: string) => void }) {
+  return (
+    <div className="sb-bs-radios">
+      {options.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          className={`sb-bs-radio${value === o.value ? " on" : ""}`}
+          onClick={() => onChange(o.value)}
+        >{o.label}</button>
+      ))}
+    </div>
+  );
+}
+function Select({ value, options, onChange }: { value: string; options: { value: string; label: string }[]; onChange: (v: string) => void }) {
+  return (
+    <select className="sb-bs-select" value={value} onChange={e => onChange(e.target.value)}>
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="sb-bs-toggle">
+      <span className="sb-bs-toggle-label">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        className={`sb-bs-switch${checked ? " on" : ""}`}
+        onClick={() => onChange(!checked)}
+      >
+        <span className="sb-bs-switch-thumb"/>
+      </button>
+    </label>
   );
 }
 
@@ -660,6 +1010,50 @@ const css = `
 .sb-template-check{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;flex-shrink:0;}
 
 .sb-coming-soon-inline{padding:12px 14px;background:var(--bg);border:1px dashed var(--border2);border-radius:8px;font-size:11.5px;color:var(--t3);line-height:1.5;}
+
+/* Block list — top-level Layout view shows one row per block in
+   the effective template. Click to drill into per-block settings. */
+.sb-block-list{display:flex;flex-direction:column;gap:4px;}
+.sb-block-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t1);font-family:var(--font);text-align:left;cursor:pointer;transition:all .12s;}
+.sb-block-row:hover{background:var(--bg);border-color:var(--border2);}
+.sb-block-icon{display:grid;place-items:center;width:28px;height:28px;border-radius:6px;background:var(--bg2);color:var(--t2);flex-shrink:0;}
+.sb-block-body{flex:1;min-width:0;}
+.sb-block-h{font-size:13px;font-weight:600;color:var(--t1);line-height:1.3;}
+.sb-block-sub{font-size:11px;color:var(--t3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sb-block-chev{color:var(--t4);flex-shrink:0;}
+.sb-block-row:hover .sb-block-chev{color:var(--t2);}
+
+/* Drill-in panel — header strip + the block-specific settings. */
+.sb-drill-back{display:inline-flex;align-items:center;gap:5px;background:none;border:none;padding:4px 8px 4px 4px;margin:-4px -8px 8px -4px;font-family:var(--font);font-size:11.5px;font-weight:600;color:var(--t3);cursor:pointer;border-radius:5px;}
+.sb-drill-back:hover{background:var(--bg2);color:var(--t1);}
+.sb-drill-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);}
+.sb-drill-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:var(--accentLL);color:var(--accent);flex-shrink:0;}
+.sb-drill-kicker{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);font-weight:700;}
+.sb-drill-h{font-family:var(--serif);font-size:17px;font-weight:600;letter-spacing:-.3px;color:var(--t1);margin:2px 0 0;line-height:1.2;}
+
+/* Per-block settings — form primitives shared across all
+   BlockSettings sub-components. */
+.sb-bs{display:flex;flex-direction:column;gap:16px;}
+.sb-bs-field{display:flex;flex-direction:column;gap:6px;}
+.sb-bs-field>span{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;}
+.sb-bs-radios{display:flex;gap:4px;background:var(--bg);padding:3px;border-radius:8px;border:1px solid var(--border);}
+.sb-bs-radio{flex:1;padding:6px 10px;border:none;background:none;color:var(--t3);font-family:var(--font);font-size:12px;font-weight:600;border-radius:5px;cursor:pointer;transition:all .12s;}
+.sb-bs-radio:hover:not(.on){color:var(--t1);}
+.sb-bs-radio.on{background:#fff;color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.06);}
+.sb-bs-select{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:12.5px;color:var(--t1);cursor:pointer;}
+.sb-bs-select:focus{outline:none;border-color:var(--accent);}
+.sb-bs-inline{display:flex;align-items:center;gap:8px;}
+.sb-bs-inline input[type=number]{width:72px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);font-variant-numeric:tabular-nums;}
+.sb-bs-inline input[type=number]:focus{outline:none;border-color:var(--accent);}
+.sb-bs-suffix{font-size:12px;color:var(--t3);}
+.sb-bs-textarea{padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);resize:vertical;line-height:1.5;}
+.sb-bs-textarea:focus{outline:none;border-color:var(--accent);}
+.sb-bs-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;}
+.sb-bs-toggle-label{font-size:12.5px;color:var(--t1);flex:1;line-height:1.4;}
+.sb-bs-switch{position:relative;width:36px;height:20px;border:none;background:var(--border2);border-radius:99px;cursor:pointer;transition:background .15s;flex-shrink:0;padding:0;}
+.sb-bs-switch.on{background:var(--accent);}
+.sb-bs-switch-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.2);}
+.sb-bs-switch.on .sb-bs-switch-thumb{transform:translateX(16px);}
 .sb-coming-soon{padding:36px 24px;text-align:center;color:var(--t3);font-size:12.5px;line-height:1.55;background:var(--bg);border:1px dashed var(--border2);border-radius:10px;}
 .sb-coming-soon-h{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--t1);margin-bottom:6px;}
 .sb-coming-soon p{margin:0;}

@@ -158,3 +158,43 @@ export function getTemplate(id: string | null | undefined): Template {
   const found = TEMPLATES.find(t => t.id === id);
   return found || TEMPLATES[0];
 }
+
+// Resolves the template a showcase should actually render with.
+//
+//   1. If templateConfig has data, the showcase has been customized
+//      — it owns its block array (fork-from-template). Build a
+//      synthetic Template around the saved blocks. The id + name
+//      come from templateId so the "Edit" UI still shows which
+//      preset the showcase started from.
+//   2. Else if templateId resolves, use the named template directly.
+//   3. Else fall through to the "default" preset.
+//
+// This indirection means the renderer never has to know about
+// "is this a fork?" — it just renders whatever Template comes back.
+export function effectiveTemplate(
+  templateConfig: TemplateBlock[] | null | undefined,
+  templateId: string | null | undefined,
+): Template {
+  if (templateConfig && Array.isArray(templateConfig) && templateConfig.length > 0) {
+    const base = getTemplate(templateId);
+    return {
+      id: base.id,
+      name: base.name,
+      description: base.description,
+      builtIn: true,
+      blocks: templateConfig,
+    };
+  }
+  return getTemplate(templateId);
+}
+
+// Returns a deep clone of the template's blocks, suitable for
+// initializing a showcase's templateConfig on first fork. Avoids
+// shared-reference bugs where editing one showcase's blocks would
+// mutate the built-in template.
+export function cloneTemplateBlocks(templateId: string | null | undefined): TemplateBlock[] {
+  const t = getTemplate(templateId);
+  // JSON round-trip is the simplest deep clone for our DSL — all
+  // values are JSON-safe (strings, numbers, booleans, arrays).
+  return JSON.parse(JSON.stringify(t.blocks)) as TemplateBlock[];
+}

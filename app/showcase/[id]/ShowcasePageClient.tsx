@@ -12,7 +12,8 @@
 import { useState } from "react";
 import AssetDetail, { type AssetDetailAsset } from "../../components/AssetDetail";
 import ShowcaseRenderer, { type ShowcaseRenderAsset } from "../../components/ShowcaseRenderer";
-import { getTemplate } from "@/lib/showcase-templates";
+import { effectiveTemplate } from "@/lib/showcase-templates";
+import type { TemplateBlock } from "@/lib/showcase-templates";
 
 interface ShowcaseAsset {
   id: string;
@@ -33,6 +34,7 @@ interface Props {
     name: string;
     description: string | null;
     templateId: string | null;
+    templateConfig: TemplateBlock[] | null;
   };
   assets: ShowcaseAsset[];
 }
@@ -80,10 +82,11 @@ export default function ShowcasePageClient({ showcase, assets }: Props) {
   const [activeAssetId, setActiveAssetId] = useState<string | null>(null);
   const activeAsset = activeAssetId ? assets.find(a => a.id === activeAssetId) || null : null;
 
-  // Showcase's own template ID drives which template renders.
-  // getTemplate falls back to "default" when the ID is null or
-  // unrecognized, so this is safe across schema migrations.
-  const template = getTemplate(showcase.templateId);
+  // Effective template = showcase's saved templateConfig (if it's
+  // been customized) or the named template (if just a starter).
+  // Defaults to "default" preset when both are null. Safe across
+  // schema migrations and template-registry changes.
+  const template = effectiveTemplate(showcase.templateConfig, showcase.templateId);
 
   return (
     <div className="sp">
