@@ -86,7 +86,7 @@ export default function ShowcaseEditorModal({ initial, assets, onSave, onClose, 
     for (const id of assetIds) {
       const a = assetMap.get(id);
       if (a) out.push({ ...a, _missing: false });
-      else out.push({ id, headline: "(asset unavailable)", company: "", clientName: "", thumbnail: "", status: "", assetType: "", _missing: true });
+      else out.push({ id, headline: "(asset unavailable)", company: "", clientName: "", thumbnail: "", status: "", assetType: "", durationSeconds: null, _missing: true });
     }
     return out;
   }, [assetIds, assetMap]);

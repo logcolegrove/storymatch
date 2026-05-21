@@ -22,7 +22,7 @@
 // tweak its props. For now the templates are pre-tuned and the
 // admin's customization stops at "pick a template."
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ShowcaseRenderer, { type ShowcaseRenderAsset } from "./ShowcaseRenderer";
 import { effectiveTemplate, cloneTemplateBlocks, TEMPLATES, type TemplateBlock, type HeroBlockProps, type AssetGridBlockProps, type QuoteRotatorBlockProps, type IntroTextBlockProps, type DividerBlockProps, type FooterBlockProps } from "@/lib/showcase-templates";
 import type { ShowcaseAssetRef } from "./ShowcasesView";
@@ -141,6 +141,8 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
         client_name: a.clientName,
         company: a.company,
         thumbnail: a.thumbnail,
+        asset_type: a.assetType,
+        duration_seconds: a.durationSeconds,
       });
     }
     return out;
@@ -150,6 +152,78 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
   // admin has started customizing, this comes from templateConfig;
   // otherwise from the named templateId.
   const template = effectiveTemplate(draft.templateConfig, draft.templateId);
+
+  // Pointer-driven drag-reorder for preview cards. Mirrors the
+  // library grid's pattern: 5px movement threshold so single
+  // clicks don't fire drags, live insertIdx by closest centroid,
+  // pointerup commits to draft.assetIds. The drag ref keeps state
+  // out of React (mutations on every move would re-render the
+  // entire builder + preview — way too expensive). When the drag
+  // commits or cancels, we setDraft once.
+  const dragRef = React.useRef<null | {
+    fromIdx: number;
+    startX: number;
+    startY: number;
+    engaged: boolean;
+    rects: { cx: number; cy: number }[];
+    insertIdx: number;
+  }>(null);
+
+  const beginAssetReorder = (idx: number, e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const els = Array.from(document.querySelectorAll<HTMLElement>(".sb-preview-frame .sr-card[data-asset-idx]"));
+    const rects = els.map(el => {
+      const r = el.getBoundingClientRect();
+      return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+    });
+    dragRef.current = {
+      fromIdx: idx,
+      startX: e.clientX,
+      startY: e.clientY,
+      engaged: false,
+      rects,
+      insertIdx: idx,
+    };
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      if (!d.engaged && Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) < 5) return;
+      if (!d.engaged) {
+        d.engaged = true;
+        const dragged = document.querySelector<HTMLElement>(`.sb-preview-frame .sr-card[data-asset-idx="${d.fromIdx}"]`);
+        if (dragged) dragged.setAttribute("data-dragging", "true");
+      }
+      // Closest-centroid → that's the insert index.
+      let best = d.fromIdx;
+      let bestDist = Infinity;
+      for (let i = 0; i < d.rects.length; i++) {
+        const dist = Math.hypot(ev.clientX - d.rects[i].cx, ev.clientY - d.rects[i].cy);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = i;
+        }
+      }
+      d.insertIdx = best;
+    };
+    const onUp = () => {
+      const d = dragRef.current;
+      dragRef.current = null;
+      document.querySelectorAll<HTMLElement>(".sb-preview-frame .sr-card[data-dragging]").forEach(el => el.removeAttribute("data-dragging"));
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (!d || !d.engaged || d.insertIdx === d.fromIdx) return;
+      setDraft(dr => {
+        const next = [...dr.assetIds];
+        const [moved] = next.splice(d.fromIdx, 1);
+        next.splice(d.insertIdx, 0, moved);
+        return { ...dr, assetIds: next };
+      });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
 
   // ── Save ──────────────────────────────────────────────────────
   const handleSave = async () => {
@@ -412,6 +486,7 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
                 showcase: { id: showcase.id, name: draft.name || "Untitled showcase", description: draft.description },
                 assets: previewAssets,
                 onAssetClick: () => { /* no-op in builder preview */ },
+                onAssetReorderBegin: beginAssetReorder,
               }}
             />
           </div>

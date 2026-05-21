@@ -36,6 +36,9 @@ export interface ShowcaseAssetRef {
   thumbnail: string;
   status: string;
   assetType: string;
+  // For the Watch · MM:SS frosted badge on showcase tiles. Null
+  // for written case studies; the badge falls back to "Read."
+  durationSeconds: number | null;
 }
 
 interface Showcase {

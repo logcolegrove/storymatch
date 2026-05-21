@@ -26,6 +26,7 @@ interface ShowcaseAsset {
   company: string;
   vertical: string;
   asset_type: string;
+  duration_seconds: number | null;
 }
 
 interface Props {
@@ -73,6 +74,8 @@ function toRenderAsset(a: ShowcaseAsset): ShowcaseRenderAsset {
     client_name: a.client_name,
     company: a.company,
     thumbnail: a.thumbnail,
+    asset_type: a.asset_type,
+    duration_seconds: a.duration_seconds,
   };
 }
 

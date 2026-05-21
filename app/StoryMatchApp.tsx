@@ -8747,6 +8747,7 @@ export default function App(){
                   thumbnail: a.thumbnail,
                   status: a.status,
                   assetType: a.assetType,
+                  durationSeconds: a.durationSeconds ?? null,
                 }))}
                 onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); }}
               />
@@ -9530,6 +9531,7 @@ export default function App(){
               thumbnail: a.thumbnail,
               status: a.status,
               assetType: a.assetType,
+              durationSeconds: a.durationSeconds ?? null,
             }))}
             onSave={async (draft) => {
               try {

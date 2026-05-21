@@ -66,6 +66,10 @@ export interface ShowcaseAssetSlim {
   company: string;
   vertical: string;
   asset_type: string;
+  // Duration drives the "Watch · 4m 12s" frosted badge on each
+  // card. Null when the asset doesn't have a tracked duration
+  // (e.g. written case studies).
+  duration_seconds: number | null;
 }
 
 // A showcase fully resolved for rendering: same metadata as
@@ -362,7 +366,7 @@ export async function resolveShowcase(id: string): Promise<ResolvedShowcase | nu
 
   const { data, error } = await supabaseAdmin
     .from("assets")
-    .select("id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical, asset_type, status, org_id")
+    .select("id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical, asset_type, duration_seconds, status, org_id")
     .in("id", showcase.assetIds)
     .eq("org_id", showcase.orgId)
     .eq("status", "published");
@@ -385,6 +389,7 @@ export async function resolveShowcase(id: string): Promise<ResolvedShowcase | nu
       company: (row.company as string) || "",
       vertical: (row.vertical as string) || "",
       asset_type: (row.asset_type as string) || "Video Testimonial",
+      duration_seconds: (row.duration_seconds as number | null) ?? null,
     });
   }
   // Preserve original order. IDs the lookup couldn't satisfy

@@ -38,6 +38,12 @@ export interface ShowcaseContext {
   // Click handler for asset cards — parent decides whether to
   // open a modal, navigate to a sub-route, etc.
   onAssetClick: (assetId: string) => void;
+  // Optional drag-reorder kickoff. Provided ONLY in editor preview
+  // contexts (ShowcaseBuilder). When absent, asset cards aren't
+  // draggable — public visitors can't reorder anything. The
+  // handler receives the card's index + the pointer event so the
+  // host can set up its own move/up listeners.
+  onAssetReorderBegin?: (idx: number, e: React.PointerEvent) => void;
 }
 
 export interface ShowcaseRenderAsset {
@@ -47,6 +53,10 @@ export interface ShowcaseRenderAsset {
   client_name: string;
   company: string;
   thumbnail: string;
+  // Drives the Watch / Read frosted badge — matches the library
+  // grid card so showcase tiles feel exactly like internal tiles.
+  asset_type: string;
+  duration_seconds: number | null;
 }
 
 interface BlockProps<T> {
@@ -77,9 +87,18 @@ function HeroBlock({ props, ctx }: BlockProps<HeroBlockProps>) {
 }
 
 // ── AssetGridBlock ────────────────────────────────────────────────
-// Renders the showcase's resolved assets as a clickable card grid.
-// The clickTarget prop controls whether clicks open AssetDetail
-// inline (default) or pop a new tab to the public asset page.
+// Showcase tiles mirror the library grid card 1:1 — transparent
+// wrapper, 16:9 thumbnail with rounded corners + soft shadow that
+// lifts dramatically on hover, image scales + brightens, a frosted
+// Watch/Read badge in the thumb's bottom-right, headline below.
+// Company name + pull quote stay hidden by default (matching the
+// library's grid defaults) but the block props expose toggles so
+// admins can opt them back in per-showcase.
+//
+// clickTarget=newpage → wrap in a real <a target="_blank"> so the
+// browser handles middle-click + cmd-click natively. clickTarget=
+// modal keeps the button semantics + calls back into the page's
+// state to render AssetDetail inline.
 function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
   const cols = props.columns || 3;
   const aspect = props.aspect || "16/9";
@@ -91,24 +110,42 @@ function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
       </div>
     );
   }
-  // When target is "newpage", we wrap each card in a real <a> with
-  // target="_blank" so the browser opens a new tab natively (and
-  // middle-click / Cmd-click work). Modal target keeps the button
-  // semantics + calls back into the showcase page's state.
+  // Drag-handler factory — provided by the showcase context when
+  // the renderer is mounted in editor preview mode. When absent
+  // (public showcase pages), cards aren't draggable.
+  const buildPointerDown = (idx: number) => ctx.onAssetReorderBegin
+    ? (e: React.PointerEvent) => ctx.onAssetReorderBegin!(idx, e)
+    : undefined;
   return (
     <div className={`sr-grid sr-grid-cols-${cols}`}>
-      {ctx.assets.map(a => {
+      {ctx.assets.map((a, i) => {
+        const isV = a.asset_type === "Video Testimonial";
         const inner = (
           <>
-            {a.thumbnail
-              ? <img src={a.thumbnail} alt="" className="sr-card-thumb" style={{aspectRatio:aspect}} loading="lazy"/>
-              : <div className="sr-card-thumb sr-card-thumb-empty" style={{aspectRatio:aspect}}/>}
+            <div className="sr-card-thumb" style={{aspectRatio:aspect}}>
+              {a.thumbnail
+                ? <img src={a.thumbnail} alt="" loading="lazy"/>
+                : <div className="sr-card-thumb-empty"/>}
+              <div className="sr-card-badge">
+                {isV ? (
+                  <>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20"/></svg>
+                    <span>Watch{a.duration_seconds ? ` · ${formatDuration(a.duration_seconds)}` : ""}</span>
+                  </>
+                ) : (
+                  <>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <span>Read</span>
+                  </>
+                )}
+              </div>
+            </div>
             <div className="sr-card-body">
-              {props.showCompany !== false && (
+              {props.showCompany === true && (
                 <div className="sr-card-eyebrow">{a.company || a.client_name}</div>
               )}
               <h3 className="sr-card-headline">{a.headline || "Customer story"}</h3>
-              {props.showQuote !== false && a.pull_quote && (
+              {props.showQuote === true && a.pull_quote && (
                 <p className="sr-card-quote">&ldquo;{a.pull_quote}&rdquo;</p>
               )}
             </div>
@@ -123,25 +160,40 @@ function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
               target="_blank"
               rel="noopener noreferrer"
               title={a.headline}
+              data-asset-idx={i}
+              onPointerDown={buildPointerDown(i)}
             >
               {inner}
             </a>
           );
         }
         return (
-          <button
+          <div
             key={a.id}
-            type="button"
             className="sr-card"
             onClick={() => ctx.onAssetClick(a.id)}
             title={a.headline}
+            role="button"
+            tabIndex={0}
+            data-asset-idx={i}
+            onPointerDown={buildPointerDown(i)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ctx.onAssetClick(a.id); } }}
           >
             {inner}
-          </button>
+          </div>
         );
       })}
     </div>
   );
+}
+
+// Short Watch-badge duration formatter — mirrors the library's
+// formatDuration so showcase badges read the same way ("4m 12s").
+function formatDuration(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}m ${s}s`;
 }
 
 // ── QuoteRotatorBlock ─────────────────────────────────────────────
@@ -276,18 +328,37 @@ const css = `
 .sr-hero-left .sr-hero-sub{margin-left:0;margin-right:0;}
 
 /* Asset grid */
-.sr-grid{max-width:1100px;margin:0 auto;padding:0 32px 32px;display:grid;gap:24px;}
+/* Grid + card styling lifted verbatim from the library grid so
+   the showcase tiles look and feel identical to internal tiles.
+   Transparent card wrapper (no border, no panel), 16:9 thumb with
+   rounded corners + soft shadow that grows dramatically on hover,
+   image scales 1.045x with brightness lift, frosted Watch/Read
+   badge in the bottom-right corner. Title sits below the thumb
+   on the page background — no card frame to interrupt. */
+.sr-grid{max-width:1100px;margin:0 auto;padding:0 32px 32px;display:grid;gap:28px 24px;}
 .sr-grid-cols-2{grid-template-columns:repeat(2, 1fr);}
 .sr-grid-cols-3{grid-template-columns:repeat(auto-fill, minmax(300px, 1fr));}
 .sr-grid-cols-4{grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));}
-.sr-card{display:flex;flex-direction:column;text-align:left;background:#fff;border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer;font:inherit;color:inherit;padding:0;transition:border-color .12s,box-shadow .15s,transform .15s;text-decoration:none;}
-.sr-card:hover{border-color:var(--border2);box-shadow:0 8px 24px rgba(0,0,0,.08);transform:translateY(-1px);}
-.sr-card-thumb{width:100%;object-fit:cover;background:var(--bg3);display:block;}
-.sr-card-thumb-empty{background:linear-gradient(135deg,var(--bg2),var(--bg3));}
-.sr-card-body{padding:16px 18px 20px;display:flex;flex-direction:column;gap:8px;}
-.sr-card-eyebrow{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;}
-.sr-card-headline{font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);margin:0;line-height:1.25;}
-.sr-card-quote{font-size:13px;color:var(--t2);margin:4px 0 0;line-height:1.5;font-style:italic;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+.sr-card{position:relative;display:flex;flex-direction:column;background:transparent;cursor:pointer;font:inherit;color:inherit;text-decoration:none;-webkit-tap-highlight-color:transparent;}
+.sr-card-thumb{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;background:var(--bg3);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:box-shadow .4s cubic-bezier(.4,0,.2,1);}
+.sr-card:hover .sr-card-thumb{box-shadow:0 18px 44px rgba(0,0,0,.13),0 6px 14px rgba(0,0,0,.06);}
+.sr-card-thumb img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s cubic-bezier(.2,.8,.2,1),filter .35s ease;filter:brightness(.97);}
+.sr-card:hover .sr-card-thumb img{transform:scale(1.045);filter:brightness(1.03);}
+.sr-card-thumb-empty{width:100%;height:100%;background:linear-gradient(135deg,var(--bg2),var(--bg3));}
+/* Frosted Watch/Read badge in the bottom-right corner of the
+   thumb — identical to the library card so format is signaled
+   at glance-scale on every surface. */
+.sr-card-badge{position:absolute;bottom:8px;right:8px;background:rgba(20,20,28,.55);color:rgba(255,255,255,.94);font-size:10.5px;padding:3px 7px;border-radius:4px;font-weight:500;display:inline-flex;align-items:center;gap:4px;letter-spacing:.01em;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);font-family:var(--font);}
+.sr-card-body{padding:14px 4px 0;}
+.sr-card-eyebrow{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
+.sr-card-headline{font-size:17px;font-weight:600;letter-spacing:-.012em;color:var(--t1);margin:0;line-height:1.38;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.sr-card-quote{font-size:13px;color:var(--t2);margin:8px 0 0;line-height:1.5;font-style:italic;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+/* Drag-state styling — applied by the host when a card is being
+   reordered. The dragged card dims; the rest stay normal. Live
+   reorder visual feedback comes from the host repositioning the
+   array, not from any extra ghost element. */
+.sr-card[data-dragging="true"]{opacity:.4;cursor:grabbing;}
+.sr-card[data-asset-idx]:hover{cursor:pointer;}
 
 .sr-empty{max-width:560px;margin:64px auto;padding:48px 24px;text-align:center;color:var(--t3);font-size:14px;background:#fff;border:1px dashed var(--border2);border-radius:14px;}
 
