@@ -126,11 +126,10 @@ export default function ShowcaseEditorModal({ initial, assets, onSave, onClose, 
   };
 
   const handleSave = async () => {
-    if (!name.trim()) {
-      onToast("Showcase name is required");
-      return;
-    }
     setSaving(true);
+    // Empty name → server defaults to "Untitled showcase". Admin
+    // can rename later. We pass the trimmed value through either
+    // way so trailing whitespace doesn't end up persisted.
     const result = await onSave({
       id: savedId || undefined,
       name: name.trim(),
@@ -175,7 +174,7 @@ export default function ShowcaseEditorModal({ initial, assets, onSave, onClose, 
 
         <div className="sem-meta">
           <label className="sem-field">
-            <span>Name</span>
+            <span>Name <em className="sem-optional">(optional — defaults to &ldquo;Untitled showcase&rdquo;)</em></span>
             <input
               type="text"
               value={name}
@@ -291,7 +290,7 @@ export default function ShowcaseEditorModal({ initial, assets, onSave, onClose, 
 
         <footer className="sem-foot">
           <button type="button" className="sem-cancel" onClick={onClose}>Cancel</button>
-          <button type="button" className="sem-save" onClick={handleSave} disabled={saving || !name.trim()}>
+          <button type="button" className="sem-save" onClick={handleSave} disabled={saving}>
             {saving ? "Saving…" : savedId ? "Save changes" : "Create showcase"}
           </button>
         </footer>

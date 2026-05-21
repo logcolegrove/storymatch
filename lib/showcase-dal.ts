@@ -84,10 +84,15 @@ function generateShowcaseId(length = 8): string {
 }
 
 // ── Validation ────────────────────────────────────────────────────
+// Names are optional from the user's perspective — a blank name
+// resolves to "Untitled showcase" so the bulk "Add to showcase"
+// flow can ship a draft straight to disk without prompting. Admin
+// can rename later from the editor.
+export const UNTITLED_SHOWCASE_NAME = "Untitled showcase";
 function sanitizeName(raw: unknown): string {
-  if (typeof raw !== "string") return "";
+  if (typeof raw !== "string") return UNTITLED_SHOWCASE_NAME;
   const trimmed = raw.trim().slice(0, 200);
-  return trimmed;
+  return trimmed.length === 0 ? UNTITLED_SHOWCASE_NAME : trimmed;
 }
 function sanitizeDescription(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -144,8 +149,9 @@ export async function createShowcase(params: {
   description?: string | null;
   assetIds?: string[];
 }): Promise<{ ok: true; showcase: Showcase } | { ok: false; error: string }> {
+  // Empty name → "Untitled showcase" via sanitizeName. We never
+  // reject on missing name; admin can rename later.
   const name = sanitizeName(params.name);
-  if (!name) return { ok: false, error: "Showcase name is required" };
 
   // Retry on the (rare) ID collision. 8-char base62 has plenty of
   // headroom, but we still loop a few times to be safe.
@@ -232,9 +238,8 @@ export async function updateShowcase(params: {
 }): Promise<{ ok: true; showcase: Showcase } | { ok: false; error: string }> {
   const updates: Partial<DbShowcaseRow> = { updated_at: new Date().toISOString() };
   if (params.name !== undefined) {
-    const n = sanitizeName(params.name);
-    if (!n) return { ok: false, error: "Showcase name is required" };
-    updates.name = n;
+    // Blank → "Untitled showcase" via sanitizeName, never reject.
+    updates.name = sanitizeName(params.name);
   }
   if (params.description !== undefined) {
     updates.description = sanitizeDescription(params.description);

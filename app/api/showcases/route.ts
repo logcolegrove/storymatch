@@ -57,10 +57,10 @@ export async function POST(req: NextRequest) {
     description?: unknown;
     asset_ids?: unknown;
   };
+  // Name is optional — the DAL defaults blanks to "Untitled
+  // showcase" so the bulk "Add to showcase" flow can ship a
+  // draft straight to disk without prompting.
   const name = typeof body.name === "string" ? body.name : "";
-  if (!name.trim()) {
-    return NextResponse.json({ error: "Showcase name is required" }, { status: 400 });
-  }
   const result = await createShowcase({
     orgId: ctx.orgId,
     ownerUserId: ctx.userId,

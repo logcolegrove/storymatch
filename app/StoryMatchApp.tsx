@@ -12,6 +12,7 @@ import FiltersModal from "./components/FiltersModal";
 import InsightsView from "./components/InsightsView";
 import ShowcasesView from "./components/ShowcasesView";
 import ShowcaseEditorModal from "./components/ShowcaseEditorModal";
+import AddToShowcaseModal from "./components/AddToShowcaseModal";
 import ColumnControlPanel from "./components/ColumnControlPanel";
 import AssetEditPanel from "./components/AssetEditPanel";
 import AccountMenu from "./components/AccountMenu";
@@ -2146,11 +2147,16 @@ interface BulkBarProps {
   onDelete: () => void;
   onClear: () => void;
   onApplyStatus: (patch: BulkStatusPatch) => void | Promise<void>;
+  // Opens AddToShowcaseModal — admin picks an existing showcase
+  // to append to, or creates a new one from the selection. Wired
+  // up at the parent (StoryMatchApp) since the modal needs
+  // authHeaders + toast + clearing the selection on save.
+  onAddToShowcase: () => void;
   // Distinct (color, label) tags previously used across the org's assets,
   // surfaced inside the bulk Set status modal as quick-pick chips.
   knownCustomTags?: { color: string; label: string }[];
 }
-function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear, onApplyStatus, knownCustomTags }: BulkBarProps) {
+function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelete, onClear, onApplyStatus, onAddToShowcase, knownCustomTags }: BulkBarProps) {
   const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   // Wire the dedicated visibility modal back through onPublish/onDraft/onArchive
@@ -2168,6 +2174,7 @@ function BulkBar({ count, onPublish, onDraft, onArchive, onMarkVerified, onDelet
         <span className="bulk-count">{count} selected</span>
         <button className="bulk-btn" onClick={() => setVisibilityOpen(true)}>Set visibility…</button>
         <button className="bulk-btn" onClick={() => setStatusOpen(true)}>Set status…</button>
+        <button className="bulk-btn" onClick={onAddToShowcase}>Add to showcase…</button>
         <button className="bulk-btn danger" onClick={onDelete}>Delete</button>
         <button className="bulk-close" onClick={onClear} title="Clear selection">✕</button>
       </div>
@@ -7181,6 +7188,10 @@ export default function App(){
   // full ShowcaseEditorModal pre-populated with the matched assets;
   // null when closed.
   const[quickPlaylistDraft,setQuickPlaylistDraft]=useState<{name:string;description:string|null;assetIds:string[]}|null>(null);
+  // Bulk-action "Add to showcase" modal toggle. Opens when admin
+  // clicks the button in the bulk-select bar with one or more
+  // assets selected.
+  const[addToShowcaseOpen,setAddToShowcaseOpen]=useState(false);
 
   // StoryMatch state
   const[smOpen,setSmOpen]=useState(false);
@@ -9459,7 +9470,19 @@ export default function App(){
             onDelete={bulkDelete}
             onClear={clearSelection}
             onApplyStatus={bulkApplyStatus}
+            onAddToShowcase={() => setAddToShowcaseOpen(true)}
             knownCustomTags={knownCustomTags}
+          />
+        )}
+        {/* AddToShowcaseModal — mounted at app level so the modal
+            can portal above everything. Closes (and clears the
+            multi-selection) when the save lands. */}
+        {addToShowcaseOpen && (
+          <AddToShowcaseModal
+            selectedAssetIds={Array.from(selectedIds)}
+            authHeaders={authHeaders}
+            onClose={() => setAddToShowcaseOpen(false)}
+            onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 2000); }}
           />
         )}
         <AssetEditPanel
