@@ -39,6 +39,14 @@ export interface ShowcaseAssetRef {
   // For the Watch · MM:SS frosted badge on showcase tiles. Null
   // for written case studies; the badge falls back to "Read."
   durationSeconds: number | null;
+  // The next three feed the in-builder AssetDetail preview modal
+  // that opens when an admin clicks a card in the showcase preview.
+  // ShowcaseAssetRef stays narrow elsewhere — these fields are
+  // permitted to be empty strings when the host doesn't carry
+  // them; AssetDetail handles missing fields gracefully.
+  pullQuote: string;
+  description: string;
+  videoUrl: string;
 }
 
 interface Showcase {

@@ -8748,6 +8748,9 @@ export default function App(){
                   status: a.status,
                   assetType: a.assetType,
                   durationSeconds: a.durationSeconds ?? null,
+                  pullQuote: a.pullQuote || "",
+                  description: a.description || "",
+                  videoUrl: a.videoUrl || "",
                 }))}
                 onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); }}
               />
@@ -9532,6 +9535,9 @@ export default function App(){
               status: a.status,
               assetType: a.assetType,
               durationSeconds: a.durationSeconds ?? null,
+              pullQuote: a.pullQuote || "",
+              description: a.description || "",
+              videoUrl: a.videoUrl || "",
             }))}
             onSave={async (draft) => {
               try {

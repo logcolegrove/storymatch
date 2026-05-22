@@ -153,70 +153,93 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
   // otherwise from the named templateId.
   const template = effectiveTemplate(draft.templateConfig, draft.templateId);
 
-  // Pointer-driven drag-reorder for preview cards. Mirrors the
-  // library grid's pattern: 5px movement threshold so single
-  // clicks don't fire drags, live insertIdx by closest centroid,
-  // pointerup commits to draft.assetIds. The drag ref keeps state
-  // out of React (mutations on every move would re-render the
-  // entire builder + preview — way too expensive). When the drag
-  // commits or cancels, we setDraft once.
-  const dragRef = React.useRef<null | {
+  // Drag-reorder state — held in React state (not just a ref) so
+  // every pointer movement re-renders the preview cards. The
+  // dragged card translates with the cursor; the other cards
+  // animate to their new slot positions. Mirrors the library
+  // grid's "magic rearrange" feel exactly.
+  //
+  // Trade-off vs a ref-only approach: we re-render on every
+  // pointermove, but only the AssetGridBlock cards re-render
+  // (everything above is memo-stable), and the transforms are
+  // GPU-accelerated. Smooth even on modest hardware.
+  const [cardDrag, setCardDrag] = useState<{
     fromIdx: number;
+    insertIdx: number;
     startX: number;
     startY: number;
+    pointerX: number;
+    pointerY: number;
+    rects: { left: number; top: number; cx: number; cy: number }[];
     engaged: boolean;
-    rects: { cx: number; cy: number }[];
-    insertIdx: number;
-  }>(null);
+  } | null>(null);
+  const cardDragRef = React.useRef(cardDrag);
+  cardDragRef.current = cardDrag;
 
   const beginAssetReorder = (idx: number, e: React.PointerEvent) => {
     if (e.button !== 0) return;
     const els = Array.from(document.querySelectorAll<HTMLElement>(".sb-preview-frame .sr-card[data-asset-idx]"));
     const rects = els.map(el => {
       const r = el.getBoundingClientRect();
-      return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+      return { left: r.left, top: r.top, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
     });
-    dragRef.current = {
+    setCardDrag({
       fromIdx: idx,
+      insertIdx: idx,
       startX: e.clientX,
       startY: e.clientY,
-      engaged: false,
+      pointerX: e.clientX,
+      pointerY: e.clientY,
       rects,
-      insertIdx: idx,
-    };
+      engaged: false,
+    });
     const onMove = (ev: PointerEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      if (!d.engaged && Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) < 5) return;
-      if (!d.engaged) {
-        d.engaged = true;
-        const dragged = document.querySelector<HTMLElement>(`.sb-preview-frame .sr-card[data-asset-idx="${d.fromIdx}"]`);
-        if (dragged) dragged.setAttribute("data-dragging", "true");
-      }
-      // Closest-centroid → that's the insert index.
-      let best = d.fromIdx;
+      const cur = cardDragRef.current;
+      if (!cur) return;
+      const dx = ev.clientX - cur.startX;
+      const dy = ev.clientY - cur.startY;
+      const engaged = cur.engaged || Math.hypot(dx, dy) >= 5;
+      // Closest-centroid wins as insertIdx. Once the pointer
+      // crosses the 5px threshold, drag is live.
+      let best = cur.fromIdx;
       let bestDist = Infinity;
-      for (let i = 0; i < d.rects.length; i++) {
-        const dist = Math.hypot(ev.clientX - d.rects[i].cx, ev.clientY - d.rects[i].cy);
-        if (dist < bestDist) {
-          bestDist = dist;
+      for (let i = 0; i < cur.rects.length; i++) {
+        const d = Math.hypot(ev.clientX - cur.rects[i].cx, ev.clientY - cur.rects[i].cy);
+        if (d < bestDist) {
+          bestDist = d;
           best = i;
         }
       }
-      d.insertIdx = best;
+      setCardDrag({
+        ...cur,
+        pointerX: ev.clientX,
+        pointerY: ev.clientY,
+        insertIdx: engaged ? best : cur.fromIdx,
+        engaged,
+      });
     };
     const onUp = () => {
-      const d = dragRef.current;
-      dragRef.current = null;
-      document.querySelectorAll<HTMLElement>(".sb-preview-frame .sr-card[data-dragging]").forEach(el => el.removeAttribute("data-dragging"));
+      const cur = cardDragRef.current;
+      setCardDrag(null);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
-      if (!d || !d.engaged || d.insertIdx === d.fromIdx) return;
+      if (!cur || !cur.engaged || cur.insertIdx === cur.fromIdx) {
+        // Suppress the synthetic click that follows pointerup IF
+        // a drag happened (even one that ended in the same slot).
+        // For a true no-drag click, allow it through.
+        if (cur?.engaged) {
+          dragJustEndedRef.current = true;
+          setTimeout(() => { dragJustEndedRef.current = false; }, 150);
+        }
+        return;
+      }
+      dragJustEndedRef.current = true;
+      setTimeout(() => { dragJustEndedRef.current = false; }, 150);
       setDraft(dr => {
         const next = [...dr.assetIds];
-        const [moved] = next.splice(d.fromIdx, 1);
-        next.splice(d.insertIdx, 0, moved);
+        const [moved] = next.splice(cur.fromIdx, 1);
+        next.splice(cur.insertIdx, 0, moved);
         return { ...dr, assetIds: next };
       });
     };
@@ -224,6 +247,18 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
   };
+
+  // After a drag ends, we want to swallow the synthetic click
+  // event that pointerup fires (so dragging a card doesn't ALSO
+  // open it). 150ms guard so genuine clicks (no preceding drag)
+  // still register.
+  const dragJustEndedRef = React.useRef(false);
+  // Active asset for the in-builder preview modal. Click a card
+  // in the preview → opens AssetDetail right inside the builder,
+  // exactly the way it does on the public page. The previewed
+  // asset is fetched lazily (the host passes a getAssetDetail
+  // callback). null = no preview active.
+  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
 
   // ── Save ──────────────────────────────────────────────────────
   const handleSave = async () => {
@@ -485,12 +520,96 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
               context={{
                 showcase: { id: showcase.id, name: draft.name || "Untitled showcase", description: draft.description },
                 assets: previewAssets,
-                onAssetClick: () => { /* no-op in builder preview */ },
+                onAssetClick: (id) => {
+                  // Swallow the click if a drag just ended — otherwise
+                  // releasing a drag would also open the asset.
+                  if (dragJustEndedRef.current) return;
+                  setPreviewAssetId(id);
+                },
                 onAssetReorderBegin: beginAssetReorder,
+                // Project our internal drag state to the renderer's
+                // shape — it only needs the pointer DELTA + the
+                // captured rects, not start positions.
+                cardDrag: cardDrag ? {
+                  fromIdx: cardDrag.fromIdx,
+                  insertIdx: cardDrag.insertIdx,
+                  pointerDx: cardDrag.pointerX - cardDrag.startX,
+                  pointerDy: cardDrag.pointerY - cardDrag.startY,
+                  rects: cardDrag.rects.map(r => ({ left: r.left, top: r.top })),
+                  engaged: cardDrag.engaged,
+                } : undefined,
               }}
             />
           </div>
         </main>
+      </div>
+
+      {/* In-builder preview modal — fires when admin clicks a
+          card in the showcase preview. Renders the same
+          AssetDetail (publicMode) the actual showcase page would
+          render. Drag releases that happened to also be clicks
+          are swallowed by dragJustEndedRef so reordering doesn't
+          unexpectedly open this. */}
+      {previewAssetId && (() => {
+        const a = assetMap.get(previewAssetId);
+        if (!a) return null;
+        return (
+          <div className="sb-asset-preview" onClick={() => setPreviewAssetId(null)}>
+            <div className="sb-asset-preview-inner" onClick={e => e.stopPropagation()}>
+              <button className="sb-asset-preview-close" onClick={() => setPreviewAssetId(null)} aria-label="Close preview">×</button>
+              <BuilderAssetPreview asset={a}/>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ─── Builder asset preview ───────────────────────────────────────
+// Lightweight preview of an asset rendered inside the builder
+// when an admin clicks a card in the showcase preview. Shows the
+// hero thumbnail (or video embed when a Vimeo/YouTube URL exists),
+// headline, pull quote, and description — enough for the admin to
+// confirm "yes, this is the asset I'm including" without leaving
+// the builder. We don't reuse the full AssetDetail here because
+// AssetDetail wires up share-tracking + the related-assets grid +
+// chapter parsing, which add weight the preview doesn't need.
+function BuilderAssetPreview({ asset }: { asset: ShowcaseAssetRef }) {
+  const vid = (() => {
+    const url = asset.videoUrl || "";
+    if (!url) return null;
+    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+    if (yt) return { kind: "youtube" as const, id: yt[1] };
+    const vm = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+    if (vm) return { kind: "vimeo" as const, id: vm[1] };
+    return null;
+  })();
+  return (
+    <div className="sb-asset-preview-body">
+      <div className="sb-asset-preview-hero">
+        {vid ? (
+          <div className="sb-asset-preview-video">
+            <iframe
+              src={vid.kind === "youtube"
+                ? `https://www.youtube.com/embed/${vid.id}`
+                : `https://player.vimeo.com/video/${vid.id}`}
+              frameBorder="0"
+              allow="autoplay; fullscreen; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        ) : asset.thumbnail ? (
+          <img src={asset.thumbnail} alt={asset.company || asset.clientName || ""} className="sb-asset-preview-thumb"/>
+        ) : (
+          <div className="sb-asset-preview-thumb sb-asset-preview-thumb-empty"/>
+        )}
+      </div>
+      <div className="sb-asset-preview-text">
+        <div className="sb-asset-preview-eyebrow">{asset.company || asset.clientName}</div>
+        <h2>{asset.headline || "Customer story"}</h2>
+        {asset.pullQuote && <p className="sb-asset-preview-pq">&ldquo;{asset.pullQuote}&rdquo;</p>}
+        {asset.description && <p className="sb-asset-preview-desc">{asset.description}</p>}
       </div>
     </div>
   );
@@ -1350,4 +1469,23 @@ const css = `
 /* Preview */
 .sb-preview{flex:1;overflow-y:auto;background:var(--bg);padding:24px;min-width:0;}
 .sb-preview-frame{max-width:1200px;margin:0 auto;background:#fff;border-radius:14px;border:1px solid var(--border);box-shadow:0 4px 24px rgba(0,0,0,.04);overflow:hidden;min-height:calc(100vh - 130px);}
+
+/* In-builder asset preview modal. Slides up from the bottom of
+   the viewport so the admin sees the full chrome. */
+.sb-asset-preview{position:fixed;inset:0;background:rgba(20,20,30,.55);display:grid;place-items:center;z-index:200;animation:sbApIn .15s ease;padding:32px;}
+@keyframes sbApIn{from{opacity:0;}to{opacity:1;}}
+.sb-asset-preview-inner{position:relative;width:min(900px, 100%);max-height:calc(100vh - 64px);background:#fff;border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.25);overflow:hidden;display:flex;flex-direction:column;}
+.sb-asset-preview-close{position:absolute;top:12px;right:12px;width:34px;height:34px;border:none;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);color:var(--t2);border-radius:50%;cursor:pointer;font-size:22px;line-height:1;display:grid;place-items:center;z-index:2;box-shadow:0 2px 8px rgba(0,0,0,.12);}
+.sb-asset-preview-close:hover{background:#fff;color:var(--t1);}
+.sb-asset-preview-body{display:flex;flex-direction:column;overflow-y:auto;}
+.sb-asset-preview-hero{width:100%;background:var(--bg3);}
+.sb-asset-preview-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;}
+.sb-asset-preview-thumb-empty{aspect-ratio:16/9;background:linear-gradient(135deg,var(--bg2),var(--bg3));}
+.sb-asset-preview-video{position:relative;width:100%;aspect-ratio:16/9;background:#000;}
+.sb-asset-preview-video iframe{position:absolute;inset:0;width:100%;height:100%;border:0;}
+.sb-asset-preview-text{padding:28px 32px 36px;}
+.sb-asset-preview-eyebrow{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;}
+.sb-asset-preview-text h2{font-family:var(--serif);font-size:28px;font-weight:600;letter-spacing:-.6px;color:var(--t1);margin:0 0 14px;line-height:1.2;}
+.sb-asset-preview-pq{font-family:var(--serif);font-style:italic;font-size:18px;color:var(--t1);line-height:1.5;margin:0 0 18px;padding-left:14px;border-left:3px solid var(--accent);}
+.sb-asset-preview-desc{font-size:14.5px;color:var(--t2);line-height:1.6;margin:0;}
 `;

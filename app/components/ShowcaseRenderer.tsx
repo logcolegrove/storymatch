@@ -44,6 +44,26 @@ export interface ShowcaseContext {
   // handler receives the card's index + the pointer event so the
   // host can set up its own move/up listeners.
   onAssetReorderBegin?: (idx: number, e: React.PointerEvent) => void;
+  // Live drag state, provided by the editor host while a drag is
+  // in flight. Drives the library-style "magic rearrange": the
+  // dragged card translates with the cursor and the other cards
+  // animate to slot positions reflecting the new order. Absent
+  // when no drag is active OR on public render paths.
+  cardDrag?: {
+    fromIdx: number;
+    insertIdx: number;
+    // Pointer-delta from drag start. Applied to the dragged card
+    // as a translate so it follows the cursor 1:1.
+    pointerDx: number;
+    pointerDy: number;
+    // Original positions of every card at drag start (viewport
+    // coords). Used to compute dx/dy for non-dragged cards as
+    // they shift into their new positions.
+    rects: { left: number; top: number }[];
+    // Whether pointer movement crossed the engagement threshold.
+    // When false, we render no transforms (single click intent).
+    engaged: boolean;
+  };
 }
 
 export interface ShowcaseRenderAsset {
@@ -116,10 +136,52 @@ function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
   const buildPointerDown = (idx: number) => ctx.onAssetReorderBegin
     ? (e: React.PointerEvent) => ctx.onAssetReorderBegin!(idx, e)
     : undefined;
+  const drag = ctx.cardDrag;
+  // shiftFor: when card N is being dragged toward position M,
+  // every card between them shifts one slot toward the gap so
+  // the grid visually rearranges. Mirrors the library helper.
+  const shiftFor = (idx: number, fromIdx: number, insertIdx: number): number => {
+    if (idx === fromIdx) return insertIdx;
+    if (fromIdx < insertIdx) {
+      if (idx > fromIdx && idx <= insertIdx) return idx - 1;
+    } else {
+      if (idx >= insertIdx && idx < fromIdx) return idx + 1;
+    }
+    return idx;
+  };
   return (
     <div className={`sr-grid sr-grid-cols-${cols}`}>
       {ctx.assets.map((a, i) => {
         const isV = a.asset_type === "Video Testimonial";
+        // Per-card drag transform. The dragged card translates by
+        // pointer delta; non-dragged cards translate from their
+        // original rect to the rect at their *new* index, giving
+        // the magic-rearrange feel.
+        let dragStyle: React.CSSProperties | undefined;
+        if (drag && drag.engaged) {
+          if (i === drag.fromIdx) {
+            dragStyle = {
+              transform: `translate(${drag.pointerDx}px, ${drag.pointerDy}px)`,
+              transition: "none",
+              zIndex: 10,
+              pointerEvents: "none",
+            };
+          } else {
+            const newIdx = shiftFor(i, drag.fromIdx, drag.insertIdx);
+            if (newIdx !== i) {
+              const oldR = drag.rects[i];
+              const newR = drag.rects[newIdx];
+              if (oldR && newR) {
+                dragStyle = {
+                  transform: `translate(${newR.left - oldR.left}px, ${newR.top - oldR.top}px)`,
+                  transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)",
+                };
+              }
+            } else {
+              dragStyle = { transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)" };
+            }
+          }
+        }
         const inner = (
           <>
             <div className="sr-card-thumb" style={{aspectRatio:aspect}}>
@@ -162,6 +224,7 @@ function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
               title={a.headline}
               data-asset-idx={i}
               onPointerDown={buildPointerDown(i)}
+              style={dragStyle}
             >
               {inner}
             </a>
@@ -178,6 +241,7 @@ function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
             data-asset-idx={i}
             onPointerDown={buildPointerDown(i)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ctx.onAssetClick(a.id); } }}
+            style={dragStyle}
           >
             {inner}
           </div>
