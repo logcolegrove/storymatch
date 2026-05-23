@@ -306,15 +306,23 @@ export default function ShowcasesView({ authHeaders, assets, currentUserId, role
       ) : (
         <div className="sv-grid">
           {filteredShowcases.map(s => {
-            // Show the first 4 thumbnails as a preview strip. If
-            // some assetIds don't resolve in the asset list, those
-            // slots stay empty (consistent with the live-reference
-            // contract: missing assets silently drop).
+            // Show up to the first 4 thumbnails as a preview strip.
+            // We adapt the grid column count to the number we
+            // actually have — a card with two assets shouldn't render
+            // two thumbs + two empty grey slots (looks half-broken).
+            // Missing-from-the-asset-list IDs are silently dropped
+            // here, consistent with the live-reference contract.
             const previewIds = s.assetIds.slice(0, 4);
             const previewAssets = previewIds.map(id => assetMap.get(id)).filter((x): x is ShowcaseAssetRef => !!x);
+            const thumbCount = Math.max(1, Math.min(4, previewAssets.length));
             return (
               <button key={s.id} type="button" className="sv-card" onClick={() => setBuilderShowcase(s)}>
-                <div className="sv-card-thumbs">
+                <div
+                  className={`sv-card-thumbs n${thumbCount}`}
+                  style={previewAssets.length > 0
+                    ? { gridTemplateColumns: `repeat(${thumbCount}, 1fr)` }
+                    : undefined}
+                >
                   {previewAssets.length > 0 ? previewAssets.map(a => (
                     <div key={a.id} className="sv-card-thumb">
                       {a.thumbnail
@@ -414,6 +422,12 @@ const css = `
 .sv-card:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.06);}
 
 .sv-card-thumbs{display:grid;grid-template-columns:repeat(4, 1fr);gap:2px;background:var(--bg2);aspect-ratio:16/6;}
+/* Per-count aspect tuning. A single thumbnail at the strip ratio
+   looks like a stretched banner — give it the familiar 16/9
+   library-card aspect instead. Two thumbnails benefit from a
+   slightly squarer ratio so each cell doesn't crop too aggressively. */
+.sv-card-thumbs.n1{aspect-ratio:16/9;}
+.sv-card-thumbs.n2{aspect-ratio:16/7;}
 .sv-card-thumb{overflow:hidden;background:var(--bg3);}
 .sv-card-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
 .sv-card-thumb-empty{width:100%;height:100%;background:var(--bg3);}

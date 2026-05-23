@@ -109,16 +109,26 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
   const [activeCategory, setActiveCategory] = useState<Category | null>("content");
   const [saving, setSaving] = useState(false);
 
+  // Holds the most recently saved showcase response so closeWithLatest()
+  // can hand it back to the parent. Without this, the parent's
+  // showcases list stays stale until a hard reload — the back/Esc
+  // path calls onClose() with no argument and the parent only
+  // syncs when handed an `updated` shape. Updated in handleSave's
+  // success path; consumed on close.
+  const lastSavedRef = React.useRef<SavedShowcase>(showcase);
+  const closeWithLatest = () => onClose(lastSavedRef.current);
+
   // Esc-to-close. Only fires when no category is open — otherwise
   // Esc closes the panel first (one layer at a time).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (activeCategory) setActiveCategory(null);
-      else onClose();
+      else onClose(lastSavedRef.current);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // lastSavedRef is a ref; ESLint doesn't need it in deps.
   }, [activeCategory, onClose]);
 
   // Dirty check — JSON-compare draft to baseline. Cheap because
@@ -303,6 +313,10 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
       });
       if (!r.ok) throw new Error("Save failed");
       const data = await r.json() as { showcase: SavedShowcase };
+      // Remember the freshly-saved showcase so a subsequent close
+      // hands the parent the new state (otherwise the showcases
+      // list keeps the pre-save snapshot until a hard reload).
+      lastSavedRef.current = data.showcase;
       // Sync baseline to the freshly-saved values so dirty flips
       // back to false. We use the server's response (not the
       // local draft) in case the server normalized anything.
@@ -383,7 +397,7 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
 
       {/* Top bar — back, title (editable inline), save + share. */}
       <header className="sb-top">
-        <button className="sb-back" onClick={() => onClose()} aria-label="Back to showcases">
+        <button className="sb-back" onClick={closeWithLatest} aria-label="Back to showcases">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="19" y1="12" x2="5" y2="12"/>
             <polyline points="12 19 5 12 12 5"/>
@@ -392,13 +406,38 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
         <div className="sb-trail">
           <span className="sb-trail-crumb">Showcases</span>
           <span className="sb-trail-sep">/</span>
+          {/* The DAL stores "Untitled showcase" as the default name
+              when the user POSTs a blank one. Surfacing that string
+              back into the input makes it look like the field is
+              already filled out — and worse, hides the placeholder
+              hint. Treat the default as empty for display purposes;
+              the DAL will re-sanitize back to "Untitled showcase"
+              on save if the input stays blank. */}
           <input
             type="text"
             className="sb-title-input"
-            value={draft.name}
+            value={draft.name === "Untitled showcase" ? "" : draft.name}
             onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-            placeholder="Untitled showcase"
+            placeholder="Name this showcase…"
+            title="Click to rename"
           />
+          {/* Tiny pencil to advertise that the title is editable —
+              the input alone reads as a label. The icon is purely
+              decorative; clicking it focuses the input. */}
+          <button
+            type="button"
+            className="sb-title-edit"
+            onClick={(e) => {
+              (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.focus();
+            }}
+            aria-label="Rename showcase"
+            title="Rename"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            </svg>
+          </button>
         </div>
         <div className="sb-top-r">
           <button className="sb-share" onClick={copyShareLink} title="Copy public link">
@@ -1384,9 +1423,12 @@ const css = `
 .sb-trail{display:flex;align-items:center;gap:8px;flex:1;min-width:0;}
 .sb-trail-crumb{font-size:13px;color:var(--t3);font-weight:500;flex-shrink:0;}
 .sb-trail-sep{color:var(--t4);}
-.sb-title-input{flex:1;border:none;background:none;font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);padding:6px 8px;border-radius:6px;min-width:0;}
-.sb-title-input:hover{background:var(--bg2);}
-.sb-title-input:focus{outline:none;background:var(--bg);box-shadow:inset 0 0 0 1px var(--border);}
+.sb-title-input{flex:1;border:none;background:none;font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);padding:6px 8px;border-radius:6px;min-width:0;border-bottom:1.5px dashed var(--border2);transition:background .12s,border-color .12s;}
+.sb-title-input::placeholder{color:var(--t4);font-weight:500;font-style:italic;}
+.sb-title-input:hover{background:var(--bg2);border-bottom-color:var(--accent);}
+.sb-title-input:focus{outline:none;background:#fff;border-bottom:1.5px solid var(--accent);}
+.sb-title-edit{width:26px;height:26px;display:grid;place-items:center;border:none;background:none;color:var(--t3);border-radius:6px;cursor:pointer;flex-shrink:0;transition:all .12s;}
+.sb-title-edit:hover{background:var(--bg2);color:var(--accent);}
 
 .sb-top-r{display:flex;gap:8px;align-items:center;flex-shrink:0;}
 .sb-share{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .12s;}
