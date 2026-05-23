@@ -64,6 +64,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       assetIds: resolved.assetIds,
       templateId: resolved.templateId,
       templateConfig: resolved.templateConfig,
+      visibility: resolved.visibility,
+      autoplayNext: resolved.autoplayNext,
+      paginationSize: resolved.paginationSize,
       createdAt: resolved.createdAt,
       updatedAt: resolved.updatedAt,
       ownerUserId: resolved.ownerUserId,
@@ -98,8 +101,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     asset_ids?: unknown;
     template_id?: unknown;
     template_config?: unknown;
+    visibility?: unknown;
+    autoplay_next?: unknown;
+    pagination_size?: unknown;
   };
-  const updates: { name?: string; description?: string | null; assetIds?: string[]; templateId?: string | null; templateConfig?: TemplateBlock[] | null } = {};
+  const updates: {
+    name?: string;
+    description?: string | null;
+    assetIds?: string[];
+    templateId?: string | null;
+    templateConfig?: TemplateBlock[] | null;
+    visibility?: "personal" | "team";
+    autoplayNext?: boolean;
+    paginationSize?: number;
+  } = {};
   if (typeof body.name === "string") updates.name = body.name;
   if (body.description !== undefined) {
     updates.description = typeof body.description === "string" ? body.description : null;
@@ -113,6 +128,24 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   if (body.template_config !== undefined) {
     // DAL validates shape — we forward raw value, null included.
     updates.templateConfig = (body.template_config ?? null) as TemplateBlock[] | null;
+  }
+  // Visibility: admins can flip to "team" or back to "personal";
+  // sales reps can never set "team". We silently ignore a sales
+  // rep's "team" request rather than 403'ing — the UI shouldn't
+  // even surface the toggle, so the request is suspicious but not
+  // worth a hard error.
+  if (body.visibility !== undefined) {
+    if (ctx.role === "admin") {
+      updates.visibility = body.visibility === "team" ? "team" : "personal";
+    } else {
+      updates.visibility = "personal";
+    }
+  }
+  if (body.autoplay_next !== undefined) {
+    updates.autoplayNext = body.autoplay_next === true;
+  }
+  if (body.pagination_size !== undefined) {
+    updates.paginationSize = typeof body.pagination_size === "number" ? body.pagination_size : 0;
   }
   const result = await updateShowcase({ id, orgId: ctx.orgId, ...updates });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });

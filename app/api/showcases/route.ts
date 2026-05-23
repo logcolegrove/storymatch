@@ -16,8 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import {
   createShowcase,
-  fetchOrgShowcases,
-  fetchUserShowcases,
+  fetchVisibleShowcases,
 } from "@/lib/showcase-dal";
 import type { TemplateBlock } from "@/lib/showcase-templates";
 
@@ -44,9 +43,11 @@ async function getCurrentUserOrg(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const ctx = await getCurrentUserOrg(req);
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const showcases = ctx.role === "admin"
-    ? await fetchOrgShowcases(ctx.orgId)
-    : await fetchUserShowcases(ctx.orgId, ctx.userId);
+  // Both admins and sales reps see the same scope here: team-visible
+  // showcases + their own personal ones. The client splits these into
+  // All / Whole team / My showcases tabs; everything else (e.g. other
+  // people's personal showcases) is invisible by design.
+  const showcases = await fetchVisibleShowcases(ctx.orgId, ctx.userId);
   return NextResponse.json({ showcases });
 }
 
@@ -59,6 +60,9 @@ export async function POST(req: NextRequest) {
     asset_ids?: unknown;
     template_id?: unknown;
     template_config?: unknown;
+    visibility?: unknown;
+    autoplay_next?: unknown;
+    pagination_size?: unknown;
   };
   // Name is optional — the DAL defaults blanks to "Untitled
   // showcase" so the bulk "Add to showcase" flow can ship a
@@ -66,6 +70,15 @@ export async function POST(req: NextRequest) {
   // also optional — the DAL validates against the known list and
   // falls back to null (renderer defaults to "default").
   const name = typeof body.name === "string" ? body.name : "";
+
+  // Role gate: sales reps can never create team-visible showcases.
+  // Anything they send for visibility is forced to "personal" here.
+  // Admins can flip the toggle; everything else is left to the DAL
+  // to sanitize.
+  const requestedVisibility = body.visibility === "team" ? "team" : "personal";
+  const visibility: "personal" | "team" =
+    ctx.role === "admin" ? requestedVisibility : "personal";
+
   const result = await createShowcase({
     orgId: ctx.orgId,
     ownerUserId: ctx.userId,
@@ -75,6 +88,9 @@ export async function POST(req: NextRequest) {
     templateId: typeof body.template_id === "string" ? body.template_id : null,
     // DAL validates the shape; we just forward what the FE sent.
     templateConfig: (body.template_config ?? null) as TemplateBlock[] | null,
+    visibility,
+    autoplayNext: body.autoplay_next === true,
+    paginationSize: typeof body.pagination_size === "number" ? body.pagination_size : 0,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ showcase: result.showcase });

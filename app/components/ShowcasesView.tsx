@@ -61,13 +61,31 @@ interface Showcase {
   // means the showcase still uses the named templateId's preset.
   // The builder reads this and the renderer falls back gracefully.
   templateConfig: TemplateBlock[] | null;
+  // B4.0 fields — see lib/showcase-dal.ts for the canonical
+  // definitions. visibility="personal" stays in My showcases;
+  // "team" promotes to the Whole team tab.
+  visibility: "personal" | "team";
+  autoplayNext: boolean;
+  paginationSize: number;
   createdAt: string;
   updatedAt: string;
 }
 
+// Tab strip across the top of the showcase list. Both roles see
+// the same three options; the underlying scope is just the org-
+// visibility filter applied to the same fetched list.
+type ShowcaseTab = "all" | "team" | "mine";
+
 interface Props {
   authHeaders: () => Promise<HeadersInit>;
   assets: ShowcaseAssetRef[];
+  // For "My showcases" filtering — the API returns everyone's
+  // team-visible PLUS the caller's personal, so the client needs
+  // to know which rows are theirs.
+  currentUserId: string;
+  // Drives whether the visibility toggle is shown when creating.
+  // Sales reps can't promote to team; admins can.
+  role: "admin" | "sales";
   onToast: (msg: string) => void;
 }
 
@@ -86,13 +104,17 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
-export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
+export default function ShowcasesView({ authHeaders, assets, currentUserId, role, onToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [showcases, setShowcases] = useState<Showcase[]>([]);
   // The builder takes over the full viewport when a showcase is
   // being edited. Setting this to a Showcase mounts the builder;
   // closing the builder (back arrow, Esc) resets to null.
   const [builderShowcase, setBuilderShowcase] = useState<Showcase | null>(null);
+  // Tab state. "all" = everything visible to me (team + mine);
+  // "team" = visibility==="team"; "mine" = ownerUserId===me. Default
+  // to "all" so admins land on the broadest scope on first open.
+  const [tab, setTab] = useState<ShowcaseTab>("all");
 
   const loadShowcases = async () => {
     try {
@@ -185,6 +207,47 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
     return m;
   }, [assets]);
 
+  // Apply the active tab as a client-side filter. The fetched list
+  // is the broadest scope visible to the caller (team + mine); the
+  // tab narrows that view. Counts in the tab labels use the same
+  // predicates so the user can spot which bucket has new content
+  // without switching tabs first.
+  const filteredShowcases = useMemo(() => {
+    switch (tab) {
+      case "team":
+        return showcases.filter(s => s.visibility === "team");
+      case "mine":
+        return showcases.filter(s => s.ownerUserId === currentUserId);
+      default:
+        return showcases;
+    }
+  }, [showcases, tab, currentUserId]);
+
+  const counts = useMemo(() => ({
+    all: showcases.length,
+    team: showcases.filter(s => s.visibility === "team").length,
+    mine: showcases.filter(s => s.ownerUserId === currentUserId).length,
+  }), [showcases, currentUserId]);
+
+  // Per-tab empty-state copy. Drives the message the user sees when
+  // their current tab is empty but other tabs may have content.
+  const emptyCopy = (() => {
+    if (tab === "team") return {
+      h: "Nothing visible to the whole team yet",
+      p: role === "admin"
+        ? "Build a showcase, then flip its visibility to “Whole team” so everyone in your workspace sees it here."
+        : "Admins post team-visible showcases here. Anything you build will land in My showcases.",
+    };
+    if (tab === "mine") return {
+      h: "You haven't built a showcase yet",
+      p: "Bundle a few testimonials into one URL you can send to a prospect. New showcases default to personal — only you see them until an admin promotes them.",
+    };
+    return {
+      h: "No showcases yet",
+      p: "Build one with the assets you want to send to prospects. You can curate a branded landing page or just bundle a few testimonials into one URL.",
+    };
+  })();
+
   return (
     <div className="sv">
       <style>{css}</style>
@@ -203,23 +266,46 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
         </button>
       </header>
 
+      {/* Tab strip — All / Whole team / My showcases. Counts come
+          from the full fetched list so a user notices new content
+          in tabs they aren't currently viewing. */}
+      <div className="sv-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === "all"}
+                className={`sv-tab ${tab === "all" ? "on" : ""}`}
+                onClick={() => setTab("all")}>
+          All <span className="sv-tab-c">{counts.all}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "team"}
+                className={`sv-tab ${tab === "team" ? "on" : ""}`}
+                onClick={() => setTab("team")}>
+          Whole team <span className="sv-tab-c">{counts.team}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "mine"}
+                className={`sv-tab ${tab === "mine" ? "on" : ""}`}
+                onClick={() => setTab("mine")}>
+          My showcases <span className="sv-tab-c">{counts.mine}</span>
+        </button>
+      </div>
+
       {loading ? (
         <div className="sv-empty">Loading…</div>
-      ) : showcases.length === 0 ? (
+      ) : filteredShowcases.length === 0 ? (
         <div className="sv-empty">
-          <div className="sv-empty-h">No showcases yet</div>
-          <p className="sv-empty-sub">Build one with the assets you want to send to prospects. You can curate a branded landing page or just bundle a few testimonials into one URL.</p>
-          <button className="sv-create-btn primary" onClick={createBlankShowcase}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            Create your first showcase
-          </button>
+          <div className="sv-empty-h">{emptyCopy.h}</div>
+          <p className="sv-empty-sub">{emptyCopy.p}</p>
+          {tab !== "team" && (
+            <button className="sv-create-btn primary" onClick={createBlankShowcase}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              {tab === "mine" ? "Create your first" : "Create your first showcase"}
+            </button>
+          )}
         </div>
       ) : (
         <div className="sv-grid">
-          {showcases.map(s => {
+          {filteredShowcases.map(s => {
             // Show the first 4 thumbnails as a preview strip. If
             // some assetIds don't resolve in the asset list, those
             // slots stay empty (consistent with the live-reference
@@ -262,6 +348,12 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
                   </div>
                   {s.description && <p className="sv-card-desc">{s.description}</p>}
                   <div className="sv-card-meta">
+                    {/* Team badge — only on team-visible showcases.
+                        Personal stays implicit (no badge). The
+                        chip leads so it sits next to the name area. */}
+                    {s.visibility === "team" && (
+                      <span className="sv-vis-chip" title="Visible to the whole team">Team</span>
+                    )}
                     <span>{s.assetIds.length} {s.assetIds.length === 1 ? "asset" : "assets"}</span>
                     <span className="sv-card-dot">·</span>
                     <span>Updated {timeAgo(s.updatedAt)}</span>
@@ -278,6 +370,7 @@ export default function ShowcasesView({ authHeaders, assets, onToast }: Props) {
           showcase={builderShowcase}
           assets={assets}
           authHeaders={authHeaders}
+          role={role}
           onClose={handleBuilderClose}
           onToast={onToast}
         />
@@ -296,6 +389,20 @@ const css = `
 .sv-create-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;flex-shrink:0;transition:filter .12s;}
 .sv-create-btn:hover{filter:brightness(1.08);}
 .sv-create-btn.primary{margin-top:14px;}
+
+/* Tab strip — sits between header and grid. Mirrors the Insights
+   metric tabs (underline-active style) for visual continuity. */
+.sv-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-top:-8px;}
+.sv-tab{position:relative;padding:10px 16px 12px;border:none;background:none;font-family:var(--font);font-size:13px;font-weight:500;color:var(--t3);cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:color .12s;}
+.sv-tab:hover{color:var(--t1);}
+.sv-tab.on{color:var(--t1);font-weight:600;}
+.sv-tab.on::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:2px;background:var(--accent);border-radius:2px;}
+.sv-tab-c{font-size:11.5px;color:var(--t4);font-weight:500;background:var(--bg2);padding:1px 7px;border-radius:10px;min-width:18px;text-align:center;}
+.sv-tab.on .sv-tab-c{color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);}
+
+/* Team-visibility badge on cards. Distinct from the tab pill so
+   admins instantly know which rows are shared org-wide. */
+.sv-vis-chip{display:inline-flex;align-items:center;font-size:10.5px;font-weight:600;letter-spacing:.2px;text-transform:uppercase;padding:2px 7px;border-radius:9px;background:color-mix(in srgb, var(--accent) 12%, transparent);color:var(--accent);}
 
 .sv-empty{padding:64px 24px;text-align:center;color:var(--t3);font-size:13px;background:#fff;border:1px dashed var(--border2);border-radius:12px;}
 .sv-empty-h{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);margin-bottom:6px;}

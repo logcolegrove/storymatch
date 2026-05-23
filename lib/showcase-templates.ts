@@ -128,7 +128,6 @@ export const TEMPLATES: Template[] = [
     blocks: [
       { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "center", padding: "comfortable" } },
       { type: "asset-grid", props: { columns: 3, showCompany: true, showQuote: true, aspect: "16/9" } },
-      { type: "footer", props: { showBrand: true } },
     ],
   },
   {
@@ -141,7 +140,6 @@ export const TEMPLATES: Template[] = [
       { type: "quote-rotator", props: { source: "showcase-assets", intervalSec: 6, size: "full" } },
       { type: "divider", props: { spacing: "wide" } },
       { type: "asset-grid", props: { columns: 3, showCompany: true, showQuote: false, aspect: "16/9" } },
-      { type: "footer", props: { showBrand: true } },
     ],
   },
   {
@@ -152,7 +150,6 @@ export const TEMPLATES: Template[] = [
     blocks: [
       { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "left", padding: "spacious" } },
       { type: "asset-grid", props: { columns: 2, showCompany: true, showQuote: true, aspect: "16/9" } },
-      { type: "footer", props: { showBrand: true } },
     ],
   },
 ];

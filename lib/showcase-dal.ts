@@ -48,6 +48,24 @@ export interface Showcase {
   // The first per-block edit in the builder clones the template's
   // blocks here so the showcase owns its own copy.
   templateConfig: TemplateBlock[] | null;
+  // Visibility scope inside the org:
+  //   "personal" — only the owner sees it in their list. Sales reps
+  //                are locked to this value; we enforce at the API.
+  //   "team"     — admins can promote a showcase so the whole org
+  //                sees it in the "Whole team" tab. Sales reps
+  //                can't pick this in v1 (would invite chaos in
+  //                the team tab; admins curate that).
+  visibility: "personal" | "team";
+  // Autoplay-next behavior on the public showcase page. When true,
+  // the rendered showcase will queue the next asset and auto-advance
+  // after the current one ends. Showcase-level (not per-block) so
+  // the experience is consistent regardless of which blocks render.
+  autoplayNext: boolean;
+  // Pagination size for the asset grid in the rendered showcase.
+  // 0 = no pagination (show everything in one grid — the v1 default
+  // and current behavior). Positive N = N items per page; the grid
+  // renders pagination controls below.
+  paginationSize: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -141,6 +159,9 @@ type DbShowcaseRow = {
   asset_ids: string[] | null;
   template_id: string | null;
   template_config: TemplateBlock[] | null;
+  visibility: string | null;
+  autoplay_next: boolean | null;
+  pagination_size: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -155,9 +176,38 @@ function rowToShowcase(row: DbShowcaseRow): Showcase {
     assetIds: Array.isArray(row.asset_ids) ? row.asset_ids : [],
     templateId: row.template_id ?? null,
     templateConfig: Array.isArray(row.template_config) ? row.template_config : null,
+    // Defensive defaults match the DB column defaults so legacy
+    // rows (or rows from a partial migration) read cleanly.
+    visibility: row.visibility === "team" ? "team" : "personal",
+    autoplayNext: row.autoplay_next === true,
+    paginationSize: typeof row.pagination_size === "number" && row.pagination_size > 0
+      ? Math.floor(row.pagination_size)
+      : 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+// Visibility is a tight enum — anything that isn't "team" falls
+// back to "personal". The API layer is responsible for enforcing
+// role-based restrictions (sales reps can never set "team"); the
+// DAL just validates the shape so junk strings can't leak through.
+function sanitizeVisibility(raw: unknown): "personal" | "team" {
+  return raw === "team" ? "team" : "personal";
+}
+function sanitizeAutoplay(raw: unknown): boolean {
+  return raw === true;
+}
+// Pagination size: 0 means "no pagination" (renderer shows all).
+// Negative / NaN / huge values get clamped to 0 so a runaway value
+// can't blow up the renderer. Cap at 100 — beyond that, scrolling
+// is a better UX anyway.
+function sanitizePaginationSize(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 0;
+  const n = Math.floor(raw);
+  if (n <= 0) return 0;
+  if (n > 100) return 100;
+  return n;
 }
 
 // Conservative validation — only accept template IDs we recognize.
@@ -208,6 +258,9 @@ export async function createShowcase(params: {
   assetIds?: string[];
   templateId?: string | null;
   templateConfig?: TemplateBlock[] | null;
+  visibility?: "personal" | "team";
+  autoplayNext?: boolean;
+  paginationSize?: number;
 }): Promise<{ ok: true; showcase: Showcase } | { ok: false; error: string }> {
   // Empty name → "Untitled showcase" via sanitizeName. We never
   // reject on missing name; admin can rename later.
@@ -228,8 +281,11 @@ export async function createShowcase(params: {
         asset_ids: sanitizeAssetIds(params.assetIds ?? []),
         template_id: sanitizeTemplateId(params.templateId ?? null),
         template_config: sanitizeTemplateConfig(params.templateConfig ?? null),
+        visibility: sanitizeVisibility(params.visibility ?? "personal"),
+        autoplay_next: sanitizeAutoplay(params.autoplayNext ?? false),
+        pagination_size: sanitizePaginationSize(params.paginationSize ?? 0),
       })
-      .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
+      .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, visibility, autoplay_next, pagination_size, created_at, updated_at")
       .single();
     if (!error && data) {
       return { ok: true, showcase: rowToShowcase(data as DbShowcaseRow) };
@@ -246,7 +302,7 @@ export async function createShowcase(params: {
 export async function fetchShowcase(id: string): Promise<Showcase | null> {
   const { data, error } = await supabaseAdmin
     .from("showcases")
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, visibility, autoplay_next, pagination_size, created_at, updated_at")
     .eq("id", id)
     .maybeSingle();
   if (error) {
@@ -262,7 +318,7 @@ export async function fetchShowcase(id: string): Promise<Showcase | null> {
 export async function fetchOrgShowcases(orgId: string): Promise<Showcase[]> {
   const { data, error } = await supabaseAdmin
     .from("showcases")
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, visibility, autoplay_next, pagination_size, created_at, updated_at")
     .eq("org_id", orgId)
     .order("updated_at", { ascending: false })
     .limit(500);
@@ -273,13 +329,34 @@ export async function fetchOrgShowcases(orgId: string): Promise<Showcase[]> {
   return data.map(r => rowToShowcase(r as DbShowcaseRow));
 }
 
-// List only the showcases owned by a specific user. Sales reps see
-// this — they can manage their own playlists but not admin-built
-// org showcases.
+// List everything visible to the caller in the org — their own
+// personal showcases plus any team-visible ones. Both roles use
+// this; the client then filters into the All / Whole team / My
+// showcases tabs. Admins don't see other people's personal
+// showcases — that's intentional, personal stays personal.
+export async function fetchVisibleShowcases(orgId: string, userId: string): Promise<Showcase[]> {
+  const { data, error } = await supabaseAdmin
+    .from("showcases")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, visibility, autoplay_next, pagination_size, created_at, updated_at")
+    .eq("org_id", orgId)
+    // Postgrest OR-filter syntax: (visibility = 'team') OR (owner_user_id = me)
+    .or(`visibility.eq.team,owner_user_id.eq.${userId}`)
+    .order("updated_at", { ascending: false })
+    .limit(500);
+  if (error || !data) {
+    if (error) console.error("[showcase-dal] visible fetch failed", error);
+    return [];
+  }
+  return data.map(r => rowToShowcase(r as DbShowcaseRow));
+}
+
+// List only the showcases owned by a specific user. Kept for
+// callers that want a stricter scope; the API list endpoint moved
+// to fetchVisibleShowcases for the new All / Team / Mine tabs.
 export async function fetchUserShowcases(orgId: string, userId: string): Promise<Showcase[]> {
   const { data, error } = await supabaseAdmin
     .from("showcases")
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, visibility, autoplay_next, pagination_size, created_at, updated_at")
     .eq("org_id", orgId)
     .eq("owner_user_id", userId)
     .order("updated_at", { ascending: false })
@@ -299,6 +376,9 @@ export async function updateShowcase(params: {
   assetIds?: string[];
   templateId?: string | null;
   templateConfig?: TemplateBlock[] | null;
+  visibility?: "personal" | "team";
+  autoplayNext?: boolean;
+  paginationSize?: number;
 }): Promise<{ ok: true; showcase: Showcase } | { ok: false; error: string }> {
   const updates: Partial<DbShowcaseRow> = { updated_at: new Date().toISOString() };
   if (params.name !== undefined) {
@@ -317,12 +397,21 @@ export async function updateShowcase(params: {
   if (params.templateConfig !== undefined) {
     updates.template_config = sanitizeTemplateConfig(params.templateConfig);
   }
+  if (params.visibility !== undefined) {
+    updates.visibility = sanitizeVisibility(params.visibility);
+  }
+  if (params.autoplayNext !== undefined) {
+    updates.autoplay_next = sanitizeAutoplay(params.autoplayNext);
+  }
+  if (params.paginationSize !== undefined) {
+    updates.pagination_size = sanitizePaginationSize(params.paginationSize);
+  }
   const { data, error } = await supabaseAdmin
     .from("showcases")
     .update(updates)
     .eq("id", params.id)
     .eq("org_id", params.orgId)
-    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, created_at, updated_at")
+    .select("id, org_id, owner_user_id, name, description, asset_ids, template_id, template_config, visibility, autoplay_next, pagination_size, created_at, updated_at")
     .maybeSingle();
   if (error) {
     console.error("[showcase-dal] update failed", error);

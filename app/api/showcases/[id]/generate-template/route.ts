@@ -85,15 +85,11 @@ Block types and their props:
    props:
      spacing: "tight" | "normal" | "wide"   (default: "normal")
 
-6. "footer" — Closing brand attribution.
-   props:
-     showBrand: boolean        (default: true)
-
 Constraints:
 - Return ONLY a JSON object of the form { "blocks": [...] }.
 - 1-8 blocks per template. Most well-designed pages have 3-5.
-- Always end with a "footer" block.
 - A page typically starts with "hero".
+- Never emit a "footer" block. The platform no longer renders one.
 - "asset-grid" should appear at most once.
 - "quote-rotator" should appear at most once, and only when the
   caller's request implies prose / storytelling. Skip it for

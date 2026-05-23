@@ -38,6 +38,12 @@ interface ShowcaseDraft {
   // customizes — at which point we clone the named template's
   // blocks and the showcase is "forked."
   templateConfig: TemplateBlock[] | null;
+  // B4.0 — Settings-panel fields. Held in the draft so the dirty
+  // indicator + save flow treats them like any other edit. The
+  // Settings UI binds directly to these.
+  visibility: "personal" | "team";
+  autoplayNext: boolean;
+  paginationSize: number;
 }
 
 interface SavedShowcase {
@@ -49,6 +55,9 @@ interface SavedShowcase {
   assetIds: string[];
   templateId: string | null;
   templateConfig: TemplateBlock[] | null;
+  visibility: "personal" | "team";
+  autoplayNext: boolean;
+  paginationSize: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -61,6 +70,10 @@ interface Props {
   // resolved-assets list.
   assets: ShowcaseAssetRef[];
   authHeaders: () => Promise<HeadersInit>;
+  // Drives whether the visibility toggle in Settings is shown.
+  // Sales reps can only build personal showcases; the toggle is
+  // hidden for them. The API enforces this too.
+  role: "admin" | "sales";
   // Called when the admin clicks "← Back" or after a successful
   // save (with the updated showcase). Parent uses it to update
   // the showcases list and close the builder.
@@ -70,13 +83,16 @@ interface Props {
 
 type Category = "content" | "layout" | "style" | "settings";
 
-export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose, onToast }: Props) {
+export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, onClose, onToast }: Props) {
   const [draft, setDraft] = useState<ShowcaseDraft>({
     name: showcase.name,
     description: showcase.description,
     assetIds: showcase.assetIds,
     templateId: showcase.templateId,
     templateConfig: showcase.templateConfig,
+    visibility: showcase.visibility,
+    autoplayNext: showcase.autoplayNext,
+    paginationSize: showcase.paginationSize,
   });
   // Saved baseline — what the draft was last persisted as. Drives
   // the dirty-state indicator on the Save button.
@@ -86,6 +102,9 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
     assetIds: showcase.assetIds,
     templateId: showcase.templateId,
     templateConfig: showcase.templateConfig,
+    visibility: showcase.visibility,
+    autoplayNext: showcase.autoplayNext,
+    paginationSize: showcase.paginationSize,
   });
   const [activeCategory, setActiveCategory] = useState<Category | null>("content");
   const [saving, setSaving] = useState(false);
@@ -115,6 +134,9 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
     // Compare templateConfig via JSON — block trees are small and
     // JSON-safe by DSL design. Cheaper than a deep-equal helper.
     if (JSON.stringify(draft.templateConfig) !== JSON.stringify(baseline.templateConfig)) return true;
+    if (draft.visibility !== baseline.visibility) return true;
+    if (draft.autoplayNext !== baseline.autoplayNext) return true;
+    if (draft.paginationSize !== baseline.paginationSize) return true;
     return false;
   }, [draft, baseline]);
 
@@ -274,6 +296,9 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
           asset_ids: draft.assetIds,
           template_id: draft.templateId,
           template_config: draft.templateConfig,
+          visibility: draft.visibility,
+          autoplay_next: draft.autoplayNext,
+          pagination_size: draft.paginationSize,
         }),
       });
       if (!r.ok) throw new Error("Save failed");
@@ -287,6 +312,9 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
         assetIds: data.showcase.assetIds,
         templateId: data.showcase.templateId,
         templateConfig: data.showcase.templateConfig,
+        visibility: data.showcase.visibility,
+        autoplayNext: data.showcase.autoplayNext,
+        paginationSize: data.showcase.paginationSize,
       });
       setDraft({
         name: data.showcase.name,
@@ -294,6 +322,9 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
         assetIds: data.showcase.assetIds,
         templateId: data.showcase.templateId,
         templateConfig: data.showcase.templateConfig,
+        visibility: data.showcase.visibility,
+        autoplayNext: data.showcase.autoplayNext,
+        paginationSize: data.showcase.paginationSize,
       });
       onToast("Showcase saved");
     } catch (e) {
@@ -500,9 +531,10 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, onClose
                 />
               )}
               {activeCategory === "settings" && (
-                <ComingSoonStub
-                  title="Showcase settings"
-                  body="Autoplay behavior, asset-click target (modal vs. new page), pagination size, and embed dimensions. These map to the existing block props — once exposed they'll live here."
+                <SettingsPanel
+                  draft={draft}
+                  setDraft={setDraft}
+                  role={role}
                 />
               )}
             </div>
@@ -773,11 +805,14 @@ function LayoutPanel({ templateId, effectiveBlocks, onSelectTemplate, onUpdateBl
   const [claudeOpen, setClaudeOpen] = useState(false);
   useEffect(() => { setDrillIdx(null); }, [templateId]);
 
+  // Tiny visual previews on the template picker. B4.0 dropped the
+  // "Shared via StoryMatch" footer block from built-in templates,
+  // so the visuals follow suit.
   const visualFor = (id: string) => {
-    if (id === "default")     return ["hero", "grid-3", "footer"];
-    if (id === "with-quotes") return ["hero", "rotator", "grid-3", "footer"];
-    if (id === "minimal")     return ["hero-l", "grid-2", "footer"];
-    return ["hero", "grid-3", "footer"];
+    if (id === "default")     return ["hero", "grid-3"];
+    if (id === "with-quotes") return ["hero", "rotator", "grid-3"];
+    if (id === "minimal")     return ["hero-l", "grid-2"];
+    return ["hero", "grid-3"];
   };
 
   // Drill-in view
@@ -1261,6 +1296,72 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   );
 }
 
+// ─── Settings panel ──────────────────────────────────────────────
+// Showcase-level (not per-block) settings. Layouts the controls in
+// the same FieldLabel + primitive pattern the BlockSettings use so
+// the panel feels consistent with the rest of the builder.
+//
+//   Visibility    — admin-only toggle. Sales reps can't promote
+//                   to "team"; the API enforces it but we hide
+//                   the toggle to avoid surfacing a no-op control.
+//   Autoplay next — controls whether the public showcase auto-
+//                   advances to the next asset after the current
+//                   one ends. Pure UX toggle, no admin override.
+//   Pagination    — 0 = show everything in one grid (current
+//                   default). Positive N pages the asset grid.
+function SettingsPanel({ draft, setDraft, role }: {
+  draft: ShowcaseDraft;
+  setDraft: React.Dispatch<React.SetStateAction<ShowcaseDraft>>;
+  role: "admin" | "sales";
+}) {
+  return (
+    <div className="sb-bs">
+      {role === "admin" && (
+        <FieldLabel label="Visibility">
+          <Select
+            value={draft.visibility}
+            options={[
+              { value: "personal", label: "Personal — only I see it" },
+              { value: "team", label: "Whole team — everyone in the workspace" },
+            ]}
+            onChange={(v) => setDraft(d => ({ ...d, visibility: v === "team" ? "team" : "personal" }))}
+          />
+          <p className="sb-bs-hint">
+            Personal showcases stay in your “My showcases” tab. Promote to
+            the whole team and it shows up in everyone’s “Whole team” tab.
+          </p>
+        </FieldLabel>
+      )}
+      <Toggle
+        label="Autoplay next asset"
+        checked={draft.autoplayNext}
+        onChange={(v) => setDraft(d => ({ ...d, autoplayNext: v }))}
+      />
+      <p className="sb-bs-hint">
+        When a viewer finishes one asset, the next one in the showcase
+        starts automatically. Best for storytelling-style showcases.
+      </p>
+      <FieldLabel label="Pagination">
+        <Select
+          value={String(draft.paginationSize || 0)}
+          options={[
+            { value: "0", label: "Show all in one grid" },
+            { value: "6", label: "6 per page" },
+            { value: "9", label: "9 per page" },
+            { value: "12", label: "12 per page" },
+            { value: "24", label: "24 per page" },
+          ]}
+          onChange={(v) => setDraft(d => ({ ...d, paginationSize: parseInt(v, 10) || 0 }))}
+        />
+        <p className="sb-bs-hint">
+          Long showcases scroll forever. Pagination breaks the grid
+          into pages with prev/next controls below the cards.
+        </p>
+      </FieldLabel>
+    </div>
+  );
+}
+
 // ─── Coming-soon stub ────────────────────────────────────────────
 function ComingSoonStub({ title, body }: { title: string; body: string }) {
   return (
@@ -1462,6 +1563,7 @@ const css = `
 .sb-bs-switch.on{background:var(--accent);}
 .sb-bs-switch-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.2);}
 .sb-bs-switch.on .sb-bs-switch-thumb{transform:translateX(16px);}
+.sb-bs-hint{font-size:11.5px;color:var(--t3);line-height:1.5;margin:-2px 0 0;}
 .sb-coming-soon{padding:36px 24px;text-align:center;color:var(--t3);font-size:12.5px;line-height:1.55;background:var(--bg);border:1px dashed var(--border2);border-radius:10px;}
 .sb-coming-soon-h{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--t1);margin-bottom:6px;}
 .sb-coming-soon p{margin:0;}

@@ -8752,6 +8752,8 @@ export default function App(){
                   description: a.description || "",
                   videoUrl: a.videoUrl || "",
                 }))}
+                currentUserId={user?.id || ""}
+                role={org?.role === "admin" ? "admin" : "sales"}
                 onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); }}
               />
             </div>

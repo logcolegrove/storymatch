@@ -333,14 +333,17 @@ function DividerBlock({ props }: BlockProps<DividerBlockProps>) {
   return <hr className={`sr-divider sr-divider-${sp}`}/>;
 }
 
-// ── FooterBlock ───────────────────────────────────────────────────
-function FooterBlock({ props }: BlockProps<FooterBlockProps>) {
-  if (props.showBrand === false) return <div className="sr-footer-spacer"/>;
-  return (
-    <footer className="sr-footer">
-      Shared via <span className="sr-footer-brand">StoryMatch</span>
-    </footer>
-  );
+// ── FooterBlock (deprecated) ──────────────────────────────────────
+// As of B4.0 the "Shared via StoryMatch" attribution is gone. The
+// block type stays in the DSL so legacy showcases that already
+// reference it don't fail validation — they just render an empty
+// spacer in its place. New built-in templates no longer include
+// the block, and the block picker in the builder filters it out.
+// The props are kept on the type for the same reason (legacy
+// templateConfig blobs would otherwise fail the shape check).
+function FooterBlock(_props: BlockProps<FooterBlockProps>) {
+  void _props;
+  return <div className="sr-footer-spacer" aria-hidden/>;
 }
 
 // ── Block registry ────────────────────────────────────────────────
