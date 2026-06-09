@@ -1552,6 +1552,13 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
 /* StoryMatch zero-result empty state — distinct from the generic
    library "no stories match" message. Gives reps both validation
    (search ran, found nothing) and three concrete next steps. */
+/* "Also relevant" header — separates AI-picked matches from the
+   vector candidates Claude didn't surface. Sits between two grid
+   blocks so the visual hierarchy is clear without harsh dividers. */
+.sm-also-relevant-header{padding:36px 0 16px;border-top:1px solid var(--border);margin-top:8px;}
+.sm-also-relevant-header h3{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);margin:0 0 4px;letter-spacing:-.2px;}
+.sm-also-relevant-header p{font-size:13px;color:var(--t3);margin:0;line-height:1.5;max-width:640px;}
+
 /* StoryMatch streaming skeleton — sits at the end of the result
    grid while Claude is still emitting matches. The thumb + lines
    pulse together so the user reads it as "still working" rather
@@ -7217,6 +7224,12 @@ export default function App(){
   const[smMode,setSmMode]=useState<"describe"|"prospect">("describe");
   const[smLoading,setSmLoading]=useState(false);
   const[smResults,setSmResults]=useState<AIMatchResult[]|null>(null);
+  // Two-pass: vector-search candidates arrive in <1s via the
+  // streaming API's `candidates` event. We render placeholder cards
+  // for these IDs while Claude analyzes them in the background. Any
+  // candidate Claude doesn't ultimately rank shows up under the
+  // "Also relevant" header once the stream closes.
+  const[smCandidateIds,setSmCandidateIds]=useState<string[]|null>(null);
 
   useEffect(()=>{
     const h=()=>{
@@ -7883,7 +7896,7 @@ export default function App(){
 
   const runStoryMatch=useCallback(async(query: string)=>{
     if(!query.trim())return;
-    setSmLoading(true);setSmResults(null);
+    setSmLoading(true);setSmResults(null);setSmCandidateIds(null);
     try{
       const r=await fetch("/api/storymatch",{
         method:"POST",
@@ -7968,6 +7981,19 @@ export default function App(){
               setToast("No matches found");
               setTimeout(() => setToast(null), 3000);
             }
+          } else if (eventName === "candidates") {
+            // Two-pass pass 1: pre-render placeholder cards from
+            // vector-similar IDs while Claude does the AI work.
+            const p = payload as { ids?: string[] };
+            if (Array.isArray(p.ids) && p.ids.length > 0) {
+              setSmCandidateIds(p.ids);
+              // Initialize smResults to [] so the grid render path
+              // switches into "StoryMatch active" mode immediately —
+              // otherwise the empty-state branch (smResults===null)
+              // keeps showing the regular library until the first
+              // match event lands.
+              setSmResults((prev) => prev ?? []);
+            }
           } else if (eventName === "match") {
             appendMatch(payload as AIMatchResult);
           } else if (eventName === "final") {
@@ -7999,7 +8025,7 @@ export default function App(){
     setSmLoading(false);
   },[]);
 
-  const clearSm=()=>{setSmResults(null);setSmQuery("");};
+  const clearSm=()=>{setSmResults(null);setSmCandidateIds(null);setSmQuery("");};
 
   const descEx=["Quotes from clients with under 500 employees","Video testimonials mentioning ROI","Healthcare or financial services case studies","Legacy system migration stories","Strongest proof for enterprise buyers","Southeast clients on implementation speed"];
   const prosEx=["Series B fintech, 120 emp, selling to CFO on onboarding speed","Regional hospital, Southeast, CTO modernizing patient experience","Mid-market manufacturer, Ohio, VP Ops worried about QC"];
@@ -8017,19 +8043,38 @@ export default function App(){
   // Determine what to show in the grid
   let displayAssets: Asset[];
   const aiDataMap: Record<string, AIMatchResult> = {};
+  // Track which displayed assets are vector candidates that don't
+  // yet have AI data — used downstream to render placeholder cards.
+  const aiPendingIds = new Set<string>();
+  // Set of IDs that ended up in the AI-picked group. Anything in
+  // smCandidateIds NOT in this set becomes "Also relevant" at the
+  // bottom after the stream closes.
+  const aiPickedIds = new Set<string>();
   if(smResults){
     // A StoryMatch search ran — even an empty result array still
     // means "show ONLY what StoryMatch found." Falling back to the
     // full library on zero matches was a bug: it hid the no-match
     // state behind a sea of unrelated assets, and reps had no way
     // to tell their search returned nothing.
-    const matchedIds=smResults.map(r=>r.id);
-    displayAssets=matchedIds
+    smResults.forEach(r=>{aiDataMap[r.id]=r;aiPickedIds.add(r.id);});
+
+    // Two-pass display: AI-picked matches (in relevance order) go
+    // first, then any vector-candidate IDs Claude hasn't picked yet
+    // appear as placeholder cards. While streaming, placeholders
+    // fade in from the candidate set. After the stream closes, any
+    // candidate Claude didn't pick stays as "Also relevant" below.
+    const aiPickedOrder = smResults.map(r => r.id);
+    const candidateOrder = (smCandidateIds || []).filter(id => !aiPickedIds.has(id));
+    const orderedIds = [...aiPickedOrder, ...candidateOrder];
+    // Mark anything not in the AI map as pending so the renderer
+    // shows shimmer skeletons in place of reasoning / score / etc.
+    for (const id of candidateOrder) aiPendingIds.add(id);
+
+    displayAssets = orderedIds
       .map(id=>assets.find(a=>a.id===id))
       .filter((a): a is Asset => a !== undefined)
       .filter(a => a.status !== "deleted")
       .filter(a => showAllStatuses || a.status === "published");
-    smResults.forEach(r=>{aiDataMap[r.id]=r;});
   } else {
     displayAssets=assets.filter(a=>{
       if(a.status === "deleted") return false; // soft-deleted: hidden everywhere
@@ -9447,10 +9492,16 @@ export default function App(){
                   };
                   function renderAssetCard(a: Asset) {
                     const ai=aiDataMap[a.id]||null;
+                    const aiPending = !ai && aiPendingIds.has(a.id);
                     const adminMgmt = isAdmin && adminMode;
                     // StoryMatch results render through the rich card
                     // component instead of the regular TCard/QCard.
-                    if (smResults && ai) {
+                    // Two-pass: render the rich card whenever there's
+                    // AI data OR this asset is a vector candidate
+                    // waiting for AI data — the pending case passes
+                    // aiPending=true so the card shows shimmer
+                    // placeholders in the AI sections.
+                    if (smResults && (ai || aiPending)) {
                       const vid = extractVid(a.videoUrl);
                       let thumb: string | null = a.thumbnail || null;
                       if (!thumb && vid?.p === "yt") thumb = ytThumb(vid.id);
@@ -9463,28 +9514,29 @@ export default function App(){
                         <StoryMatchCard
                           key={a.id}
                           assetId={a.id}
-                          rank={ai.rank}
+                          rank={ai?.rank ?? 0}
                           thumbnail={thumb}
                           title={a.headline || "Untitled"}
                           metaParts={metaParts}
                           isVideo={isVideoAsset}
                           durationLabel={a.durationSeconds ? formatDuration(a.durationSeconds) : undefined}
                           readLabel={undefined}
-                          reasoning={ai.reasoning}
-                          factorScores={ai.factorScores}
-                          lowestFactorNote={ai.lowestFactorNote}
-                          talkingPoints={ai.talkingPoints}
-                          quotes={ai.quotes}
-                          relevanceScore={ai.relevanceScore ?? 50}
+                          reasoning={ai?.reasoning ?? ""}
+                          factorScores={ai?.factorScores}
+                          lowestFactorNote={ai?.lowestFactorNote}
+                          talkingPoints={ai?.talkingPoints}
+                          quotes={ai?.quotes}
+                          relevanceScore={ai?.relevanceScore ?? 0}
+                          aiPending={aiPending}
                           authHeaders={authHeaders}
                           onOpen={() => safeOpenAsset(a)}
                           onShare={() => copyShareLink(a)}
                           onCopySummary={() => {
                             const summary = [
                               a.headline,
-                              ai.reasoning ? ai.reasoning.replace(/\*\*/g, "") : "",
-                              ...(ai.talkingPoints || []).map(tp => `• ${tp.topic}: ${tp.text}`),
-                              ...(ai.quotes || []).map(q => `"${q}"`),
+                              ai?.reasoning ? ai.reasoning.replace(/\*\*/g, "") : "",
+                              ...(ai?.talkingPoints || []).map(tp => `• ${tp.topic}: ${tp.text}`),
+                              ...(ai?.quotes || []).map(q => `"${q}"`),
                             ].filter(Boolean).join("\n\n");
                             try { navigator.clipboard?.writeText(summary); } catch {}
                             setToast("Summary copied");
@@ -9566,6 +9618,28 @@ export default function App(){
                       </div>
                     </div>
                   ) : null;
+                  // Two-pass: once the SM stream closes, split the
+                  // SM grid into "AI-picked" (real ranked matches) +
+                  // "Also relevant" (vector candidates Claude didn't
+                  // surface). During streaming we keep them merged
+                  // so cards flow into place as Claude analyzes —
+                  // splitting only after smLoading flips false.
+                  if (isSmActive && !smLoading && aiPendingIds.size > 0 && aiPickedIds.size > 0) {
+                    const pickedAssets = displayAssets.filter(a => aiPickedIds.has(a.id));
+                    const unpickedAssets = displayAssets.filter(a => aiPendingIds.has(a.id));
+                    return (
+                      <>
+                        {renderGrid(pickedAssets, 0)}
+                        {unpickedAssets.length > 0 && (
+                          <div className="sm-also-relevant-header">
+                            <h3>Also relevant</h3>
+                            <p>Vector search surfaced these too — Claude didn't rank them in the top picks, but they may still be worth a look.</p>
+                          </div>
+                        )}
+                        {unpickedAssets.length > 0 && renderGrid(unpickedAssets, pickedAssets.length)}
+                      </>
+                    );
+                  }
                   return (
                     <>
                       {renderGrid(headAssets, 0, !tailAssets.length && !shouldShowRotator ? smSkeletonCard : undefined)}

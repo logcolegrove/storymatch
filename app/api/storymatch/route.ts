@@ -491,7 +491,7 @@ Return ONLY a JSON object in this shape:
   ]
 }
 
-Aim for 2-3 talking points per match and 1-2 verbatim quotes. If no candidates fit, return {"matches": []}.`;
+Aim for AT MOST 1 talking point per match and AT MOST 1 verbatim quote. Brevity wins — less generation time, more skimmable cards. If no candidates fit, return {"matches": []}.`;
 
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -673,6 +673,18 @@ export async function POST(req: NextRequest) {
           sse("meta", {
             candidatesFound: filteredCandidates.length,
             feedbackAffectsRanking: feedbackOn,
+          }),
+        );
+
+        // ── Two-pass pass 1 ───────────────────────────────────
+        // Emit the top vector candidates immediately so the FE can
+        // render placeholder cards before Claude finishes thinking.
+        // Capped at 6 for visual scannability — Claude still gets
+        // the full filtered pool to choose from. Order matches the
+        // vector-similarity ranking from the RPC.
+        controller.enqueue(
+          sse("candidates", {
+            ids: filteredCandidates.slice(0, 6).map((c) => c.id),
           }),
         );
 

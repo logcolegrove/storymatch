@@ -38,6 +38,13 @@ export interface StoryMatchCardProps {
   talkingPoints?: { topic: string; text: string }[];
   quotes?: string[];
   relevanceScore: number;
+  // Two-pass mode: vector-search returned this asset as a candidate
+  // but Claude hasn't yet emitted its analysis. We render the
+  // asset's basic info (thumb, title, meta) and replace the AI
+  // sections (match badge, talking points, quotes) with shimmer
+  // placeholders. Flips to false once Claude's `match` event lands
+  // for this asset and the real data fills in.
+  aiPending?: boolean;
   onOpen?: () => void;
   onShare?: () => void;
   onCopySummary?: () => void;
@@ -83,7 +90,8 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
   const {
     rank, thumbnail, title, metaParts, isVideo, durationLabel, readLabel,
     reasoning, talkingPoints = [], quotes = [],
-    relevanceScore, onOpen, onShare, onCopySummary, onCopyQuote,
+    relevanceScore, aiPending = false,
+    onOpen, onShare, onCopySummary, onCopyQuote,
   } = props;
 
   const matchTier = tierClass(relevanceScore);
@@ -136,20 +144,30 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
               one tier-coloured pill that's also the hover/click
               target for the explanation popover. Top-right is now
               reserved for hover affordances (share link), which is
-              where reps naturally expect quick actions to live. */}
-          <button
-            ref={badgeRef}
-            type="button"
-            className={`smc-match smc-match-${matchTier}`}
-            onClick={(e) => { e.stopPropagation(); setPopoverOpen(o => !o); }}
-            onMouseEnter={() => setPopoverOpen(true)}
-            onMouseLeave={() => setPopoverOpen(false)}
-            aria-label={`Rank ${rank}, match score ${relevanceScore} percent — hover for details`}
-          >
-            <span className="smc-rank-num">{rank}</span>
-            <span className="smc-match-num">{relevanceScore}%</span>
-            <span>match</span>
-          </button>
+              where reps naturally expect quick actions to live.
+              When aiPending=true we show a shimmering placeholder
+              pill instead (no rank, no score yet — Claude hasn't
+              picked / scored this asset). */}
+          {aiPending ? (
+            <div className="smc-match smc-match-pending" aria-label="Analyzing…">
+              <span className="smc-pending-pulse"/>
+              <span className="smc-pending-text">Analyzing…</span>
+            </div>
+          ) : (
+            <button
+              ref={badgeRef}
+              type="button"
+              className={`smc-match smc-match-${matchTier}`}
+              onClick={(e) => { e.stopPropagation(); setPopoverOpen(o => !o); }}
+              onMouseEnter={() => setPopoverOpen(true)}
+              onMouseLeave={() => setPopoverOpen(false)}
+              aria-label={`Rank ${rank}, match score ${relevanceScore} percent — hover for details`}
+            >
+              <span className="smc-rank-num">{rank}</span>
+              <span className="smc-match-num">{relevanceScore}%</span>
+              <span>match</span>
+            </button>
+          )}
           {/* Share link icon — fades in on card hover, top-right.
               Same affordance as the library cards. Now alone in the
               top-right corner since the match pill moved left. */}
@@ -218,45 +236,59 @@ export default function StoryMatchCard(props: StoryMatchCardProps) {
               reach for the reasoning when they want to interrogate
               the score. */}
 
-          {talkingPoints.length > 0 && (
-            <div className="smc-sec">
-              <div className="smc-sec-h">Talking points <span className="smc-sec-num">{talkingPoints.length}</span></div>
-              {talkingPoints.map((tp, i) => (
-                <div key={i} className="smc-tp">
-                  <div className="smc-tp-topic">{tp.topic}</div>
-                  <p className="smc-tp-text">{tp.text}</p>
-                  <button
-                    type="button"
-                    className="smc-tp-copy"
-                    onClick={() => onCopyQuote?.(`${tp.topic}: ${tp.text}`)}
-                    title="Copy talking point"
-                    aria-label="Copy talking point"
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                  </button>
-                </div>
-              ))}
+          {aiPending ? (
+            // Two-pass placeholder: real asset is rendered above but
+            // Claude hasn't finished analyzing yet. Three lines of
+            // shimmer stand in for the AI sections so the card has
+            // visual mass while the user waits.
+            <div className="smc-sec smc-pending-sec" aria-hidden="true">
+              <div className="smc-pending-line w-65"/>
+              <div className="smc-pending-line w-90"/>
+              <div className="smc-pending-line w-50"/>
             </div>
-          )}
+          ) : (
+            <>
+              {talkingPoints.length > 0 && (
+                <div className="smc-sec">
+                  <div className="smc-sec-h">Talking points <span className="smc-sec-num">{talkingPoints.length}</span></div>
+                  {talkingPoints.map((tp, i) => (
+                    <div key={i} className="smc-tp">
+                      <div className="smc-tp-topic">{tp.topic}</div>
+                      <p className="smc-tp-text">{tp.text}</p>
+                      <button
+                        type="button"
+                        className="smc-tp-copy"
+                        onClick={() => onCopyQuote?.(`${tp.topic}: ${tp.text}`)}
+                        title="Copy talking point"
+                        aria-label="Copy talking point"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-          {quotes.length > 0 && (
-            <div className="smc-sec">
-              <div className="smc-sec-h">Quotes <span className="smc-sec-num">{quotes.length}</span></div>
-              {quotes.map((q, i) => (
-                <div key={i} className="smc-quote">
-                  <p className="smc-quote-text">"{q}"</p>
-                  <button
-                    type="button"
-                    className="smc-quote-copy"
-                    onClick={() => onCopyQuote?.(q)}
-                    title="Copy quote"
-                    aria-label="Copy quote"
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                  </button>
+              {quotes.length > 0 && (
+                <div className="smc-sec">
+                  <div className="smc-sec-h">Quotes <span className="smc-sec-num">{quotes.length}</span></div>
+                  {quotes.map((q, i) => (
+                    <div key={i} className="smc-quote">
+                      <p className="smc-quote-text">"{q}"</p>
+                      <button
+                        type="button"
+                        className="smc-quote-copy"
+                        onClick={() => onCopyQuote?.(q)}
+                        title="Copy quote"
+                        aria-label="Copy quote"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
 
@@ -300,6 +332,25 @@ const css = `
 .smc-match-good .smc-rank-num{background:rgba(133,79,11,.18);}
 .smc-match-weak{color:var(--t2);background:#fff;}
 .smc-match-weak .smc-rank-num{background:var(--bg2);color:var(--t2);}
+
+/* Pending match pill — appears in two-pass mode while Claude is
+   still analyzing. Same dimensions as the real pill so the card
+   doesn't reflow when the data lands. */
+.smc-match-pending{background:#fff;color:var(--t3);border-color:var(--border);cursor:default;padding:6px 13px 6px 8px;}
+.smc-pending-pulse{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent);opacity:0.55;animation:smc-pulse 1.2s ease-in-out infinite;}
+.smc-pending-text{font-style:italic;font-weight:500;font-size:12.5px;}
+@keyframes smc-pulse{0%,100%{transform:scale(0.85);opacity:.4;}50%{transform:scale(1.15);opacity:.85;}}
+
+/* Pending body section — replaces talking points + quotes while
+   Claude analyzes this card. Three shimmer lines of staggered
+   width read as "content's coming" without committing to a
+   specific shape we'd need to match later. */
+.smc-pending-sec{display:flex;flex-direction:column;gap:10px;padding:6px 0 4px;}
+.smc-pending-line{height:11px;border-radius:6px;background:linear-gradient(90deg, var(--bg) 0%, var(--bg2) 50%, var(--bg) 100%);background-size:200% 100%;animation:smc-shimmer 2.4s ease-in-out infinite;}
+.smc-pending-line.w-50{width:50%;}
+.smc-pending-line.w-65{width:65%;}
+.smc-pending-line.w-90{width:90%;}
+@keyframes smc-shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
 
 /* Share link icon — fades in on card hover, top-right corner now
    that the match pill no longer lives there. */
