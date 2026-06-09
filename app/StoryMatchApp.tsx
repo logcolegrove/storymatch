@@ -7880,12 +7880,94 @@ export default function App(){
         setSmResults([]);setSmOpen(false);setSmLoading(false);
         return;
       }
-      const data=await r.json() as {matches:AIMatchResult[];candidatesFound:number;note?:string};
-      if(data.note)setToast(data.note);
-      else if(data.candidatesFound===0)setToast("No matches found");
-      setTimeout(()=>setToast(null),3000);
-      setSmResults(data.matches||[]);
+
+      // The server may respond with either a streaming SSE feed (the
+      // happy path — matches arrive one at a time as Claude generates
+      // them) or a plain JSON body (the empty-library / no-candidates
+      // short-circuit). Branch on Content-Type.
+      const ctype = r.headers.get("content-type") || "";
+      if (!ctype.includes("text/event-stream") || !r.body) {
+        // Fallback path: parse as plain JSON, same shape as before.
+        const data = await r.json() as { matches?: AIMatchResult[]; candidatesFound?: number; note?: string };
+        if (data.note) setToast(data.note);
+        else if (data.candidatesFound === 0) setToast("No matches found");
+        setTimeout(() => setToast(null), 3000);
+        setSmResults(data.matches || []);
+        setSmOpen(false);
+        setSmLoading(false);
+        return;
+      }
+
+      // ── SSE consumption ────────────────────────────────────
+      // We collect matches as `match` events arrive and append to
+      // smResults so the UI renders progressively. A trailing
+      // `final` event delivers the feedback-reranked authoritative
+      // array, which we use to replace the streamed-in order. The
+      // `done` event closes the stream cleanly.
       setSmOpen(false);
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let streamedMatches: AIMatchResult[] = [];
+      let receivedFinal = false;
+
+      // Show partial matches as they arrive. React batches the
+      // setState updates, so this is cheap even with rapid streaming.
+      const appendMatch = (m: AIMatchResult) => {
+        streamedMatches = [...streamedMatches, m];
+        setSmResults(streamedMatches);
+      };
+
+      streamLoop: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // SSE events are blank-line delimited.
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let eventName = "message";
+          let dataLine = "";
+          for (const line of raw.split("\n")) {
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
+          }
+          if (!dataLine) continue;
+          let payload: unknown;
+          try { payload = JSON.parse(dataLine); } catch { continue; }
+
+          if (eventName === "meta") {
+            const p = payload as { candidatesFound?: number };
+            if (p.candidatesFound === 0) {
+              setToast("No matches found");
+              setTimeout(() => setToast(null), 3000);
+            }
+          } else if (eventName === "match") {
+            appendMatch(payload as AIMatchResult);
+          } else if (eventName === "final") {
+            const p = payload as { matches?: AIMatchResult[] };
+            if (Array.isArray(p.matches)) {
+              streamedMatches = p.matches;
+              setSmResults(streamedMatches);
+              receivedFinal = true;
+            }
+          } else if (eventName === "error") {
+            const p = payload as { error?: string };
+            setToast(p.error || "StoryMatch failed");
+            setTimeout(() => setToast(null), 3000);
+            break streamLoop;
+          } else if (eventName === "done") {
+            break streamLoop;
+          }
+        }
+      }
+
+      // If the stream closed without a `final` event (e.g. error or
+      // an empty match set), make sure whatever we showed is at
+      // least the streamed set so the UI doesn't sit on null.
+      if (!receivedFinal) setSmResults(streamedMatches);
     }catch(e){
       console.error(e);
       setSmResults([]);setSmOpen(false);

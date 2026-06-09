@@ -3,6 +3,22 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { fetchOrgAggregates, FEEDBACK_MIN_VOTES_FOR_RANKING, type FeedbackAggregate } from "@/lib/feedback-dal";
 import { logSearch } from "@/lib/search-log-dal";
 
+// ── Model selection ─────────────────────────────────────────
+// The synthesis call dominates query latency. Set STORYMATCH_MODEL
+// in env to switch between models without a deploy:
+//   STORYMATCH_MODEL=haiku   → claude-haiku-4-5 (faster, cheaper, slightly less nuanced)
+//   STORYMATCH_MODEL=sonnet  → claude-sonnet-4-5 (default, richer reasoning)
+//   STORYMATCH_MODEL=<id>    → custom Anthropic model id, passed through verbatim
+// Anything else / unset → Sonnet, matching prior behavior so an
+// accidental missing env var doesn't silently downgrade output.
+function selectSynthesisModel(): string {
+  const raw = (process.env.STORYMATCH_MODEL || "").trim().toLowerCase();
+  if (raw === "haiku") return "claude-haiku-4-5-20251001";
+  if (raw === "sonnet" || raw === "") return "claude-sonnet-4-5";
+  // Pass arbitrary model IDs through as-is (e.g. opus, future versions).
+  return raw;
+}
+
 async function getCurrentUserOrg(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
@@ -215,38 +231,178 @@ function escapeRegex(s: string): string {
 }
 
 // ───────────────────────────────────────────────────────────
-// Synthesize ranked matches via Claude with placeholder reasoning
+// Streaming JSON match extractor.
+//
+// Claude emits a single JSON object: { "matches": [{...}, {...}] }.
+// We want to surface each completed match the moment it closes so
+// the UI can render it without waiting for the rest. This walks the
+// streaming text buffer character-by-character with string-aware
+// brace counting, yielding each completed top-level match object's
+// raw JSON string as it closes.
+//
+// String + escape handling is required because reasoning/quote text
+// inside the JSON will contain literal { and } characters that must
+// NOT count toward depth.
 // ───────────────────────────────────────────────────────────
-async function synthesizeMatches(
+class MatchExtractor {
+  private buffer = "";
+  private startedArray = false;       // saw "matches":[
+  private cursor = 0;                 // walk position inside buffer
+  private depth = 0;                  // brace/bracket depth relative to inside the matches array
+  private inString = false;
+  private escapeNext = false;
+  private currentMatchStart = -1;     // index of { that opened the current match (depth went 0 → 1)
+
+  // Append a streaming chunk and return any newly-completed match
+  // objects (raw JSON strings of each closed top-level object).
+  append(chunk: string): string[] {
+    this.buffer += chunk;
+    const completed: string[] = [];
+
+    if (!this.startedArray) {
+      // Find the opening of the matches array. Tolerate whitespace
+      // between the key and the [. Once found, jump the cursor past
+      // the [ so the depth tracker starts from "inside the array."
+      const m = /"matches"\s*:\s*\[/.exec(this.buffer);
+      if (!m) return completed;
+      this.cursor = m.index + m[0].length;
+      this.startedArray = true;
+    }
+
+    while (this.cursor < this.buffer.length) {
+      const c = this.buffer[this.cursor];
+
+      if (this.escapeNext) {
+        this.escapeNext = false;
+      } else if (this.inString) {
+        if (c === "\\") this.escapeNext = true;
+        else if (c === '"') this.inString = false;
+      } else {
+        if (c === '"') this.inString = true;
+        else if (c === "{") {
+          if (this.depth === 0) this.currentMatchStart = this.cursor;
+          this.depth++;
+        } else if (c === "}") {
+          this.depth--;
+          if (this.depth === 0 && this.currentMatchStart !== -1) {
+            completed.push(this.buffer.slice(this.currentMatchStart, this.cursor + 1));
+            this.currentMatchStart = -1;
+          }
+        } else if (c === "[") {
+          this.depth++;
+        } else if (c === "]") {
+          this.depth--;
+          // Closing the matches array — stop trying to parse further.
+          if (this.depth < 0) {
+            this.cursor = this.buffer.length;
+            break;
+          }
+        }
+      }
+      this.cursor++;
+    }
+    return completed;
+  }
+}
+
+// ───────────────────────────────────────────────────────────
+// Validate + sanitize a single match object against the candidate
+// pool. Pulled out of the previous monolithic synthesizeMatches so
+// it can be applied per-match as the stream arrives.
+// ───────────────────────────────────────────────────────────
+function validateMatch(
+  m: RawAIMatch,
+  candidates: CandidateAsset[],
+  candidateById: Map<string, CandidateAsset>,
+): AIMatch | null {
+  const candidate = candidateById.get(m.id);
+  if (!candidate) {
+    console.warn(`[storymatch] Dropped match — unknown ID: ${m.id}`);
+    return null;
+  }
+  const sanitize = (text: string) => {
+    const subbed = substitutePlaceholders(text || "", candidate);
+    return correctMisattributedNames(subbed, candidate, candidates);
+  };
+  const reasoning = sanitize(m.reasoning || "");
+  const lowestFactorNote = sanitize(m.lowestFactorNote || "");
+  const transcript = candidate.transcript || "";
+  const verifiedQuotes = (m.quotes || []).filter((q) =>
+    isQuoteInTranscript(q, transcript)
+  );
+  const droppedQuotes = (m.quotes || []).length - verifiedQuotes.length;
+  if (droppedQuotes > 0) {
+    console.warn(`[storymatch] Dropped ${droppedQuotes} unverified quote(s) from ${m.id}`);
+  }
+  const talkingPoints: TalkingPoint[] = (Array.isArray(m.talkingPoints) ? m.talkingPoints : [])
+    .filter((tp): tp is TalkingPoint => !!tp && typeof tp.topic === "string" && typeof tp.text === "string")
+    .map((tp) => ({ topic: tp.topic.trim().slice(0, 40), text: sanitize(tp.text) }))
+    .filter((tp) => tp.topic.length > 0 && tp.text.length > 0)
+    .slice(0, 4);
+  const factorScores: FactorScores = {
+    orgSimilarity: clamp100(m.factorScores?.orgSimilarity),
+    painPoints: clamp100(m.factorScores?.painPoints),
+    quoteMatch: clamp100(m.factorScores?.quoteMatch),
+  };
+  return {
+    id: m.id,
+    reasoning,
+    factorScores,
+    lowestFactorNote,
+    talkingPoints,
+    quotes: verifiedQuotes,
+    relevanceScore: weightedRelevance(factorScores),
+  };
+}
+
+// Fallback for the no-API-key case. Returns a deterministic match
+// set built straight from vector similarity, no LLM involved. Kept
+// as an async function (not a generator) since there's nothing to
+// stream — the caller wraps the result so the streaming protocol
+// stays uniform.
+function buildSimilarityFallbackMatches(candidates: CandidateAsset[]): AIMatch[] {
+  return candidates.slice(0, 5).map((c) => {
+    const sim = Math.round(c.similarity * 100);
+    const factorScores: FactorScores = {
+      orgSimilarity: sim,
+      painPoints: sim,
+      quoteMatch: sim,
+    };
+    return {
+      id: c.id,
+      reasoning: substitutePlaceholders(
+        `{SPEAKER} at {COMPANY} is a strong semantic match for the request.`,
+        c,
+      ),
+      factorScores,
+      lowestFactorNote: "",
+      talkingPoints: [] as TalkingPoint[],
+      quotes: c.pull_quote && c.transcript && isQuoteInTranscript(c.pull_quote, c.transcript)
+        ? [c.pull_quote]
+        : [],
+      relevanceScore: weightedRelevance(factorScores),
+    } satisfies AIMatch;
+  });
+}
+
+// ───────────────────────────────────────────────────────────
+// Streaming match synthesis.
+//
+// Yields each validated AIMatch as soon as Claude finishes emitting
+// it (rather than waiting for the entire JSON object). Internally
+// uses Anthropic's SSE streaming API + brace-counting JSON walker.
+//
+// If ANTHROPIC_API_KEY isn't set, falls back to a deterministic
+// similarity-only result set (yielded all at once).
+// ───────────────────────────────────────────────────────────
+async function* synthesizeMatchesStream(
   query: string,
   candidates: CandidateAsset[]
-): Promise<AIMatch[]> {
+): AsyncGenerator<AIMatch, void, unknown> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    // Fallback: top 5 by vector similarity, no AI reasoning. Build
-    // a minimal factor-score shape so the FE renders consistently.
-    return candidates.slice(0, 5).map((c) => {
-      const sim = Math.round(c.similarity * 100);
-      const factorScores: FactorScores = {
-        orgSimilarity: sim,
-        painPoints: sim,
-        quoteMatch: sim,
-      };
-      return {
-        id: c.id,
-        reasoning: substitutePlaceholders(
-          `{SPEAKER} at {COMPANY} is a strong semantic match for the request.`,
-          c,
-        ),
-        factorScores,
-        lowestFactorNote: "",
-        talkingPoints: [] as TalkingPoint[],
-        quotes: c.pull_quote && c.transcript && isQuoteInTranscript(c.pull_quote, c.transcript)
-          ? [c.pull_quote]
-          : [],
-        relevanceScore: weightedRelevance(factorScores),
-      } satisfies AIMatch;
-    });
+    for (const m of buildSimilarityFallbackMatches(candidates)) yield m;
+    return;
   }
 
   const candidateText = candidates
@@ -345,99 +501,76 @@ Aim for 2-3 talking points per match and 1-2 verbatim quotes. If no candidates f
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-5",
+      model: selectSynthesisModel(),
       max_tokens: 5000,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
+      stream: true,
     }),
   });
 
-  if (!r.ok) {
-    const errText = await r.text();
+  if (!r.ok || !r.body) {
+    const errText = r.ok ? "(no response body)" : await r.text();
     throw new Error(`Claude API failed: ${r.status} ${errText.slice(0, 300)}`);
   }
 
-  const body = (await r.json()) as { content: { type: string; text?: string }[] };
-  const txt = (body.content || [])
-    .filter((c) => c.type === "text")
-    .map((c) => c.text || "")
-    .join("");
-  const cleaned = txt.replace(/```json|```/g, "").trim();
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  const json = match ? match[0] : cleaned;
-
-  let parsed: { matches?: RawAIMatch[] };
-  try {
-    parsed = JSON.parse(json) as { matches?: RawAIMatch[] };
-  } catch {
-    console.error("Failed to parse Claude response:", txt.slice(0, 500));
-    return [];
-  }
-
-  const rawMatches = Array.isArray(parsed.matches) ? parsed.matches : [];
+  // Walk Anthropic's SSE stream. Each event is delimited by a blank
+  // line; the lines we care about are `data: {...}` payloads inside
+  // content_block_delta events. Everything else (message_start,
+  // ping, message_stop) is ignored — we only need the text deltas.
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  const extractor = new MatchExtractor();
   const candidateById = new Map(candidates.map((c) => [c.id, c]));
-  const validated: AIMatch[] = [];
+  const seenIds = new Set<string>();
+  let sseBuffer = "";
 
-  for (const m of rawMatches) {
-    const candidate = candidateById.get(m.id);
-    if (!candidate) {
-      console.warn(`[storymatch] Dropped match — unknown ID: ${m.id}`);
-      continue;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    sseBuffer += decoder.decode(value, { stream: true });
+
+    // SSE events are separated by blank lines. Pull complete events
+    // off the front of the buffer; whatever remains is the partial
+    // tail of the next event.
+    let eventDelimIdx: number;
+    while ((eventDelimIdx = sseBuffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = sseBuffer.slice(0, eventDelimIdx);
+      sseBuffer = sseBuffer.slice(eventDelimIdx + 2);
+      for (const line of rawEvent.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+        let evt: { type?: string; delta?: { type?: string; text?: string } };
+        try {
+          evt = JSON.parse(payload);
+        } catch {
+          continue;
+        }
+        if (evt.type !== "content_block_delta") continue;
+        if (evt.delta?.type !== "text_delta") continue;
+        const chunk = evt.delta.text || "";
+        if (!chunk) continue;
+
+        // Feed the new text into the brace-walker. Any newly-closed
+        // top-level match objects come back as raw JSON strings; we
+        // parse, validate, and yield each.
+        for (const matchJson of extractor.append(chunk)) {
+          let raw: RawAIMatch;
+          try {
+            raw = JSON.parse(matchJson) as RawAIMatch;
+          } catch {
+            console.warn("[storymatch] Skipping unparseable streamed match");
+            continue;
+          }
+          if (!raw.id || seenIds.has(raw.id)) continue;
+          seenIds.add(raw.id);
+          const validated = validateMatch(raw, candidates, candidateById);
+          if (validated) yield validated;
+        }
+      }
     }
-
-    // Substitute placeholders + correct any cross-candidate name leakage.
-    const sanitize = (text: string) => {
-      const subbed = substitutePlaceholders(text || "", candidate);
-      return correctMisattributedNames(subbed, candidate, candidates);
-    };
-
-    const reasoning = sanitize(m.reasoning || "");
-    const lowestFactorNote = sanitize(m.lowestFactorNote || "");
-
-    // Validate verbatim quotes against THIS candidate's transcript only.
-    const transcript = candidate.transcript || "";
-    const verifiedQuotes = (m.quotes || []).filter((q) =>
-      isQuoteInTranscript(q, transcript)
-    );
-    const droppedQuotes = (m.quotes || []).length - verifiedQuotes.length;
-    if (droppedQuotes > 0) {
-      console.warn(
-        `[storymatch] Dropped ${droppedQuotes} unverified quote(s) from ${m.id}`
-      );
-    }
-
-    // Talking points are paraphrased prose — no transcript validation,
-    // but we DO run them through placeholder substitution + name
-    // correction so any speaker/company refs come from the DB.
-    const talkingPoints: TalkingPoint[] = (Array.isArray(m.talkingPoints) ? m.talkingPoints : [])
-      .filter((tp): tp is TalkingPoint => !!tp && typeof tp.topic === "string" && typeof tp.text === "string")
-      .map(tp => ({
-        topic: tp.topic.trim().slice(0, 40),  // hard cap on topic length
-        text: sanitize(tp.text),
-      }))
-      .filter(tp => tp.topic.length > 0 && tp.text.length > 0)
-      .slice(0, 4);  // cap at 4 to keep cards scannable
-
-    // Clamp factor scores to 0-100, fall back to neutral 50 on bad data.
-    const factorScores: FactorScores = {
-      orgSimilarity: clamp100(m.factorScores?.orgSimilarity),
-      painPoints: clamp100(m.factorScores?.painPoints),
-      quoteMatch: clamp100(m.factorScores?.quoteMatch),
-    };
-    const relevanceScore = weightedRelevance(factorScores);
-
-    validated.push({
-      id: m.id,
-      reasoning,
-      factorScores,
-      lowestFactorNote,
-      talkingPoints,
-      quotes: verifiedQuotes,
-      relevanceScore,
-    });
   }
-
-  return validated;
 }
 
 // ───────────────────────────────────────────────────────────
@@ -474,6 +607,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: searchError.message }, { status: 500 });
   }
   if (!candidates || candidates.length === 0) {
+    // No-asset / no-embedding case stays a plain JSON response —
+    // there's nothing to stream and the FE handles `note` separately.
     return NextResponse.json({
       matches: [],
       candidatesFound: 0,
@@ -504,69 +639,112 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  let matches: AIMatch[];
-  try {
-    matches = await synthesizeMatches(query, filteredCandidates);
-  } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
-  }
-
-  // ── Feedback ranking pass ──────────────────────────────────
-  // Read the org's flag and, if on, fold sales-rep feedback into
-  // the final relevance score. Run AFTER Claude's synthesis so we
-  // don't bias the LLM's reasoning with raw counts (the LLM is too
-  // easily steered by numbers). Deterministic math here keeps the
-  // effect explainable + capped.
+  // Read the org's feedback flag up front so we can apply the
+  // ranking adjustment after the stream completes.
   const { data: orgFlag } = await supabaseAdmin
     .from("organizations")
     .select("feedback_affects_ranking")
     .eq("id", ctx.orgId)
     .maybeSingle();
-  let feedbackAdjusted: { match: AIMatch; adjustedScore: number; agg?: FeedbackAggregate }[] = matches.map(m => ({ match: m, adjustedScore: m.relevanceScore }));
-  if (orgFlag?.feedback_affects_ranking) {
-    const aggregates = await fetchOrgAggregates(ctx.orgId);
-    feedbackAdjusted = matches.map(m => {
-      const agg = aggregates.get(m.id);
-      const boost = feedbackBoost(agg);
-      return {
-        match: m,
-        adjustedScore: Math.max(0, Math.min(100, m.relevanceScore + boost)),
-        agg,
-      };
-    });
-    // Re-sort by adjusted score so the rank order reflects feedback.
-    feedbackAdjusted.sort((a, b) => b.adjustedScore - a.adjustedScore);
-  }
+  const feedbackOn = !!orgFlag?.feedback_affects_ranking;
+  // Pre-fetch feedback aggregates in parallel with the stream
+  // setup — saves a roundtrip when feedback ranking is enabled.
+  const aggregatesPromise: Promise<Map<string, FeedbackAggregate> | null> = feedbackOn
+    ? fetchOrgAggregates(ctx.orgId)
+    : Promise.resolve(null);
 
-  const finalMatches = feedbackAdjusted.map((entry, i) => ({
-    ...entry.match,
-    relevanceScore: entry.adjustedScore,
-    rank: i + 1,
-    // Surface aggregate counts so the FE can show them in the
-    // hover popover without an extra round trip. Always present
-    // when the org's flag is on; undefined when feedback isn't
-    // affecting ranking (FE hides the indicator entirely).
-    feedback: orgFlag?.feedback_affects_ranking && entry.agg
-      ? { up: entry.agg.up, down: entry.agg.down, total: entry.agg.total }
-      : undefined,
-  }));
+  // ── Streaming response ──────────────────────────────────────
+  // The FE consumes a Server-Sent-Events stream. Each event has a
+  // 1-line `event:` header plus a `data:` JSON payload. Events:
+  //   meta   — candidates count + feedbackAffectsRanking flag (sent first)
+  //   match  — one validated AIMatch (sent as each completes)
+  //   final  — feedback-adjusted, reranked array + feedback aggregates
+  //            attached (sent after all matches arrive)
+  //   error  — fatal error string (closes stream)
+  //   done   — empty terminator
+  const encoder = new TextEncoder();
+  const sse = (event: string, data: unknown) =>
+    encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  // Log every StoryMatch search for the admin Insights view. Fire
-  // and forget — never block the response. result_count is the
-  // length of the final match set the user actually sees; zero is
-  // the gap signal admins care about most.
-  void logSearch({
-    orgId: ctx.orgId,
-    userId: ctx.userId,
-    query,
-    source: "storymatch",
-    resultCount: finalMatches.length,
-    topResultIds: finalMatches.slice(0, 10).map(m => m.id),
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        controller.enqueue(
+          sse("meta", {
+            candidatesFound: filteredCandidates.length,
+            feedbackAffectsRanking: feedbackOn,
+          }),
+        );
+
+        // Stream + collect. We hold the matches in memory so the
+        // final feedback pass + log can run after Claude closes.
+        const collected: AIMatch[] = [];
+        for await (const m of synthesizeMatchesStream(query, filteredCandidates)) {
+          collected.push(m);
+          controller.enqueue(sse("match", m));
+        }
+
+        // Feedback ranking pass — only when the org has it enabled.
+        const aggregates = await aggregatesPromise;
+        let ranked: { match: AIMatch; adjustedScore: number; agg?: FeedbackAggregate }[]
+          = collected.map((m) => ({ match: m, adjustedScore: m.relevanceScore }));
+        if (feedbackOn && aggregates) {
+          ranked = collected.map((m) => {
+            const agg = aggregates.get(m.id);
+            const boost = feedbackBoost(agg);
+            return {
+              match: m,
+              adjustedScore: Math.max(0, Math.min(100, m.relevanceScore + boost)),
+              agg,
+            };
+          });
+          ranked.sort((a, b) => b.adjustedScore - a.adjustedScore);
+        }
+
+        const finalMatches = ranked.map((entry, i) => ({
+          ...entry.match,
+          relevanceScore: entry.adjustedScore,
+          rank: i + 1,
+          feedback: feedbackOn && entry.agg
+            ? { up: entry.agg.up, down: entry.agg.down, total: entry.agg.total }
+            : undefined,
+        }));
+
+        controller.enqueue(sse("final", {
+          matches: finalMatches,
+          candidatesFound: filteredCandidates.length,
+          feedbackAffectsRanking: feedbackOn,
+        }));
+
+        // Search log. Fire-and-forget: don't block the close on it.
+        void logSearch({
+          orgId: ctx.orgId,
+          userId: ctx.userId,
+          query,
+          source: "storymatch",
+          resultCount: finalMatches.length,
+          topResultIds: finalMatches.slice(0, 10).map((m) => m.id),
+        });
+
+        controller.enqueue(sse("done", {}));
+        controller.close();
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "StoryMatch failed";
+        try { controller.enqueue(sse("error", { error: message })); } catch { /* ignore */ }
+        controller.close();
+      }
+    },
   });
 
-  return NextResponse.json({
-    matches: finalMatches,
-    candidatesFound: filteredCandidates.length,
-    feedbackAffectsRanking: !!orgFlag?.feedback_affects_ranking,
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      // Disable buffering on proxies so chunks arrive incrementally
+      // (Vercel respects this; nginx-style proxies need the explicit
+      // header to flush per-chunk).
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+      Connection: "keep-alive",
+    },
   });
 }
