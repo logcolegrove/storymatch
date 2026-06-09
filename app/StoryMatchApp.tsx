@@ -1552,6 +1552,24 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
 /* StoryMatch zero-result empty state — distinct from the generic
    library "no stories match" message. Gives reps both validation
    (search ran, found nothing) and three concrete next steps. */
+/* StoryMatch streaming skeleton — sits at the end of the result
+   grid while Claude is still emitting matches. The thumb + lines
+   pulse together so the user reads it as "still working" rather
+   than "card failed to render". */
+.sm-skeleton-card{display:flex;flex-direction:column;background:#fff;border:1px solid var(--border);border-radius:14px;overflow:hidden;animation:sm-skel-pulse 1.6s ease-in-out infinite;}
+.sm-skeleton-thumb{aspect-ratio:16/9;background:linear-gradient(90deg, var(--bg) 0%, var(--bg2) 50%, var(--bg) 100%);background-size:200% 100%;animation:sm-skel-shimmer 2.4s ease-in-out infinite;}
+.sm-skeleton-body{padding:18px 20px 22px;display:flex;flex-direction:column;gap:10px;}
+.sm-skeleton-line{height:14px;border-radius:7px;background:linear-gradient(90deg, var(--bg) 0%, var(--bg2) 50%, var(--bg) 100%);background-size:200% 100%;animation:sm-skel-shimmer 2.4s ease-in-out infinite;}
+.sm-skeleton-line.w-70{width:70%;}
+.sm-skeleton-line.w-45{width:45%;}
+.sm-skeleton-status{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12.5px;color:var(--t3);font-style:italic;}
+.sm-skeleton-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:0.4;animation:sm-skel-dot 1.2s ease-in-out infinite;}
+.sm-skeleton-dot:nth-child(2){animation-delay:0.18s;}
+.sm-skeleton-dot:nth-child(3){animation-delay:0.36s;}
+@keyframes sm-skel-pulse{0%,100%{opacity:1;}50%{opacity:.72;}}
+@keyframes sm-skel-shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+@keyframes sm-skel-dot{0%,100%{transform:scale(0.85);opacity:.35;}50%{transform:scale(1.15);opacity:.95;}}
+
 .sm-empty{max-width:560px;margin:48px auto 60px;padding:36px 32px;text-align:left;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.04);}
 .sm-empty-icon{width:64px;height:64px;border-radius:50%;background:var(--accentLL);color:var(--accent);display:grid;place-items:center;margin:0 auto 18px;}
 .sm-empty-h{font-family:var(--serif);font-size:24px;font-weight:600;color:var(--t1);text-align:center;margin:0 0 8px;letter-spacing:-.3px;}
@@ -7911,10 +7929,16 @@ export default function App(){
       let streamedMatches: AIMatchResult[] = [];
       let receivedFinal = false;
 
-      // Show partial matches as they arrive. React batches the
-      // setState updates, so this is cheap even with rapid streaming.
+      // Show partial matches as they arrive. The order we APPEND in
+      // is Claude's emission order, but the order we DISPLAY must be
+      // highest relevanceScore first — otherwise a strong match that
+      // comes in second visibly pushes itself above the weaker first
+      // card, which reads like a glitch. Re-sort on every append.
+      // The final reranked-by-feedback array replaces this on close.
       const appendMatch = (m: AIMatchResult) => {
-        streamedMatches = [...streamedMatches, m];
+        streamedMatches = [...streamedMatches, m].sort(
+          (a, b) => (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0),
+        );
         setSmResults(streamedMatches);
       };
 
@@ -9364,7 +9388,12 @@ export default function App(){
                   // order — admin reordering doesn't make sense), and
                   // render StoryMatchCard instead of TCard/QCard.
                   const isSmActive = !!smResults;
-                  const renderGrid = (items: Asset[], offset: number) => (
+                  // Whether the StoryMatch stream is still arriving.
+                  // Drives the trailing "looking for more matches"
+                  // skeleton card so newly-streaming cards don't feel
+                  // like they're popping in out of nowhere.
+                  const isSmStreaming = isSmActive && smLoading;
+                  const renderGrid = (items: Asset[], offset: number, trailing?: React.ReactNode) => (
                     <div
                       className="grid"
                       style={isSmActive ? { gridTemplateColumns: "repeat(2, minmax(0, 1fr))" } : undefined}
@@ -9404,6 +9433,7 @@ export default function App(){
                           </div>
                         );
                       })}
+                      {trailing}
                     </div>
                   );
                   // Inline helper so we don't repeat the giant per-card
@@ -9516,9 +9546,29 @@ export default function App(){
                       ? <QCard key={a.id} asset={a} onClick={safeOpenAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>
                       : <TCard key={a.id} asset={a} onClick={safeOpenAsset} aiData={ai} onCopyQuote={copyQuote} onRestore={restore} isSelected={cardSelected} onToggleSelect={cardToggle} menuItems={cardMenu} onCopyShareLink={share} cleared={cardCleared}/>;
                   }
+
+                  // Streaming placeholder. Sits at the end of the
+                  // grid while Claude is still emitting matches so
+                  // newly-arriving cards feel like the search is
+                  // actively looking — not appearing out of nowhere.
+                  const smSkeletonCard = isSmStreaming ? (
+                    <div className="sm-skeleton-card" aria-hidden="true">
+                      <div className="sm-skeleton-thumb"/>
+                      <div className="sm-skeleton-body">
+                        <div className="sm-skeleton-line w-70"/>
+                        <div className="sm-skeleton-line w-45"/>
+                        <div className="sm-skeleton-status">
+                          <span className="sm-skeleton-dot"/>
+                          <span className="sm-skeleton-dot"/>
+                          <span className="sm-skeleton-dot"/>
+                          Looking for more matches…
+                        </div>
+                      </div>
+                    </div>
+                  ) : null;
                   return (
                     <>
-                      {renderGrid(headAssets, 0)}
+                      {renderGrid(headAssets, 0, !tailAssets.length && !shouldShowRotator ? smSkeletonCard : undefined)}
                       {shouldShowRotator && (
                         <div
                           ref={rotatorElRef}
@@ -9536,7 +9586,7 @@ export default function App(){
                           />
                         </div>
                       )}
-                      {tailAssets.length > 0 && renderGrid(tailAssets, headAssets.length)}
+                      {tailAssets.length > 0 && renderGrid(tailAssets, headAssets.length, smSkeletonCard)}
                     </>
                   );
                 })()
