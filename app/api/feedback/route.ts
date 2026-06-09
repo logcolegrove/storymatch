@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
       down: number;
       total: number;
       netScore: number;
-      comments: Array<{ rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string; userId: string | null; userEmail: string | null }>;
+      comments: Array<{ rating: FeedbackRating | null; comment: string | null; createdAt: string; updatedAt: string; userId: string | null; userEmail: string | null }>;
     }> = [];
     for (const [, b] of bundle) {
       out.push({
@@ -114,8 +114,8 @@ export async function GET(req: NextRequest) {
     up: number;
     down: number;
     total: number;
-    myVote: { rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string } | null;
-    comments?: Array<{ rating: FeedbackRating; comment: string | null; createdAt: string; updatedAt: string; userId: string | null; userEmail: string | null }>;
+    myVote: { rating: FeedbackRating | null; comment: string | null; createdAt: string; updatedAt: string } | null;
+    comments?: Array<{ rating: FeedbackRating | null; comment: string | null; createdAt: string; updatedAt: string; userId: string | null; userEmail: string | null }>;
   } = {
     assetId,
     up: agg.up,
@@ -156,9 +156,15 @@ export async function POST(req: NextRequest) {
     comment?: unknown;
   };
   const assetId = typeof body.asset_id === "string" ? body.asset_id : "";
-  const rating = body.rating === "up" || body.rating === "down" ? body.rating : null;
+  // Null when the user submitted comment-only (no thumb picked). The
+  // DAL refuses fully-empty rows (no rating + no comment), so we
+  // don't need to gate here too — let it produce a clean error.
+  const rating: FeedbackRating | null = body.rating === "up" || body.rating === "down" ? body.rating : null;
+  const comment = typeof body.comment === "string" ? body.comment : null;
   if (!assetId) return NextResponse.json({ error: "asset_id required" }, { status: 400 });
-  if (!rating) return NextResponse.json({ error: "rating must be 'up' or 'down'" }, { status: 400 });
+  if (!rating && !(comment && comment.trim())) {
+    return NextResponse.json({ error: "Provide a rating or a comment" }, { status: 400 });
+  }
 
   // Verify the asset belongs to the caller's org — prevents a malicious
   // client from voting on another tenant's asset.
@@ -171,7 +177,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Asset not found" }, { status: 404 });
   }
 
-  const comment = typeof body.comment === "string" ? body.comment : null;
   const result = await upsertFeedback({
     orgId: ctx.orgId,
     assetId,

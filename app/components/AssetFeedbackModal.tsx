@@ -21,7 +21,9 @@ import { createPortal } from "react-dom";
 type Rating = "up" | "down";
 
 interface Comment {
-  rating: Rating;
+  // Null = comment-only submission (no thumb picked). Surfaces as
+  // a "Comment" tag in the admin view instead of a thumb pill.
+  rating: Rating | null;
   comment: string | null;
   createdAt: string;
   updatedAt: string;
@@ -103,7 +105,13 @@ export default function AssetFeedbackModal({ open, assetId, assetMeta, authHeade
   if (!open || typeof document === "undefined") return null;
 
   const comments = data?.comments || [];
-  const silent = data ? Math.max(0, (data.total ?? 0) - comments.length) : 0;
+  // "Silent" = thumbs picked WITHOUT a comment. Math needs to subtract
+  // thumbs-with-comment specifically, not all commented rows, because
+  // the comments list also includes comment-only submissions (no
+  // thumb). Otherwise comment-only rows would understate the silent
+  // count of true thumbs-no-note submissions.
+  const thumbsWithComment = comments.filter(c => c.rating != null && c.comment).length;
+  const silent = data ? Math.max(0, (data.total ?? 0) - thumbsWithComment) : 0;
 
   return createPortal(
     <div className="afm-scrim" onClick={onClose}>
@@ -162,9 +170,15 @@ export default function AssetFeedbackModal({ open, assetId, assetMeta, authHeade
                 </div>
               )}
               {comments.map((c, i) => (
-                <div key={`${c.userId || "anon"}-${c.createdAt}-${i}`} className={`afm-comment ${c.rating}`}>
+                <div key={`${c.userId || "anon"}-${c.createdAt}-${i}`} className={`afm-comment ${c.rating || "neutral"}`}>
                   <div className="afm-comment-head">
-                    <span className={`afm-pill ${c.rating}`}>{c.rating === "up" ? "👍" : "👎"}</span>
+                    {/* Rating pill — thumb when a thumb was picked,
+                        plain "Comment" tag when the row is comment-
+                        only. The afm-pill background colour is
+                        already neutralised by the .neutral class. */}
+                    <span className={`afm-pill ${c.rating || "neutral"}`}>
+                      {c.rating === "up" ? "👍" : c.rating === "down" ? "👎" : "Comment"}
+                    </span>
                     {c.userEmail && <span className="afm-user" title={c.userEmail}>{c.userEmail}</span>}
                     <span className="afm-when">{timeAgo(c.createdAt)}</span>
                   </div>
@@ -210,10 +224,12 @@ const css = `
 .afm-comment{padding:12px 14px;border-radius:9px;background:var(--bg);}
 .afm-comment.up{background:#f0fdf4;}
 .afm-comment.down{background:#fef2f2;}
+.afm-comment.neutral{background:var(--bg2);}
 .afm-comment-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .afm-pill{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;font-size:13px;}
 .afm-pill.up{background:#dcfce7;}
 .afm-pill.down{background:#fee2e2;}
+.afm-pill.neutral{width:auto;height:auto;padding:2px 8px;border-radius:99px;background:var(--bg3);color:var(--t2);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;}
 .afm-user{font-size:11.5px;font-weight:600;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;}
 .afm-when{font-size:11px;color:var(--t4);margin-left:auto;}
 .afm-text{font-size:13px;color:var(--t1);line-height:1.55;margin-top:6px;}

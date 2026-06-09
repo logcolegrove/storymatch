@@ -7,15 +7,17 @@
 // Flow:
 //   1. Open modal — fetch the caller's existing vote (if any) so the
 //      controls pre-fill. Show a loading shimmer briefly.
-//   2. User picks thumbs-up / thumbs-down, optionally writes a comment.
+//   2. User picks thumbs-up / thumbs-down OR writes a comment (either
+//      alone is enough — comment-only is supported).
 //   3. Submit POSTs to /api/feedback. On success the modal flips to a
 //      thank-you confirmation for ~1.5s, then auto-closes.
 //   4. If the user already has a vote, Remove rating DELETEs and closes
 //      with a "Rating removed" toast (no thank-you screen).
 //
-// Anonymity is preserved by the server-side response shape — the API
-// never returns user_id alongside others' votes. The modal only ever
-// shows the caller's own vote.
+// Attribution: admins see who left each comment + rating (email). This
+// is intentional — admins need to follow up with the rep who flagged
+// the issue. The modal communicates this by tagging the surface as
+// "internal feedback" up front; no anonymity promise is made.
 
 import { useEffect, useState } from "react";
 
@@ -93,8 +95,14 @@ export default function RateAssetModal({ asset, authHeaders, onClose, onSaved }:
 
   if (!asset) return null;
 
+  // Comment-only submissions are allowed — either a rating or a
+  // non-empty comment is sufficient. Both blank still bails (the
+  // submit button is also disabled in that state).
+  const trimmedComment = comment.trim();
+  const canSubmit = !!rating || trimmedComment.length > 0;
+
   const submit = async () => {
-    if (!rating) return;
+    if (!canSubmit) return;
     setPhase("saving");
     try {
       const headers: HeadersInit = { "Content-Type": "application/json", ...(await authHeaders()) };
@@ -103,8 +111,9 @@ export default function RateAssetModal({ asset, authHeaders, onClose, onSaved }:
         headers,
         body: JSON.stringify({
           asset_id: asset.id,
-          rating,
-          comment: comment.trim() ? comment.trim().slice(0, 500) : null,
+          // null when no thumb is picked — server accepts comment-only.
+          rating: rating ?? null,
+          comment: trimmedComment ? trimmedComment.slice(0, 500) : null,
         }),
       });
       if (!r.ok) {
@@ -165,7 +174,21 @@ export default function RateAssetModal({ asset, authHeaders, onClose, onSaved }:
                   : <div className="ram-thumb-placeholder">{asset.company?.[0] || "?"}</div>}
               </div>
               <div className="ram-head-text">
-                <div className="ram-co">{asset.company || "—"}</div>
+                <div className="ram-co-row">
+                  <span className="ram-co">{asset.company || "—"}</span>
+                  {/* Internal-only badge — sits next to the company
+                      tag so it's the first thing a rep sees when the
+                      modal opens. Makes it obvious this feedback
+                      stays on the team and never reaches the
+                      customer or asset subject. */}
+                  <span className="ram-internal-badge" title="Internal feedback — your team only">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="3" y="11" width="18" height="11" rx="2"/>
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                    Internal
+                  </span>
+                </div>
                 <div className="ram-title">{asset.headline || "(no headline)"}</div>
                 <div className="ram-meta">{asset.vertical || "—"} · {asset.clientName || "anonymous"}</div>
               </div>
@@ -173,7 +196,7 @@ export default function RateAssetModal({ asset, authHeaders, onClose, onSaved }:
             </div>
 
             <div className="ram-body">
-              <div className="ram-section-label">{hasExistingVote ? "Update your rating" : "Rate this asset"}</div>
+              <div className="ram-section-label">{hasExistingVote ? "Update your rating" : "Rate this asset"} <span className="ram-optional">(optional)</span></div>
               <div className="ram-thumbs">
                 <button
                   type="button"
@@ -214,10 +237,6 @@ export default function RateAssetModal({ asset, authHeaders, onClose, onSaved }:
               />
               <div className="ram-char-count">{comment.length} / 500</div>
 
-              <div className="ram-note">
-                Admins see your comment and the count, but never your name.
-              </div>
-
               {phase === "error" && errorMsg && (
                 <div className="ram-error">{errorMsg}</div>
               )}
@@ -238,7 +257,7 @@ export default function RateAssetModal({ asset, authHeaders, onClose, onSaved }:
                 type="button"
                 className="ram-submit"
                 onClick={submit}
-                disabled={!rating || phase === "saving" || phase === "loading"}
+                disabled={!canSubmit || phase === "saving" || phase === "loading"}
               >
                 {phase === "saving" ? "Saving…" : hasExistingVote ? "Update" : "Submit"}
               </button>
@@ -261,7 +280,9 @@ const css = `
 .ram-thumb img{width:100%;height:100%;object-fit:cover;}
 .ram-thumb-placeholder{width:100%;height:100%;display:grid;place-items:center;font-family:var(--serif);font-size:22px;color:var(--t3);background:var(--bg2);}
 .ram-head-text{flex:1;min-width:0;}
+.ram-co-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .ram-co{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--t3);font-weight:700;}
+.ram-internal-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:99px;background:color-mix(in srgb, var(--accent) 12%, transparent);color:var(--accent);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;}
 .ram-title{font-size:14.5px;font-weight:600;color:var(--t1);margin-top:2px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .ram-meta{font-size:11.5px;color:var(--t3);margin-top:4px;}
 .ram-close{background:none;border:none;color:var(--t3);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex-shrink:0;}
@@ -281,7 +302,6 @@ const css = `
 .ram-comment:focus{outline:none;border-color:var(--accent);background:#fff;}
 .ram-comment:disabled{opacity:.6;}
 .ram-char-count{font-size:10.5px;color:var(--t4);text-align:right;margin-top:4px;}
-.ram-note{font-size:11.5px;color:var(--t3);margin-top:12px;padding:8px 10px;background:var(--bg2);border-radius:6px;}
 .ram-error{font-size:12.5px;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;padding:8px 10px;border-radius:7px;margin-top:12px;}
 
 .ram-foot{display:flex;align-items:center;gap:8px;padding:14px 20px;border-top:1px solid var(--border);background:var(--bg);}

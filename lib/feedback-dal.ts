@@ -26,7 +26,9 @@ interface FeedbackRow {
   org_id: string;
   asset_id: string;
   user_id: string;
-  rating: FeedbackRating;
+  // Null when the row is a comment-only submission. Aggregates
+  // ignore null-rated rows when computing up/down/net.
+  rating: FeedbackRating | null;
   comment: string | null;
   created_at: string;
   updated_at: string;
@@ -40,7 +42,8 @@ interface FeedbackRow {
 // effectively now "AdminFeedbackComment". TODO: rename if/when we
 // next sweep.
 export interface AnonymizedFeedback {
-  rating: FeedbackRating;
+  // Null for comment-only submissions (no thumb picked).
+  rating: FeedbackRating | null;
   comment: string | null;
   createdAt: string;
   updatedAt: string;
@@ -60,8 +63,13 @@ export interface FeedbackAggregate {
 
 // The current user's own vote on a given asset. Returned in full so
 // the FE can show the active state of their thumbs control.
+//
+// rating is nullable: a user can submit a comment without picking
+// a thumb. Comment-only rows still occupy the same (asset, user)
+// row but contribute nothing to up/down/net aggregates — they only
+// surface in the admin Feedback view as "comment without rating".
 export interface MyFeedback {
-  rating: FeedbackRating;
+  rating: FeedbackRating | null;
   comment: string | null;
   createdAt: string;
   updatedAt: string;
@@ -93,11 +101,18 @@ export async function upsertFeedback(params: {
   orgId: string;
   assetId: string;
   userId: string;
-  rating: FeedbackRating;
+  // Nullable: a user can submit a comment without picking a thumb.
+  // The caller (API route) is responsible for refusing rows with
+  // BOTH rating null AND comment empty — a fully empty row is a
+  // bug, not a feature.
+  rating: FeedbackRating | null;
   comment: string | null | undefined;
 }): Promise<{ ok: true; feedback: MyFeedback } | { ok: false; error: string }> {
   const id = buildFeedbackId(params.assetId, params.userId);
   const comment = normalizeComment(params.comment);
+  if (params.rating == null && !comment) {
+    return { ok: false, error: "Provide a rating or a comment" };
+  }
   const { data, error } = await supabaseAdmin
     .from("asset_feedback")
     .upsert(
@@ -120,7 +135,7 @@ export async function upsertFeedback(params: {
   return {
     ok: true,
     feedback: {
-      rating: data.rating as FeedbackRating,
+      rating: data.rating as FeedbackRating | null,
       comment: data.comment as string | null,
       createdAt: data.created_at as string,
       updatedAt: data.updated_at as string,
@@ -165,7 +180,7 @@ export async function findUserVote(params: {
     .maybeSingle();
   if (error || !data) return null;
   return {
-    rating: data.rating as FeedbackRating,
+    rating: data.rating as FeedbackRating | null,
     comment: data.comment as string | null,
     createdAt: data.created_at as string,
     updatedAt: data.updated_at as string,
@@ -212,7 +227,7 @@ export async function fetchAssetFeedback(params: {
   }
   const emailMap = await lookupEmailMap(data.map(r => r.user_id as string));
   return data.map(r => ({
-    rating: r.rating as FeedbackRating,
+    rating: r.rating as FeedbackRating | null,
     comment: r.comment as string | null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
@@ -236,8 +251,11 @@ export async function fetchOrgAggregates(orgId: string): Promise<Map<string, Fee
   }
   for (const row of data as Pick<FeedbackRow, "asset_id" | "rating">[]) {
     const cur = map.get(row.asset_id) || { assetId: row.asset_id, up: 0, down: 0, total: 0, netScore: 0 };
+    // Null-rated rows are comment-only — they don't contribute to
+    // the up/down/total/net counts. Skip silently here; the comment
+    // still surfaces in the admin Feedback view via fetchAssetFeedback.
     if (row.rating === "up") cur.up += 1;
-    else cur.down += 1;
+    else if (row.rating === "down") cur.down += 1;
     cur.total = cur.up + cur.down;
     cur.netScore = cur.up - cur.down;
     map.set(row.asset_id, cur);
@@ -284,9 +302,11 @@ export async function fetchOrgFeedbackBundle(
       };
       out.set(aid, bundle);
     }
-    const rating = r.rating as FeedbackRating;
+    const rating = r.rating as FeedbackRating | null;
+    // Null-rated (comment-only) rows skip the score buckets but
+    // still flow into the comments list below so admins see them.
     if (rating === "up") bundle.aggregate.up += 1;
-    else bundle.aggregate.down += 1;
+    else if (rating === "down") bundle.aggregate.down += 1;
     bundle.aggregate.total = bundle.aggregate.up + bundle.aggregate.down;
     bundle.aggregate.netScore = bundle.aggregate.up - bundle.aggregate.down;
     if ((r.comment as string | null) && bundle.comments.length < maxComments) {
