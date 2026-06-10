@@ -218,7 +218,7 @@ export default function ColumnControlPanel({ anchor, fieldDefs, columnOrder, hid
       {onOpenFieldsPanel && (
         <div className="ccp-foot">
           <button type="button" className="ccp-foot-link" onClick={() => { onOpenFieldsPanel(); onClose(); }}>
-            Manage fields →
+            Manage all fields…
           </button>
         </div>
       )}

@@ -9,6 +9,7 @@ import FeedbackView from "./components/FeedbackView";
 import RateAssetModal from "./components/RateAssetModal";
 import AssetFeedbackModal from "./components/AssetFeedbackModal";
 import FiltersModal from "./components/FiltersModal";
+import EditFieldModal from "./components/EditFieldModal";
 import InsightsView from "./components/InsightsView";
 import ShowcasesView from "./components/ShowcasesView";
 import ShowcaseEditorModal from "./components/ShowcaseEditorModal";
@@ -1033,6 +1034,8 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
 .lv-h-resize:hover::after,.lv-h-resize.dragging::after{background:var(--accent);}
 .lv-h-menu{position:absolute;top:calc(100% - 6px);left:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px;min-width:170px;z-index:30;}
 .lv-h-menu-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;cursor:pointer;font-size:12.5px;color:var(--t1);text-transform:none;font-weight:500;letter-spacing:0;}
+.lv-h-menu-item.lv-h-menu-danger{color:#b91c1c;}
+.lv-h-menu-item.lv-h-menu-danger:hover{background:#fef2f2;color:#991b1b;}
 .lv-h-menu-item:hover{background:var(--bg2);}
 .lv-h-menu-divider{height:1px;background:var(--border);margin:4px 0;}
 .lv-h-menu-section{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);padding:4px 10px 2px;}
@@ -1040,15 +1043,6 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
 .lv-h-menu-check{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:3px;border:1.5px solid var(--border2);background:#fff;color:#fff;flex-shrink:0;}
 .lv-h-menu-check.on{background:var(--accent);border-color:var(--accent);}
 .lv-h-filter-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:2px;display:inline-block;}
-
-/* Source-of-truth badge sitting between the column label and the
-   caret. Tiny — must stay subtle so it's recognisable without
-   stealing focus from the label. Vimeo uses brand blue; AI uses
-   the accent gradient so reps mentally bucket "Claude touched this." */
-.lv-h-source{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:3px;flex-shrink:0;opacity:.65;transition:opacity .12s;}
-.lv-h-btn:hover .lv-h-source{opacity:1;}
-.lv-h-source-vimeo{color:#1ab7ea;}
-.lv-h-source-ai{color:var(--accent);}
 .lv-h-menu-clear{padding:7px 10px;border-radius:5px;cursor:pointer;font-size:11.5px;color:var(--accent);font-weight:600;text-align:center;border-top:1px solid var(--border);margin-top:4px;}
 .lv-h-menu-clear:hover{background:var(--accentLL);}
 .lv-h-daterange{padding:8px 10px;display:flex;flex-direction:column;gap:6px;}
@@ -2581,6 +2575,14 @@ interface ListViewProps {
   // Toast bridge — used by click-to-copy cells (pull quotes) so the
   // child component doesn't have to own its own toast state.
   onToast?: (msg: string) => void;
+  // Column-header field actions. The header menu surfaces these
+  // as menu items so admins can edit / auto-fill / filter / delete
+  // a field without leaving the table view. ListView dispatches; the
+  // parent owns the modal + filters state.
+  onEditField?: (fieldId: string, focus?: "default" | "ai") => void;
+  onDeleteField?: (fieldId: string) => void;
+  // Opens the FiltersModal pre-focused on this field's category.
+  onOpenFilterFor?: (fieldKey: string) => void;
   // Whether the current viewer can perform management actions
   // (edit / archive / delete / multi-select). False for sales reps
   // and for admins in "Preview as sales rep" mode. Defaults to true
@@ -3934,7 +3936,7 @@ function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): Lis
   return null;
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, onToast, canManage = true, orgDefaults, onLayoutChange, previewMode = false }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, onToast, onEditField, onDeleteField, onOpenFilterFor, canManage = true, orgDefaults, onLayoutChange, previewMode = false }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state. All three persist to localStorage so admins
@@ -4416,37 +4418,6 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 title="Click for sort, filter, and column options · drag to reorder"
               >
                 <span className="lv-h-label">{col.label}</span>
-                {/* Source-of-truth badge. Tells admins at a glance
-                    where this field's values come from — Vimeo (synced
-                    on every source pull, locked schema), AI (filled
-                    from transcripts via /api/extract-metadata), or
-                    blank for manual entry. Driven by col.def.populator
-                    which only exists on field-kind columns; built-in
-                    system columns (thumb, title, vis, status, date)
-                    don't render a badge. */}
-                {col.kind === "field" && col.def?.populator === "vimeo" && (
-                  <span
-                    className="lv-h-source lv-h-source-vimeo"
-                    title="Synced from Vimeo on every source sync"
-                    aria-label="Vimeo-synced field"
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                      <path d="M23.97 6.62c-.1 2.18-1.63 5.17-4.58 8.97C16.34 19.55 13.77 21.5 11.7 21.5c-1.28 0-2.37-1.18-3.26-3.54L6.7 11.46c-.66-2.36-1.37-3.54-2.13-3.54-.16 0-.74.34-1.74 1.02L1.78 7.6c1.1-.96 2.18-1.93 3.25-2.9 1.47-1.26 2.57-1.92 3.31-1.99 1.74-.16 2.81 1.02 3.21 3.55.43 2.74.73 4.44.9 5.1.51 2.31 1.07 3.46 1.68 3.46.47 0 1.18-.74 2.13-2.22.94-1.48 1.45-2.6 1.52-3.38.14-1.36-.39-2.05-1.58-2.05-.56 0-1.14.13-1.73.39 1.16-3.79 3.36-5.62 6.61-5.5 2.41.07 3.54 1.62 3.4 4.66z"/>
-                    </svg>
-                  </span>
-                )}
-                {col.kind === "field" && col.def?.populator === "ai" && (
-                  <span
-                    className="lv-h-source lv-h-source-ai"
-                    title="AI-populated — filled from the transcript by Claude on import"
-                    aria-label="AI-populated field"
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M12 2l1.7 5.3L19 9l-5.3 1.7L12 16l-1.7-5.3L5 9l5.3-1.7z"/>
-                      <path d="M19 14l.7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7z"/>
-                    </svg>
-                  </span>
-                )}
                 {filterActive && <span className="lv-h-filter-dot" aria-hidden="true"/>}
                 <svg className="lv-h-caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="6 9 12 15 18 9"/>
@@ -4605,6 +4576,60 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                       )}
                     </>
                   )}
+                  {/* Per-field actions — Edit field / AI auto-fill /
+                      Filter / Delete. Only render for kind="field"
+                      columns (custom + system fields with FieldDefs).
+                      Built-in columns (thumb/title/vis/status/date/
+                      feedback) don't have FieldDefs so they don't
+                      get these items.
+
+                      Vimeo-populated fields hide AI auto-fill (the
+                      value source is Vimeo, AI would conflict) and
+                      Delete (you can't delete a synced system field).
+                      Edit field is available for all field columns —
+                      the modal restricts what can actually change. */}
+                  {col.kind === "field" && col.def && (
+                    <>
+                      <div className="lv-h-menu-divider"/>
+                      {/* Filter — opens FiltersModal pre-focused on
+                          this field. Only meaningful for select /
+                          multi_select fields with options; for other
+                          types the FiltersModal won't have this
+                          category in its rail, but the click still
+                          opens the modal so admins can pick another. */}
+                      {onOpenFilterFor && (
+                        <div
+                          className="lv-h-menu-item"
+                          onClick={() => { onOpenFilterFor(col.def!.key); setOpenHeaderMenu(null); }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                          Filter…
+                        </div>
+                      )}
+                      {onEditField && (
+                        <div
+                          className="lv-h-menu-item"
+                          onClick={() => { onEditField(col.def!.id, "default"); setOpenHeaderMenu(null); }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                          Edit field
+                        </div>
+                      )}
+                      {/* AI auto-fill — skipped for vimeo-populated
+                          fields. Same destination modal as Edit, just
+                          scrolled to the AI section so the toggle is
+                          obvious. */}
+                      {onEditField && col.def.populator !== "vimeo" && (
+                        <div
+                          className="lv-h-menu-item"
+                          onClick={() => { onEditField(col.def!.id, "ai"); setOpenHeaderMenu(null); }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l1.7 5.3L19 9l-5.3 1.7L12 16l-1.7-5.3L5 9l5.3-1.7z"/></svg>
+                          AI auto-fill
+                        </div>
+                      )}
+                    </>
+                  )}
                   {col.hideable && (
                     <>
                       <div className="lv-h-menu-divider"/>
@@ -4614,6 +4639,21 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                       >
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-10-8-10-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
                         Hide column
+                      </div>
+                    </>
+                  )}
+                  {/* Delete field — custom (non-system) fields only.
+                      System fields are tied to typed columns on
+                      assets and the backend rejects deletion. */}
+                  {col.kind === "field" && col.def && !col.def.system && onDeleteField && (
+                    <>
+                      <div className="lv-h-menu-divider"/>
+                      <div
+                        className="lv-h-menu-item lv-h-menu-danger"
+                        onClick={() => { onDeleteField(col.def!.id); setOpenHeaderMenu(null); }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+                        Delete field
                       </div>
                     </>
                   )}
@@ -7252,6 +7292,18 @@ export default function App(){
   const[lastSelectedId,setLastSelectedId]=useState<string|null>(null); // anchor for shift-click range select
   const[editingAssetId,setEditingAssetId]=useState<string|null>(null); // admin-only: open the edit drawer for this asset
   const[ratingAssetId,setRatingAssetId]=useState<string|null>(null);   // open the in-context rating modal for this asset
+  // Per-field Edit modal state (F2). null = closed. focus controls
+  // whether the modal opens at the top or scrolled to the AI section.
+  const[editingFieldId,setEditingFieldId]=useState<string|null>(null);
+  const[editingFieldFocus,setEditingFieldFocus]=useState<"default"|"ai">("default");
+  // Filters modal can be opened "scoped to a field" from the
+  // column-header menu. Holds the key to pre-focus on next open.
+  const[filtersModalInitialKey,setFiltersModalInitialKey]=useState<string|null>(null);
+  // F3: Fields admin moved off the side rail. The same FieldsPanel
+  // now opens as a modal from the "Manage all fields…" link at the
+  // bottom of the ColumnControlPanel. State is local so the modal
+  // can be opened/closed without touching adminSection.
+  const[manageFieldsOpen,setManageFieldsOpen]=useState(false);
   // Visibility-override target — set when admin tries to mark something
   // Public but one or more rules would re-flip it. Modal explains every
   // blocker and offers a single Override button that clears all triggers
@@ -8690,19 +8742,15 @@ export default function App(){
                 </svg>
                 Rules
               </button>
-              <button
-                className={`rail-btn ${adminSection==="fields"?"on":""}`}
-                onClick={()=>setAdminSection(adminSection==="fields"?null:"fields")}
-                title="Fields — customize the data captured for every asset"
-              >
-                {/* Stacked list bars — represents structured data fields */}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="5" width="18" height="3" rx="1"/>
-                  <rect x="3" y="11" width="18" height="3" rx="1"/>
-                  <rect x="3" y="17" width="12" height="3" rx="1"/>
-                </svg>
-                Fields
-              </button>
+              {/* Fields used to live here as a dedicated rail entry.
+                  As of F3 it moved into per-column header menus in
+                  the ListView (Edit field / AI auto-fill / Delete) +
+                  a "Manage all fields…" link in the column-control
+                  popover for bulk reorder. The adminSection="fields"
+                  branch below still renders the same FieldsPanel
+                  inside a modal triggered from that link, so the
+                  underlying admin UI stays available without a
+                  separate top-level navigation entry. */}
               <button
                 className={`rail-btn ${adminSection==="insights"?"on":""}`}
                 onClick={()=>setAdminSection(adminSection==="insights"?null:"insights")}
@@ -8886,14 +8934,11 @@ export default function App(){
                   }}
                 />
               )}
-              {adminSection==="fields" && (
-                <FieldsPanel
-                  fields={fieldDefs}
-                  onChange={setFieldDefs}
-                  onError={(msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); }}
-                  authHeaders={authHeaders}
-                />
-              )}
+              {/* F3: FieldsPanel no longer mounts inside the admin
+                  panel slot — it now opens as a modal from the
+                  "Manage all fields…" link in the ColumnControlPanel.
+                  See the modal mount near the other top-level modals
+                  at the bottom of this component. */}
               {/* Insights is now a main-area view, not a slide-in panel.
                   See the InsightsView mount inside .main-area below. */}
               {adminSection==="rules" && (
@@ -9424,7 +9469,7 @@ export default function App(){
                   dateRangeFilter={dateRangeFilter}
                   onDateRangeFilter={setDateRangeFilter}
                   fieldDefs={fieldDefs}
-                  onOpenFieldsPanel={() => setAdminSection("fields")}
+                  onOpenFieldsPanel={() => setManageFieldsOpen(true)}
                   onReorderRows={(ids) => {
                     // Same flow as grid card drag: switch to custom
                     // sort so the new order sticks, then persist via
@@ -9437,6 +9482,39 @@ export default function App(){
                   feedbackByAsset={feedbackByAsset}
                   onShowFeedback={(id) => setFeedbackModalAssetId(id)}
                   onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1500); }}
+                  onEditField={(fieldId, focus) => {
+                    setEditingFieldFocus(focus || "default");
+                    setEditingFieldId(fieldId);
+                  }}
+                  onDeleteField={async (fieldId) => {
+                    const field = fieldDefs.find(f => f.id === fieldId);
+                    if (!field) return;
+                    if (typeof window !== "undefined" && !confirm(`Delete the "${field.label}" field? Any saved values across assets will be removed.`)) return;
+                    try {
+                      const next = fieldDefs.filter(f => f.id !== fieldId);
+                      const r = await fetch("/api/org/fields", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+                        body: JSON.stringify({ fields: next }),
+                      });
+                      if (!r.ok) {
+                        const body = await r.json().catch(() => ({}));
+                        throw new Error(body.error || "Couldn't delete field");
+                      }
+                      const data = await r.json() as { fields: FieldDef[] };
+                      setFieldDefs(Array.isArray(data.fields) ? data.fields : next);
+                      setToast("Field deleted");
+                      setTimeout(() => setToast(null), 1800);
+                    } catch (e) {
+                      console.error("[deleteField] failed", e);
+                      setToast(e instanceof Error ? e.message : "Couldn't delete field");
+                      setTimeout(() => setToast(null), 3000);
+                    }
+                  }}
+                  onOpenFilterFor={(fieldKey) => {
+                    setFiltersModalInitialKey(fieldKey);
+                    setFiltersModalOpen(true);
+                  }}
                   canManage={isAdmin && adminMode}
                   orgDefaults={orgSettings.defaultListView}
                   onLayoutChange={setCurrentListLayout}
@@ -9873,7 +9951,54 @@ export default function App(){
           fieldDefs={fieldDefs}
           filters={filters}
           onFiltersChange={setFilters}
-          onClose={() => setFiltersModalOpen(false)}
+          onClose={() => { setFiltersModalOpen(false); setFiltersModalInitialKey(null); }}
+          initialActiveKey={filtersModalInitialKey}
+        />
+        {/* Manage all fields modal — opened from the "Manage all
+            fields…" link at the bottom of the column control popover.
+            Wraps the existing FieldsPanel in a modal shell so admins
+            can do bulk reorder / delete / show-in-filters operations
+            without a separate top-level navigation entry. */}
+        {manageFieldsOpen && (
+          <div className="mfm-backdrop" onClick={() => setManageFieldsOpen(false)}>
+            <style>{`
+              .mfm-backdrop{position:fixed;inset:0;background:rgba(20,20,28,.55);backdrop-filter:blur(2px);display:grid;place-items:center;z-index:210;animation:mfmFade .15s ease;}
+              @keyframes mfmFade{from{opacity:0}to{opacity:1}}
+              .mfm-modal{width:920px;max-width:calc(100vw - 48px);max-height:calc(100vh - 64px);background:#fff;border-radius:14px;box-shadow:0 20px 48px rgba(0,0,0,.22), 0 6px 16px rgba(0,0,0,.08);display:flex;flex-direction:column;overflow:hidden;animation:mfmScale .18s cubic-bezier(.2,.7,.3,1);}
+              @keyframes mfmScale{from{transform:scale(.97);opacity:0}to{transform:scale(1);opacity:1}}
+              .mfm-head{display:flex;align-items:center;justify-content:space-between;padding:16px 22px;border-bottom:1px solid var(--border);background:var(--bg);}
+              .mfm-head h3{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--t1);margin:0;letter-spacing:-.2px;}
+              .mfm-close{background:none;border:none;color:var(--t3);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;width:32px;height:32px;display:grid;place-items:center;border-radius:6px;}
+              .mfm-close:hover{background:var(--bg2);color:var(--t1);}
+              .mfm-body{overflow-y:auto;padding:18px 22px 22px;}
+            `}</style>
+            <div className="mfm-modal" onClick={e => e.stopPropagation()}>
+              <header className="mfm-head">
+                <h3>Manage all fields</h3>
+                <button className="mfm-close" onClick={() => setManageFieldsOpen(false)} aria-label="Close" title="Close (Esc)">×</button>
+              </header>
+              <div className="mfm-body">
+                <FieldsPanel
+                  fields={fieldDefs}
+                  onChange={setFieldDefs}
+                  onError={(msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); }}
+                  authHeaders={authHeaders}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Per-field Edit modal — opened from the column header
+            menu (Edit field / AI auto-fill). The single modal
+            handles both entry points by accepting a focus prop. */}
+        <EditFieldModal
+          field={editingFieldId ? fieldDefs.find(f => f.id === editingFieldId) || null : null}
+          allFields={fieldDefs}
+          authHeaders={authHeaders}
+          onClose={() => { setEditingFieldId(null); }}
+          onSaved={(fresh) => setFieldDefs(fresh)}
+          onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); }}
+          focus={editingFieldFocus}
         />
         {/* In-context rating modal — opened from the "Rate this asset"
             dots-menu item on any card or row. Self-contained: handles

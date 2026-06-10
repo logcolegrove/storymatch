@@ -41,9 +41,14 @@ interface Props {
   filters: Filters;
   onFiltersChange: (next: Filters) => void;
   onClose: () => void;
+  // Optional: pre-focus the modal on this field's category when it
+  // opens. Used by the column-header "Filter…" menu item so the
+  // admin lands directly on the field they clicked. Ignored when the
+  // key isn't filterable (e.g. text fields aren't filterable here).
+  initialActiveKey?: string | null;
 }
 
-export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange, onClose }: Props) {
+export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange, onClose, initialActiveKey }: Props) {
   // The list of categories shown in the left rail. Only select /
   // multi_select fields with options can be filtered through here.
   const filterable = useMemo(() => {
@@ -53,15 +58,24 @@ export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange
       .sort((a, b) => a.position - b.position);
   }, [fieldDefs]);
 
-  // Which category is showing its options in the middle column. Default
-  // to the first filterable field when the modal opens.
+  // Which category is showing its options in the middle column.
+  // Initial-active-key seeds this on every open so the column-header
+  // entry point lands the admin on the right category. Falls back to
+  // the first filterable field when the requested key isn't valid.
   const [activeKey, setActiveKey] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
+    const seed = initialActiveKey && filterable.find(f => f.key === initialActiveKey)
+      ? initialActiveKey
+      : null;
+    if (seed) {
+      setActiveKey(seed);
+      return;
+    }
     if (!activeKey || !filterable.find(f => f.key === activeKey)) {
       setActiveKey(filterable[0]?.key || null);
     }
-  }, [open, filterable, activeKey]);
+  }, [open, filterable, activeKey, initialActiveKey]);
 
   const [search, setSearch] = useState("");
   useEffect(() => { if (!open) setSearch(""); }, [open]);
