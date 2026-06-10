@@ -1,22 +1,26 @@
 "use client";
 
 // Rippling-style filters modal. Three-column layout:
-//   Left rail — clickable list of filterable field categories.
-//   Middle    — search box + "N selected / Select all" header + the
-//               active field's option checkboxes.
-//   Right     — every currently-selected value across all fields,
-//               grouped by field, rendered as removable pills.
+//   Left rail — clickable list of filterable categories.
+//   Middle    — the active category's filter UI (checkbox list,
+//               text input, or date range, depending on category).
+//   Right     — every currently-applied filter, grouped by category,
+//               rendered as removable pills.
 // Footer is a sticky "Clear all" link + "Done" primary button.
 //
-// Categories are driven entirely by /api/org/fields — any field with
-// showInFilters && (type === "select" || "multi_select") shows up here
-// automatically, in position order. No code change needed when admins
-// add a new filterable field.
+// Categories come from three sources, in this order:
+//   1. Built-in: Visibility, Status, Date — bound to the same
+//      quick-filter state the column-header menus edit, so both
+//      surfaces stay in lockstep.
+//   2. Filterable FieldDefs of type select / multi_select — checkbox
+//      list of the field's options.
+//   3. Filterable FieldDefs of type text — "contains" search input
+//      that does case-insensitive substring matching against the
+//      asset's value.
 //
-// Changes apply live to the parent (no draft state, no Cancel). Done
-// just closes. This matches how Rippling's modal actually behaves —
-// the underlying list updates as you toggle, so you see the impact
-// without committing.
+// Changes apply live to the parent (no draft state, no Cancel).
+// "Done" just closes — matches Rippling's behavior so the list view
+// updates as you toggle.
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -33,7 +37,47 @@ interface FieldDef {
   systemColumn?: string;
 }
 
+// Field-driven filter state. For select/multi_select: array of
+// selected option values. For text: single-element array with the
+// search string. Empty array / missing key = no filter on that field.
 type Filters = Record<string, string[]>;
+
+// Built-in column-header quick-filter shapes — kept in sync with
+// StoryMatchApp's types so both surfaces share state.
+type VisibilityQuickValue = "published" | "draft" | "archived";
+type StatusQuickValue = "cleared" | "attention" | "blocked" | "expired";
+interface DateRangeFilter {
+  from: string | null;
+  to: string | null;
+}
+
+// Synthetic keys for the built-in categories so they share the same
+// rail/active-key shape as the field categories. Leading underscores
+// keep them out of any namespace collision with real field keys.
+const VIS_KEY = "__vis__";
+const STATUS_KEY = "__status__";
+const DATE_KEY = "__date__";
+
+const VIS_OPTIONS: { v: VisibilityQuickValue; label: string }[] = [
+  { v: "published", label: "Public" },
+  { v: "draft", label: "Private" },
+  { v: "archived", label: "Archived" },
+];
+const STATUS_OPTIONS: { v: StatusQuickValue; label: string }[] = [
+  { v: "cleared", label: "Cleared" },
+  { v: "attention", label: "Needs attention" },
+  { v: "blocked", label: "Blocked" },
+  { v: "expired", label: "Expired" },
+];
+
+// Union of category shapes. Drives the middle-pane render branch and
+// pill aggregation. "options" covers vis/status/select/multi_select
+// (anything backed by a discrete option set); "text" is contains-
+// matching; "daterange" is from/to inputs.
+type Category =
+  | { kind: "options"; key: string; label: string; options: string[]; source: "vis" | "status" | "field"; fieldDef?: FieldDef }
+  | { kind: "text"; key: string; label: string; fieldDef: FieldDef }
+  | { kind: "daterange"; key: string; label: string };
 
 interface Props {
   open: boolean;
@@ -41,46 +85,81 @@ interface Props {
   filters: Filters;
   onFiltersChange: (next: Filters) => void;
   onClose: () => void;
-  // Optional: pre-focus the modal on this field's category when it
-  // opens. Used by the column-header "Filter…" menu item so the
-  // admin lands directly on the field they clicked. Ignored when the
-  // key isn't filterable (e.g. text fields aren't filterable here).
+  // Optional: pre-focus the modal on this category when it opens.
+  // Accepts a field key OR one of the built-in keys (__vis__, etc.).
   initialActiveKey?: string | null;
+  // Built-in filters mirrored from StoryMatchApp. These edit the same
+  // state the per-column header inline menus edit so toggling here
+  // and clicking the header chevron stay in lockstep.
+  visibilityQuickFilter?: VisibilityQuickValue[];
+  onVisibilityQuickFilter?: (next: VisibilityQuickValue[]) => void;
+  statusQuickFilter?: StatusQuickValue[];
+  onStatusQuickFilter?: (next: StatusQuickValue[]) => void;
+  dateRangeFilter?: DateRangeFilter | null;
+  onDateRangeFilter?: (next: DateRangeFilter | null) => void;
 }
 
-export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange, onClose, initialActiveKey }: Props) {
-  // The list of categories shown in the left rail. Only select /
-  // multi_select fields with options can be filtered through here.
-  const filterable = useMemo(() => {
-    return fieldDefs
-      .filter(d => d.showInFilters && (d.type === "select" || d.type === "multi_select") && Array.isArray(d.options) && d.options.length > 0)
-      .slice()
-      .sort((a, b) => a.position - b.position);
-  }, [fieldDefs]);
+export default function FiltersModal({
+  open,
+  fieldDefs,
+  filters,
+  onFiltersChange,
+  onClose,
+  initialActiveKey,
+  visibilityQuickFilter = [],
+  onVisibilityQuickFilter,
+  statusQuickFilter = [],
+  onStatusQuickFilter,
+  dateRangeFilter = null,
+  onDateRangeFilter,
+}: Props) {
+  // Build the unified category list. Built-ins first (so they
+  // always sit at the top of the rail), then field-defined ones in
+  // FieldDef.position order.
+  const categories = useMemo<Category[]>(() => {
+    const out: Category[] = [];
+    if (onVisibilityQuickFilter) out.push({ kind: "options", key: VIS_KEY, label: "Visibility", options: VIS_OPTIONS.map(o => o.label), source: "vis" });
+    if (onStatusQuickFilter)     out.push({ kind: "options", key: STATUS_KEY, label: "Status", options: STATUS_OPTIONS.map(o => o.label), source: "status" });
+    if (onDateRangeFilter)       out.push({ kind: "daterange", key: DATE_KEY, label: "Date" });
+    const sorted = fieldDefs.filter(d => d.showInFilters).slice().sort((a, b) => a.position - b.position);
+    for (const d of sorted) {
+      if (d.type === "select" || d.type === "multi_select") {
+        if (Array.isArray(d.options) && d.options.length > 0) {
+          out.push({ kind: "options", key: d.key, label: d.label, options: d.options, source: "field", fieldDef: d });
+        }
+      } else if (d.type === "text") {
+        out.push({ kind: "text", key: d.key, label: d.label, fieldDef: d });
+      }
+    }
+    return out;
+  }, [fieldDefs, onVisibilityQuickFilter, onStatusQuickFilter, onDateRangeFilter]);
 
-  // Which category is showing its options in the middle column.
-  // Initial-active-key seeds this on every open so the column-header
-  // entry point lands the admin on the right category. Falls back to
-  // the first filterable field when the requested key isn't valid.
+  // Which category is showing in the middle column. Seeded from
+  // initialActiveKey on every open so the column-header entry point
+  // lands the admin on the right category. Falls back to the first
+  // available category when the requested key isn't valid.
   const [activeKey, setActiveKey] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
-    const seed = initialActiveKey && filterable.find(f => f.key === initialActiveKey)
+    const seed = initialActiveKey && categories.find(c => c.key === initialActiveKey)
       ? initialActiveKey
       : null;
     if (seed) {
       setActiveKey(seed);
       return;
     }
-    if (!activeKey || !filterable.find(f => f.key === activeKey)) {
-      setActiveKey(filterable[0]?.key || null);
+    if (!activeKey || !categories.find(c => c.key === activeKey)) {
+      setActiveKey(categories[0]?.key || null);
     }
-  }, [open, filterable, activeKey, initialActiveKey]);
+  }, [open, categories, activeKey, initialActiveKey]);
 
+  // Search within the active "options" category's list (e.g. typing
+  // "fin" to filter the options down to ones with "fin" in them).
+  // Cleared on close + on category switch.
   const [search, setSearch] = useState("");
   useEffect(() => { if (!open) setSearch(""); }, [open]);
 
-  // Close on Escape — common modal affordance.
+  // Esc to close.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -90,63 +169,134 @@ export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange
 
   if (!open) return null;
 
-  const activeField = filterable.find(f => f.key === activeKey) || null;
-  const activeOptions = activeField?.options || [];
-  const activeSelected = activeField ? (filters[activeField.key] || []) : [];
+  const active = categories.find(c => c.key === activeKey) || null;
 
+  // ── Selection helpers (per category source) ────────────────────
+  // Reads + writes selection for a category, abstracting over the
+  // different state buckets (built-in arrays vs. filters record).
+  const getSelected = (c: Category): string[] => {
+    if (c.kind === "options") {
+      if (c.source === "vis") return visibilityQuickFilter.map(v => VIS_OPTIONS.find(o => o.v === v)?.label || v);
+      if (c.source === "status") return statusQuickFilter.map(v => STATUS_OPTIONS.find(o => o.v === v)?.label || v);
+      return filters[c.key] || [];
+    }
+    if (c.kind === "text") {
+      const arr = filters[c.key] || [];
+      return arr.length > 0 && arr[0] ? [arr[0]] : [];
+    }
+    if (c.kind === "daterange") {
+      if (!dateRangeFilter) return [];
+      const parts: string[] = [];
+      if (dateRangeFilter.from) parts.push(`From ${dateRangeFilter.from}`);
+      if (dateRangeFilter.to)   parts.push(`To ${dateRangeFilter.to}`);
+      return parts;
+    }
+    return [];
+  };
+
+  const setOptions = (c: Category, nextLabels: string[]) => {
+    if (c.kind !== "options") return;
+    if (c.source === "vis" && onVisibilityQuickFilter) {
+      const nextVals = nextLabels
+        .map(lab => VIS_OPTIONS.find(o => o.label === lab)?.v)
+        .filter((v): v is VisibilityQuickValue => !!v);
+      onVisibilityQuickFilter(nextVals);
+      return;
+    }
+    if (c.source === "status" && onStatusQuickFilter) {
+      const nextVals = nextLabels
+        .map(lab => STATUS_OPTIONS.find(o => o.label === lab)?.v)
+        .filter((v): v is StatusQuickValue => !!v);
+      onStatusQuickFilter(nextVals);
+      return;
+    }
+    const out = { ...filters };
+    if (nextLabels.length === 0) delete out[c.key];
+    else out[c.key] = nextLabels;
+    onFiltersChange(out);
+  };
+
+  const setText = (c: Category, value: string) => {
+    if (c.kind !== "text") return;
+    const out = { ...filters };
+    const trimmed = value.trim();
+    if (!trimmed) delete out[c.key];
+    else out[c.key] = [trimmed];
+    onFiltersChange(out);
+  };
+
+  const setRange = (next: DateRangeFilter | null) => {
+    if (!onDateRangeFilter) return;
+    if (next && !next.from && !next.to) onDateRangeFilter(null);
+    else onDateRangeFilter(next);
+  };
+
+  // ── Active-category derived state ──────────────────────────────
+  const activeSelected = active ? getSelected(active) : [];
+  const activeOptionsList = active?.kind === "options" ? active.options : [];
   const filteredOptions = search.trim()
-    ? activeOptions.filter(o => o.toLowerCase().includes(search.trim().toLowerCase()))
-    : activeOptions;
-
-  const totalFilterCount = Object.values(filters).reduce(
-    (acc, v) => acc + (Array.isArray(v) ? v.length : 0),
-    0,
-  );
-  const allSelectedInActive = activeField
-    && activeOptions.length > 0
+    ? activeOptionsList.filter(o => o.toLowerCase().includes(search.trim().toLowerCase()))
+    : activeOptionsList;
+  const allSelectedInActive = active?.kind === "options"
+    && activeOptionsList.length > 0
     && filteredOptions.every(o => activeSelected.includes(o));
 
-  const toggleOption = (key: string, option: string) => {
-    const cur = filters[key] || [];
+  const toggleOption = (c: Category, option: string) => {
+    if (c.kind !== "options") return;
+    const cur = getSelected(c);
     const next = cur.includes(option) ? cur.filter(x => x !== option) : [...cur, option];
-    const out = { ...filters };
-    if (next.length === 0) delete out[key];
-    else out[key] = next;
-    onFiltersChange(out);
+    setOptions(c, next);
   };
 
   const toggleSelectAll = () => {
-    if (!activeField) return;
+    if (!active || active.kind !== "options") return;
     if (allSelectedInActive) {
-      // Deselect everything that matches the current search.
-      const cur = filters[activeField.key] || [];
-      const next = cur.filter(v => !filteredOptions.includes(v));
-      const out = { ...filters };
-      if (next.length === 0) delete out[activeField.key];
-      else out[activeField.key] = next;
-      onFiltersChange(out);
+      const cur = getSelected(active);
+      setOptions(active, cur.filter(v => !filteredOptions.includes(v)));
     } else {
-      // Select every filtered option that's not already selected.
-      const cur = filters[activeField.key] || [];
-      const next = Array.from(new Set([...cur, ...filteredOptions]));
-      onFiltersChange({ ...filters, [activeField.key]: next });
+      const cur = getSelected(active);
+      setOptions(active, Array.from(new Set([...cur, ...filteredOptions])));
     }
   };
 
-  const clearAll = () => onFiltersChange({});
-
-  const removePill = (key: string, option: string) => {
-    const cur = filters[key] || [];
-    const next = cur.filter(x => x !== option);
-    const out = { ...filters };
-    if (next.length === 0) delete out[key];
-    else out[key] = next;
-    onFiltersChange(out);
+  const clearAll = () => {
+    if (onVisibilityQuickFilter) onVisibilityQuickFilter([]);
+    if (onStatusQuickFilter) onStatusQuickFilter([]);
+    if (onDateRangeFilter) onDateRangeFilter(null);
+    onFiltersChange({});
   };
 
-  // Per-field grouping for the right rail.
-  const grouped = filterable
-    .map(f => ({ field: f, values: filters[f.key] || [] }))
+  const removePill = (c: Category, value: string) => {
+    if (c.kind === "options") {
+      setOptions(c, getSelected(c).filter(v => v !== value));
+      return;
+    }
+    if (c.kind === "text") {
+      setText(c, "");
+      return;
+    }
+    if (c.kind === "daterange" && dateRangeFilter) {
+      // The value param is "From X" or "To Y"; we use it to know which
+      // side to clear. Comparing against the rendered label keeps the
+      // logic in one place.
+      if (value.startsWith("From ")) setRange({ from: null, to: dateRangeFilter.to });
+      else if (value.startsWith("To ")) setRange({ from: dateRangeFilter.from, to: null });
+    }
+  };
+
+  // Total active filter count across all categories. Counts each
+  // selected option, plus 1 per active text filter, plus 1 if a
+  // date range is set. Drives the footer pill counter and the
+  // global library-bar badge.
+  const totalFilterCount = (() => {
+    let n = 0;
+    for (const c of categories) n += getSelected(c).length;
+    return n;
+  })();
+
+  // Per-category grouping for the right rail.
+  const grouped = categories
+    .map(c => ({ category: c, values: getSelected(c) }))
     .filter(g => g.values.length > 0);
 
   return (
@@ -167,29 +317,33 @@ export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange
           {/* Left rail — categories. */}
           <aside className="fm-rail">
             <div className="fm-rail-h">Field filters</div>
-            {filterable.length === 0 ? (
+            {categories.length === 0 ? (
               <div className="fm-rail-empty">
                 No filterable fields yet. Toggle &ldquo;Show in filters&rdquo; on a field in Manage Fields.
               </div>
-            ) : filterable.map(f => {
-              const count = (filters[f.key] || []).length;
+            ) : categories.map(c => {
+              const count = getSelected(c).length;
               return (
                 <button
-                  key={f.id}
+                  key={c.key}
                   type="button"
-                  className={`fm-rail-item${activeKey === f.key ? " active" : ""}`}
-                  onClick={() => { setActiveKey(f.key); setSearch(""); }}
+                  className={`fm-rail-item${activeKey === c.key ? " active" : ""}`}
+                  onClick={() => { setActiveKey(c.key); setSearch(""); }}
                 >
-                  <span className="fm-rail-label">{f.label}</span>
+                  <span className="fm-rail-label">{c.label}</span>
                   {count > 0 && <span className="fm-rail-count">{count}</span>}
                 </button>
               );
             })}
           </aside>
 
-          {/* Middle — search + options for the active category. */}
+          {/* Middle — UI for the active category. Branches on kind:
+              options = checkbox list (with search + select-all),
+              text = contains input, daterange = from/to inputs. */}
           <div className="fm-mid">
-            {activeField ? (
+            {!active ? (
+              <div className="fm-mid-empty">Pick a category on the left to start filtering.</div>
+            ) : active.kind === "options" ? (
               <>
                 <div className="fm-search-wrap">
                   <svg className="fm-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -230,7 +384,7 @@ export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange
                           key={opt}
                           type="button"
                           className={`fm-option ${on ? "on" : ""}`}
-                          onClick={() => toggleOption(activeField.key, opt)}
+                          onClick={() => toggleOption(active, opt)}
                         >
                           <span className={`fm-checkbox ${on ? "on" : ""}`}>
                             {on && (
@@ -246,27 +400,61 @@ export default function FiltersModal({ open, fieldDefs, filters, onFiltersChange
                   </div>
                 </div>
               </>
+            ) : active.kind === "text" ? (
+              <div className="fm-text-card">
+                <div className="fm-text-label">Contains</div>
+                <input
+                  type="text"
+                  className="fm-text-input"
+                  placeholder={`Search ${active.label.toLowerCase()}…`}
+                  value={(filters[active.key] || [])[0] || ""}
+                  onChange={e => setText(active, e.target.value)}
+                  autoFocus
+                />
+                <p className="fm-text-hint">Case-insensitive substring match. An asset passes when its {active.label.toLowerCase()} contains this text anywhere.</p>
+              </div>
             ) : (
-              <div className="fm-mid-empty">Pick a field on the left to start filtering.</div>
+              <div className="fm-date-card">
+                <div className="fm-text-label">Custom range</div>
+                <div className="fm-date-row">
+                  <label>
+                    <span>From</span>
+                    <input
+                      type="date"
+                      value={dateRangeFilter?.from || ""}
+                      onChange={e => setRange({ from: e.target.value || null, to: dateRangeFilter?.to || null })}
+                    />
+                  </label>
+                  <label>
+                    <span>To</span>
+                    <input
+                      type="date"
+                      value={dateRangeFilter?.to || ""}
+                      onChange={e => setRange({ from: dateRangeFilter?.from || null, to: e.target.value || null })}
+                    />
+                  </label>
+                </div>
+                <p className="fm-text-hint">Inclusive on both ends. Assets with no publish date are excluded when any range is active.</p>
+              </div>
             )}
           </div>
 
-          {/* Right — selected pills grouped by field. */}
+          {/* Right — selected pills grouped by category. */}
           <aside className="fm-selected">
-            <div className="fm-selected-h">Selected filters</div>
+            <div className="fm-selected-h">Applied filters</div>
             {grouped.length === 0 ? (
               <div className="fm-selected-empty">Nothing selected yet.</div>
-            ) : grouped.map(({ field, values }) => (
-              <div key={field.id} className="fm-selected-group">
-                <div className="fm-selected-group-label">{field.label}</div>
+            ) : grouped.map(({ category, values }) => (
+              <div key={category.key} className="fm-selected-group">
+                <div className="fm-selected-group-label">{category.label}</div>
                 <div className="fm-selected-pills">
-                  {values.map(v => (
-                    <span key={v} className="fm-pill">
-                      {v}
+                  {values.map((v, i) => (
+                    <span key={`${category.key}-${v}-${i}`} className="fm-pill">
+                      {category.kind === "text" ? `“${v}”` : v}
                       <button
                         type="button"
                         className="fm-pill-remove"
-                        onClick={() => removePill(field.key, v)}
+                        onClick={() => removePill(category, v)}
                         aria-label={`Remove ${v}`}
                       >×</button>
                     </span>
@@ -336,6 +524,19 @@ const css = `
 .fm-checkbox{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:4px;border:1.5px solid var(--border2);background:#fff;color:#fff;flex-shrink:0;transition:all .12s;}
 .fm-checkbox.on,.fm-checkbox.all{background:var(--accent);border-color:var(--accent);}
 
+/* Text-filter card (contains-match) + date-range card. Both share
+   the same visual chrome — a labeled card with the input(s) and a
+   hint underneath explaining the match semantics. */
+.fm-text-card,.fm-date-card{padding:18px 20px;border:1px solid var(--border);border-radius:10px;background:#fff;display:flex;flex-direction:column;gap:10px;}
+.fm-text-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);font-weight:700;}
+.fm-text-input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--t1);font-family:var(--font);font-size:13.5px;}
+.fm-text-input:focus{outline:none;border-color:var(--accent);background:#fff;}
+.fm-text-hint{font-size:12px;color:var(--t3);margin:0;line-height:1.5;}
+.fm-date-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.fm-date-row label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--t3);font-weight:600;}
+.fm-date-row input[type=date]{padding:9px 11px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--t1);font-family:var(--font);font-size:13px;}
+.fm-date-row input[type=date]:focus{outline:none;border-color:var(--accent);background:#fff;}
+
 /* Right column — selected pills */
 .fm-selected{border-left:1px solid var(--border);background:var(--bg);overflow-y:auto;padding:18px 18px;}
 .fm-selected-h{font-size:13.5px;font-weight:600;color:var(--t1);margin-bottom:14px;}
@@ -348,9 +549,9 @@ const css = `
 .fm-pill-remove:hover{background:var(--bg2);color:var(--t1);}
 
 /* Footer */
-.fm-foot{display:flex;align-items:center;gap:10px;padding:14px 24px;background:#fff;flex-shrink:0;}
-.fm-clear{background:none;border:none;color:var(--t3);font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;padding:8px 12px;border-radius:6px;}
+.fm-foot{display:flex;align-items:center;padding:14px 20px;background:#fff;}
+.fm-clear{background:none;border:none;color:var(--t3);font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;padding:6px 10px;border-radius:6px;}
 .fm-clear:hover{background:var(--bg2);color:var(--t1);}
-.fm-done{padding:9px 22px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-family:var(--font);font-size:13.5px;font-weight:600;cursor:pointer;letter-spacing:-.005em;}
-.fm-done:hover{background:var(--accent2);}
+.fm-done{padding:9px 22px;border:none;border-radius:7px;background:var(--accent);color:#fff;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;}
+.fm-done:hover{filter:brightness(1.06);}
 `;

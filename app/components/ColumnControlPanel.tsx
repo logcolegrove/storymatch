@@ -127,9 +127,22 @@ export default function ColumnControlPanel({ anchor, fieldDefs, columnOrder, hid
         out.push({ key: b.key, label: b.label, sublabel: "Built-in" });
       }
     }
-    // Field-defined columns not currently shown
+    // Field-defined columns not currently shown. We explicitly skip
+    // a few system fields that don't render well in a list cell:
+    //   - thumbnail (URL, already displayed via the pinned thumb)
+    //   - challenge / outcome (long-form prose, blow out row height)
+    //   - transcript (full transcript, huge text)
+    // Admins still see these in the EditFieldModal + the Manage all
+    // fields modal — they just can't be added as table columns.
+    const HIDDEN_FROM_COLUMN_PICKER = new Set([
+      "thumbnail",
+      "challenge",
+      "outcome",
+      "transcript",
+    ]);
     for (const def of fieldDefs) {
       if (shownKeys.has(def.key)) continue;
+      if (HIDDEN_FROM_COLUMN_PICKER.has(def.key)) continue;
       out.push({
         key: def.key,
         label: def.label,

@@ -308,13 +308,22 @@ type Filters = Record<string, string[]>;
 // "date-desc" / "date-asc" = Vimeo publish date (column-driven).
 // "vis-asc" / "vis-desc" = publication status alphabetical.
 // "status-asc" / "status-desc" = cleared level (green → yellow → red).
+//
+// Any value matching `field:<key>:asc|desc` sorts on a FieldDef
+// column. The comparator reads the field's value off each asset
+// (system column when system=true, customFieldValues otherwise) and
+// compares according to the field type: text -> locale, number ->
+// numeric, date -> chronological, select/multi_select -> alphabetical
+// (multi-select joins values for comparison).
 type SortBy =
   | "custom"
   | "recent" | "oldest"
   | "az" | "za"
   | "date-desc" | "date-asc"
   | "vis-asc" | "vis-desc"
-  | "status-asc" | "status-desc";
+  | "status-asc" | "status-desc"
+  | `field:${string}:asc`
+  | `field:${string}:desc`;
 
 // Column-header quick filters — apply ON TOP of the regular Filters
 // modal. Each is an ARRAY so admins can multi-select within a column
@@ -1136,6 +1145,24 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
   animation:truncTipIn .12s ease;
 }
 @keyframes truncTipIn{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:translateY(0);}}
+
+/* Pull-quote hover popover. Same dark-card pattern as the truncate
+   tooltip but bigger, with a Copy button so reps can grab the quote
+   without leaving the list view. Pointer-events stay enabled so the
+   user can move the cursor into the popup to click Copy — closes on
+   mouseleave from both the cell text and the popup. */
+.pq-pop{
+  background:#1c1c1c;color:#fff;
+  font-family:var(--font);font-size:12.5px;font-weight:500;
+  padding:12px 14px;border-radius:9px;line-height:1.5;
+  box-shadow:0 14px 36px rgba(0,0,0,.28);
+  z-index:1100;
+  display:flex;flex-direction:column;gap:10px;
+  animation:truncTipIn .12s ease;
+}
+.pq-pop-text{font-family:var(--serif);font-style:italic;font-size:13.5px;line-height:1.55;color:rgba(255,255,255,.92);}
+.pq-pop-copy{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);color:#fff;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;transition:background .12s;}
+.pq-pop-copy:hover{background:rgba(255,255,255,.22);}
 .lv-vert{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv-pub-select{font-family:var(--font);font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--t1);cursor:pointer;width:auto;}
 .lv-pub-select:hover{background:var(--bg2);}
@@ -1896,6 +1923,70 @@ function TruncatedDiv({ className, children, style }: {
             maxWidth: 420,
           }}
         >{children}</div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// PullQuotePopover — hover-revealed full-quote popup for the pull-
+// quote cells in the list view. Mirrors the TruncatedDiv pattern
+// (measure-then-portal) but the popup contains a Copy button so reps
+// can grab the full text without leaving the cell. Click on the cell
+// itself still copies via the parent's onClick.
+function PullQuotePopover({ text, onCopy }: { text: string; onCopy: () => void }) {
+  const ref = React.useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const closeTimerRef = React.useRef<number | null>(null);
+
+  // Open the popup when hovering the cell text. We always show it on
+  // hover (even when not truncated) — for pull quotes, the popup adds
+  // the Copy button affordance regardless. The close timer gives the
+  // user a small grace window to move the cursor into the popup.
+  const open = () => {
+    if (closeTimerRef.current) { window.clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ top: r.bottom + 6, left: r.left, width: r.width });
+  };
+  const scheduleClose = () => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = window.setTimeout(() => setPos(null), 120);
+  };
+  useEffect(() => () => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  return (
+    <>
+      <span
+        ref={ref}
+        className="lv-customcell-text"
+        onMouseEnter={open}
+        onMouseLeave={scheduleClose}
+      >{text}</span>
+      {pos && typeof document !== "undefined" && createPortal(
+        <div
+          className="pq-pop"
+          style={{ position: "fixed", top: pos.top, left: pos.left, minWidth: Math.max(pos.width, 280), maxWidth: 460 }}
+          onMouseEnter={open}
+          onMouseLeave={scheduleClose}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="pq-pop-text">&ldquo;{text}&rdquo;</div>
+          <button
+            type="button"
+            className="pq-pop-copy"
+            onClick={(e) => { e.stopPropagation(); onCopy(); setPos(null); }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Copy quote
+          </button>
+        </div>,
         document.body,
       )}
     </>
@@ -3911,14 +4002,22 @@ function effectiveBaseline(orgDefaults: DefaultListView | null): DefaultListView
 
 // Synthesise a column descriptor for a custom field. Width defaults
 // reflect a moderately compact display; admin can resize as needed.
+//
+// Sort wiring: every field type can be sorted (text alphabetical,
+// number numeric, date chronological, select/multi_select
+// alphabetical). The sort keys take the form `field:<key>:asc|desc`;
+// the parent's setSortBy receives these and the comparator built
+// down in the sort block knows how to read the underlying value.
 function fieldDefToColumn(def: FieldDef): ListViewColumn {
   return {
     key: def.key,
     label: def.label,
     defaultWidth: 160,
     minWidth: 100,
-    sortable: false,
+    sortable: true,
     hideable: true,
+    sortAscKey: `field:${def.key}:asc` as SortBy,
+    sortDescKey: `field:${def.key}:desc` as SortBy,
     kind: "field",
     def,
   };
@@ -5022,21 +5121,32 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 // reps don't have to open the asset edit panel just
                 // to grab a quote for outreach.
                 const isPullQuote = def.key === "pull_quote";
-                const handleCopy = isPullQuote && typeof raw === "string" && raw.trim()
-                  ? (e: React.MouseEvent) => {
-                      e.stopPropagation();
-                      try { navigator.clipboard?.writeText(raw); } catch { /* ignore */ }
-                      onToast?.("Quote copied");
-                    }
+                const quoteText = isPullQuote && typeof raw === "string" ? raw.trim() : "";
+                const copyQuoteText = () => {
+                  if (!quoteText) return;
+                  try { navigator.clipboard?.writeText(quoteText); } catch { /* ignore */ }
+                  onToast?.("Quote copied");
+                };
+                const handleCopy = quoteText
+                  ? (e: React.MouseEvent) => { e.stopPropagation(); copyQuoteText(); }
                   : undefined;
                 return (
                   <div
                     key={col.key}
                     className={`lv-customcell${handleCopy ? " lv-customcell-copyable" : ""}`}
                     onClick={handleCopy}
-                    title={handleCopy ? "Click to copy quote" : undefined}
                   >
-                    <CustomFieldCell def={def} value={raw}/>
+                    {/* For pull quotes we swap the plain CustomFieldCell
+                        text for a hover-popover that surfaces the FULL
+                        quote (truncated or not) plus a Copy button — same
+                        idiom as the title row's hover tooltip but with
+                        an action affordance. Cell click still copies via
+                        the parent onClick above. */}
+                    {isPullQuote && quoteText ? (
+                      <PullQuotePopover text={quoteText} onCopy={copyQuoteText}/>
+                    ) : (
+                      <CustomFieldCell def={def} value={raw}/>
+                    )}
                   </div>
                 );
               }
@@ -8248,8 +8358,11 @@ export default function App(){
       // Every field with an active filter must pass. System fields read
       // from the asset's mapped property (FieldDef.key is camelCase and
       // already aligns with the FE Asset shape — e.g. "companySize");
-      // custom fields read from asset.customFieldValues. multi_select
-      // matches if any selected option appears in the asset's array.
+      // custom fields read from asset.customFieldValues.
+      //   - multi_select: OR match (any selected option in asset's array)
+      //   - select / number / date: exact-includes against selected values
+      //   - text: case-insensitive substring "contains" — sel[0] is the
+      //     query string (we store single-element arrays for text fields)
       for(const def of fieldDefs){
         const sel=filters[def.key];
         if(!sel||sel.length===0)continue;
@@ -8259,6 +8372,11 @@ export default function App(){
         if(def.type==="multi_select"){
           const arr=Array.isArray(v)?(v as unknown[]).filter(x=>typeof x==="string") as string[]:[];
           if(!sel.some(s=>arr.includes(s)))return false;
+        }else if(def.type==="text"){
+          const needle=(sel[0]||"").trim().toLowerCase();
+          if(!needle)continue;
+          const haystack=(typeof v==="string"?v:"").toLowerCase();
+          if(!haystack.includes(needle))return false;
         }else{
           const s=typeof v==="string"?v:typeof v==="number"?String(v):"";
           if(!sel.includes(s))return false;
@@ -8575,6 +8693,67 @@ export default function App(){
     else if (sortBy === "vis-desc") displayAssets = [...displayAssets].sort((a, b) => -cmpVisibility(a, b));
     else if (sortBy === "status-asc") displayAssets = [...displayAssets].sort(cmpStatus);
     else if (sortBy === "status-desc") displayAssets = [...displayAssets].sort((a, b) => -cmpStatus(a, b));
+    else if (typeof sortBy === "string" && sortBy.startsWith("field:")) {
+      // Dynamic field sort: key parsed out of `field:<key>:asc|desc`.
+      // Read the value off the asset (system column when the FieldDef
+      // is system, customFieldValues bag otherwise). Comparison rules
+      // are type-driven; missing values always sort to the end.
+      const parts = sortBy.split(":");
+      const fieldKey = parts[1] || "";
+      const dir: "asc" | "desc" = parts[2] === "desc" ? "desc" : "asc";
+      const def = fieldDefs.find(f => f.key === fieldKey);
+      if (def) {
+        const readValue = (a: Asset): unknown => {
+          if (def.system) {
+            const sysKey = def.systemColumn || def.key;
+            return (a as unknown as Record<string, unknown>)[sysKey];
+          }
+          return (a.customFieldValues || {})[def.key];
+        };
+        const isMissing = (v: unknown): boolean => {
+          if (v == null) return true;
+          if (typeof v === "string" && v.trim() === "") return true;
+          if (Array.isArray(v) && v.length === 0) return true;
+          return false;
+        };
+        // Per-type comparator. Numeric for numbers, time for dates,
+        // locale-compare for everything else (incl. multi-select
+        // joined with commas).
+        const cmpField = (a: Asset, b: Asset) => {
+          const va = readValue(a);
+          const vb = readValue(b);
+          const aMissing = isMissing(va);
+          const bMissing = isMissing(vb);
+          if (aMissing && bMissing) return 0;
+          if (aMissing) return 1; // missing always last
+          if (bMissing) return -1;
+          if (def.type === "number") {
+            const na = typeof va === "number" ? va : Number(va);
+            const nb = typeof vb === "number" ? vb : Number(vb);
+            if (!Number.isFinite(na) && !Number.isFinite(nb)) return 0;
+            if (!Number.isFinite(na)) return 1;
+            if (!Number.isFinite(nb)) return -1;
+            return na - nb;
+          }
+          if (def.type === "date") {
+            const ta = typeof va === "string" ? Date.parse(va) : NaN;
+            const tb = typeof vb === "string" ? Date.parse(vb) : NaN;
+            if (!Number.isFinite(ta) && !Number.isFinite(tb)) return 0;
+            if (!Number.isFinite(ta)) return 1;
+            if (!Number.isFinite(tb)) return -1;
+            return ta - tb;
+          }
+          // text, select, multi_select
+          const toStr = (v: unknown): string => {
+            if (Array.isArray(v)) return (v as unknown[]).filter(x => typeof x === "string").join(", ");
+            if (typeof v === "string") return v;
+            return String(v ?? "");
+          };
+          return toStr(va).localeCompare(toStr(vb), undefined, { sensitivity: "base" });
+        };
+        displayAssets = [...displayAssets].sort(dir === "asc" ? cmpField : (a, b) => -cmpField(a, b));
+      }
+    }
   }
   const detailAsset=route.page==="detail"?assets.find(a=>a.id===route.id)||null:null;
 
@@ -9953,6 +10132,12 @@ export default function App(){
           onFiltersChange={setFilters}
           onClose={() => { setFiltersModalOpen(false); setFiltersModalInitialKey(null); }}
           initialActiveKey={filtersModalInitialKey}
+          visibilityQuickFilter={visibilityQuickFilter}
+          onVisibilityQuickFilter={setVisibilityQuickFilter}
+          statusQuickFilter={statusQuickFilter}
+          onStatusQuickFilter={setStatusQuickFilter}
+          dateRangeFilter={dateRangeFilter}
+          onDateRangeFilter={setDateRangeFilter}
         />
         {/* Manage all fields modal — opened from the "Manage all
             fields…" link at the bottom of the column control popover.
