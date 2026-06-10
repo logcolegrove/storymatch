@@ -1040,6 +1040,15 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
 .lv-h-menu-check{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:3px;border:1.5px solid var(--border2);background:#fff;color:#fff;flex-shrink:0;}
 .lv-h-menu-check.on{background:var(--accent);border-color:var(--accent);}
 .lv-h-filter-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:2px;display:inline-block;}
+
+/* Source-of-truth badge sitting between the column label and the
+   caret. Tiny — must stay subtle so it's recognisable without
+   stealing focus from the label. Vimeo uses brand blue; AI uses
+   the accent gradient so reps mentally bucket "Claude touched this." */
+.lv-h-source{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:3px;flex-shrink:0;opacity:.65;transition:opacity .12s;}
+.lv-h-btn:hover .lv-h-source{opacity:1;}
+.lv-h-source-vimeo{color:#1ab7ea;}
+.lv-h-source-ai{color:var(--accent);}
 .lv-h-menu-clear{padding:7px 10px;border-radius:5px;cursor:pointer;font-size:11.5px;color:var(--accent);font-weight:600;text-align:center;border-top:1px solid var(--border);margin-top:4px;}
 .lv-h-menu-clear:hover{background:var(--accentLL);}
 .lv-h-daterange{padding:8px 10px;display:flex;flex-direction:column;gap:6px;}
@@ -1061,6 +1070,11 @@ body.lv-is-dragging,body.lv-is-dragging *{user-select:none !important;-webkit-us
    anything custom per type beyond formatting. */
 .lv-customcell{display:flex;align-items:center;min-width:0;}
 .lv-customcell-text{font-size:13px;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* Pull-quote cells are click-to-copy. The cursor + subtle hover
+   shift telegraphs the interaction without redrawing the cell. */
+.lv-customcell-copyable{cursor:copy;border-radius:5px;padding:2px 6px;margin:-2px -6px;transition:background .12s;}
+.lv-customcell-copyable:hover{background:color-mix(in srgb, var(--accent) 8%, transparent);}
+.lv-customcell-copyable:active{background:color-mix(in srgb, var(--accent) 14%, transparent);}
 .lv-customcell-empty{font-size:13px;color:var(--t4);}
 .lv-hidden-restore{background:none;border:none;color:var(--accent);font-family:var(--font);font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:4px;cursor:pointer;}
 .lv-hidden-restore:hover{background:var(--accentLL);}
@@ -2564,6 +2578,9 @@ interface ListViewProps {
   // Open the per-asset feedback modal — surfaced when an admin
   // clicks a Feedback cell.
   onShowFeedback?: (assetId: string) => void;
+  // Toast bridge — used by click-to-copy cells (pull quotes) so the
+  // child component doesn't have to own its own toast state.
+  onToast?: (msg: string) => void;
   // Whether the current viewer can perform management actions
   // (edit / archive / delete / multi-select). False for sales reps
   // and for admins in "Preview as sales rep" mode. Defaults to true
@@ -3917,7 +3934,7 @@ function resolveColumnByKey(key: string, fieldDefs: FieldDef[] | undefined): Lis
   return null;
 }
 
-function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, canManage = true, orgDefaults, onLayoutChange, previewMode = false }: ListViewProps) {
+function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetPublicationStatus, onSetClientStatus, onSetApproval, onMarkVerified, onSetFreshnessException, onSetCustomFlags, onResetStatusIndicators, onDelete, onCopyShareLink, onRate, onSortChange, sortBy, visibilityQuickFilter, onVisibilityQuickFilter, statusQuickFilter, onStatusQuickFilter, dateRangeFilter, onDateRangeFilter, fieldDefs, onOpenFieldsPanel, onReorderRows, orgSettings, knownCustomTags, feedbackByAsset, onShowFeedback, onToast, canManage = true, orgDefaults, onLayoutChange, previewMode = false }: ListViewProps) {
   const [openClearedFor, setOpenClearedFor] = useState<string | null>(null);
 
   // Per-column state. All three persist to localStorage so admins
@@ -4196,7 +4213,7 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
     // action icons, etc. Those have their own behavior and we
     // don't want a drag to swallow them.
     const target = e.target as HTMLElement;
-    if (target.closest("button, select, input, a, [role='switch'], .lv-pub-select, .dots-pop")) return;
+    if (target.closest("button, select, input, a, [role='switch'], .lv-pub-select, .dots-pop, .lv-customcell-copyable")) return;
     if (!onReorderRows) return;
     const rowEl = rowElsRef.current.get(assetId);
     if (!rowEl) return;
@@ -4398,7 +4415,38 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 }}
                 title="Click for sort, filter, and column options · drag to reorder"
               >
-                <span>{col.label}</span>
+                <span className="lv-h-label">{col.label}</span>
+                {/* Source-of-truth badge. Tells admins at a glance
+                    where this field's values come from — Vimeo (synced
+                    on every source pull, locked schema), AI (filled
+                    from transcripts via /api/extract-metadata), or
+                    blank for manual entry. Driven by col.def.populator
+                    which only exists on field-kind columns; built-in
+                    system columns (thumb, title, vis, status, date)
+                    don't render a badge. */}
+                {col.kind === "field" && col.def?.populator === "vimeo" && (
+                  <span
+                    className="lv-h-source lv-h-source-vimeo"
+                    title="Synced from Vimeo on every source sync"
+                    aria-label="Vimeo-synced field"
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M23.97 6.62c-.1 2.18-1.63 5.17-4.58 8.97C16.34 19.55 13.77 21.5 11.7 21.5c-1.28 0-2.37-1.18-3.26-3.54L6.7 11.46c-.66-2.36-1.37-3.54-2.13-3.54-.16 0-.74.34-1.74 1.02L1.78 7.6c1.1-.96 2.18-1.93 3.25-2.9 1.47-1.26 2.57-1.92 3.31-1.99 1.74-.16 2.81 1.02 3.21 3.55.43 2.74.73 4.44.9 5.1.51 2.31 1.07 3.46 1.68 3.46.47 0 1.18-.74 2.13-2.22.94-1.48 1.45-2.6 1.52-3.38.14-1.36-.39-2.05-1.58-2.05-.56 0-1.14.13-1.73.39 1.16-3.79 3.36-5.62 6.61-5.5 2.41.07 3.54 1.62 3.4 4.66z"/>
+                    </svg>
+                  </span>
+                )}
+                {col.kind === "field" && col.def?.populator === "ai" && (
+                  <span
+                    className="lv-h-source lv-h-source-ai"
+                    title="AI-populated — filled from the transcript by Claude on import"
+                    aria-label="AI-populated field"
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 2l1.7 5.3L19 9l-5.3 1.7L12 16l-1.7-5.3L5 9l5.3-1.7z"/>
+                      <path d="M19 14l.7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7z"/>
+                    </svg>
+                  </span>
+                )}
                 {filterActive && <span className="lv-h-filter-dot" aria-hidden="true"/>}
                 <svg className="lv-h-caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="6 9 12 15 18 9"/>
@@ -4929,8 +4977,25 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
                 const raw = def.system
                   ? (a as unknown as Record<string, unknown>)[def.key]
                   : (a.customFieldValues || {})[def.key];
+                // Pull quote is special-cased: clicking the cell
+                // copies the verbatim quote and flashes a toast so
+                // reps don't have to open the asset edit panel just
+                // to grab a quote for outreach.
+                const isPullQuote = def.key === "pull_quote";
+                const handleCopy = isPullQuote && typeof raw === "string" && raw.trim()
+                  ? (e: React.MouseEvent) => {
+                      e.stopPropagation();
+                      try { navigator.clipboard?.writeText(raw); } catch { /* ignore */ }
+                      onToast?.("Quote copied");
+                    }
+                  : undefined;
                 return (
-                  <div key={col.key} className="lv-customcell">
+                  <div
+                    key={col.key}
+                    className={`lv-customcell${handleCopy ? " lv-customcell-copyable" : ""}`}
+                    onClick={handleCopy}
+                    title={handleCopy ? "Click to copy quote" : undefined}
+                  >
                     <CustomFieldCell def={def} value={raw}/>
                   </div>
                 );
@@ -4953,28 +5018,38 @@ function ListView({ assets, selectedIds, onToggleSelect, onClick, onEdit, onSetP
 // — edits go through the asset edit panel. Picks a sensible default
 // representation per FieldDef type so the table stays scannable.
 function CustomFieldCell({ def, value }: { def: FieldDef; value: unknown }) {
+  // Render the cell's display string AND set it as a native title
+  // attribute on the same span. Cells are truncated with ellipsis via
+  // CSS — the title is the only escape hatch to see the full value
+  // without opening the asset detail panel. Browsers debounce the
+  // tooltip so it doesn't interrupt non-truncated hovers; the cost
+  // of always-setting is negligible.
   if (value == null || value === "") return <span className="lv-customcell-empty">—</span>;
   if (def.type === "multi_select") {
     const arr = Array.isArray(value) ? (value as unknown[]).filter(x => typeof x === "string") as string[] : [];
     if (arr.length === 0) return <span className="lv-customcell-empty">—</span>;
-    return <span className="lv-customcell-text">{arr.join(", ")}</span>;
+    const joined = arr.join(", ");
+    return <span className="lv-customcell-text" title={joined}>{joined}</span>;
   }
   if (def.type === "date") {
     const s = typeof value === "string" ? value : "";
     if (!s) return <span className="lv-customcell-empty">—</span>;
     try {
       const d = new Date(s);
-      if (Number.isNaN(d.getTime())) return <span className="lv-customcell-text">{s}</span>;
-      return <span className="lv-customcell-text">{d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>;
-    } catch { return <span className="lv-customcell-text">{s}</span>; }
+      if (Number.isNaN(d.getTime())) return <span className="lv-customcell-text" title={s}>{s}</span>;
+      const formatted = d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      return <span className="lv-customcell-text" title={formatted}>{formatted}</span>;
+    } catch { return <span className="lv-customcell-text" title={s}>{s}</span>; }
   }
   if (def.type === "number") {
     const n = typeof value === "number" ? value : Number(value);
     if (!Number.isFinite(n)) return <span className="lv-customcell-empty">—</span>;
-    return <span className="lv-customcell-text">{n.toLocaleString()}</span>;
+    const formatted = n.toLocaleString();
+    return <span className="lv-customcell-text" title={formatted}>{formatted}</span>;
   }
   // text + select fall through to plain string display.
-  return <span className="lv-customcell-text">{String(value)}</span>;
+  const str = String(value);
+  return <span className="lv-customcell-text" title={str}>{str}</span>;
 }
 
 // Format a Vimeo duration (in seconds) as "MM:SS" or "H:MM:SS" for
@@ -9361,6 +9436,7 @@ export default function App(){
                   knownCustomTags={knownCustomTags}
                   feedbackByAsset={feedbackByAsset}
                   onShowFeedback={(id) => setFeedbackModalAssetId(id)}
+                  onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1500); }}
                   canManage={isAdmin && adminMode}
                   orgDefaults={orgSettings.defaultListView}
                   onLayoutChange={setCurrentListLayout}
