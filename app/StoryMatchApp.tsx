@@ -8972,7 +8972,12 @@ export default function App(){
             </aside>
           )}
 
-          {isAdmin && adminMode && adminSection && adminSection !== "insights" && (
+          {/* Admin panel — slides in alongside the main area for
+              sections whose UI is a 340px sidebar (import, rules,
+              etc). Insights and Showcases render in the main-area
+              instead, so they're excluded here — otherwise an empty
+              340px panel would appear next to the main-area view. */}
+          {isAdmin && adminMode && adminSection && adminSection !== "insights" && adminSection !== "showcases" && (
             <aside className="admin-panel">
               {adminSection==="import" && (
                 <SourcesPanel
