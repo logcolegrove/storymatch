@@ -18,7 +18,9 @@
 // The renderer stays a 5-line iteration regardless of how many
 // blocks exist.
 
-import { useEffect, useState } from "react";
+// (useState/useEffect previously powered the inline QuoteRotator
+// implementation — replaced by FeaturedQuoteRotator which owns its
+// own state. No top-level hooks needed here anymore.)
 import type {
   TemplateBlock,
   Template,
@@ -29,6 +31,7 @@ import type {
   DividerBlockProps,
   FooterBlockProps,
 } from "@/lib/showcase-templates";
+import FeaturedQuoteRotator, { type FeaturedQuote } from "./FeaturedQuoteRotator";
 
 // ── Shared types ──────────────────────────────────────────────────
 
@@ -70,6 +73,12 @@ export interface ShowcaseContext {
   // Public showcase renders never pass this so visitors don't see
   // the overlay. Receives the block index in template.blocks.
   onEditBlock?: (blockIdx: number) => void;
+  // Admin-only "Manage content" shortcut. When set, the asset-grid
+  // block gets a SECOND hover button (alongside Edit) that opens
+  // the asset list + picker view. Only asset-grid blocks render
+  // this because they're the only block whose content lives in
+  // showcase.assetIds rather than in the block's own props.
+  onManageContent?: () => void;
 }
 
 export interface ShowcaseRenderAsset {
@@ -267,54 +276,48 @@ function formatDuration(secs: number): string {
 }
 
 // ── QuoteRotatorBlock ─────────────────────────────────────────────
-// Pulls each asset's pull_quote into a rotating band. Auto-advances
-// every N seconds with a cross-fade. No nav controls in v1 — a
-// quieter, ambient version of the bigger FeaturedQuoteRotator. The
-// data source defaults to the showcase's own assets so the rotator
-// always reflects the curated selection.
+// Reuses the FeaturedQuoteRotator from the library hero — same two-
+// column pastel-wash treatment we polished extensively. Mapping
+// from ShowcaseRenderAsset → FeaturedQuote covers what's available;
+// fields we don't have (washToken, stars, static source) fall
+// through to the rotator's deterministic defaults.
 function QuoteRotatorBlock({ props, ctx }: BlockProps<QuoteRotatorBlockProps>) {
-  const intervalMs = Math.max(2000, (props.intervalSec ?? 6) * 1000);
-  const size = props.size || "full";
-  // Filter to assets that actually have a pull quote — silent
-  // assets shouldn't take a turn in the rotation.
-  const quotes = ctx.assets
+  const intervalSec = Math.max(2, props.intervalSec ?? 6);
+  // Filter to assets with a real pull_quote — assets with no quote
+  // shouldn't take a turn in the rotation. Then project to the
+  // FeaturedQuote shape the rotator expects.
+  const quotes: FeaturedQuote[] = ctx.assets
     .filter(a => a.pull_quote && a.pull_quote.trim().length > 0)
-    .map(a => ({ id: a.id, text: a.pull_quote, attr: a.client_name, org: a.company }));
-
-  const [idx, setIdx] = useState(0);
-  const [fadingOut, setFadingOut] = useState(false);
-
-  useEffect(() => {
-    if (quotes.length <= 1) return;
-    const t = setInterval(() => {
-      setFadingOut(true);
-      window.setTimeout(() => {
-        setIdx(prev => (prev + 1) % quotes.length);
-        setFadingOut(false);
-      }, 400);
-    }, intervalMs);
-    return () => clearInterval(t);
-  }, [intervalMs, quotes.length]);
+    .map(a => ({
+      id: a.id,
+      text: a.pull_quote,
+      attrName: a.client_name || null,
+      attrTitle: null,
+      attrOrg: a.company || null,
+      initialsOverride: null,
+      // Video testimonials get the "video" CTA shape; everything
+      // else falls into "case" (case-study link). The rotator's
+      // CTA click is forwarded back to the showcase via onAssetClick
+      // so we can open the in-builder preview / public asset page.
+      kind: a.asset_type === "Video Testimonial" ? "video" : "case",
+      assetId: a.id,
+      assetVideoUrl: null,
+      assetHeadline: a.headline || null,
+      staticSource: null,
+      staticUrl: null,
+      stars: null,
+      washToken: null,
+    }));
 
   if (quotes.length === 0) return null;
-  const q = quotes[Math.min(idx, quotes.length - 1)];
+
   return (
-    <section className={`sr-rotator sr-rotator-${size}`}>
-      <div className={`sr-rotator-inner${fadingOut ? " fading" : ""}`}>
-        <div className="sr-rotator-mark">&ldquo;</div>
-        <blockquote className="sr-rotator-text">{q.text}</blockquote>
-        <div className="sr-rotator-attr">
-          {q.attr && <span className="sr-rotator-attr-name">{q.attr}</span>}
-          {q.org && <span className="sr-rotator-attr-org">{q.org}</span>}
-        </div>
-      </div>
-      {quotes.length > 1 && (
-        <div className="sr-rotator-dots">
-          {quotes.map((_, i) => (
-            <span key={i} className={`sr-rotator-dot${i === idx ? " on" : ""}`}/>
-          ))}
-        </div>
-      )}
+    <section className={`sr-rotator-wrap sr-rotator-${props.size || "full"}`}>
+      <FeaturedQuoteRotator
+        quotes={quotes}
+        intervalSec={intervalSec}
+        onCtaClick={(q) => { if (q.assetId) ctx.onAssetClick(q.assetId); }}
+      />
     </section>
   );
 }
@@ -390,19 +393,43 @@ export default function ShowcaseRenderer({ template, context }: Props) {
         return (
           <div key={`edit-${i}`} className="sr-edit-wrap">
             {rendered}
-            <button
-              type="button"
-              className="sr-edit-btn"
-              onClick={(e) => { e.stopPropagation(); context.onEditBlock?.(i); }}
-              title={`Edit ${blockTypeLabel(b.type)} settings`}
-              aria-label={`Edit ${blockTypeLabel(b.type)} block`}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 20h9"/>
-                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-              </svg>
-              Edit {blockTypeLabel(b.type)}
-            </button>
+            <div className="sr-edit-actions">
+              {/* Asset-grid blocks get a "Manage content" shortcut
+                  next to Edit because the grid's CONTENT (which
+                  assets it shows) lives outside the block's props
+                  — opening Edit would only get you to columns +
+                  aspect, not the asset list itself. */}
+              {b.type === "asset-grid" && context.onManageContent && (
+                <button
+                  type="button"
+                  className="sr-edit-btn"
+                  onClick={(e) => { e.stopPropagation(); context.onManageContent?.(); }}
+                  title="Add, remove, or reorder the assets in this showcase"
+                  aria-label="Manage showcase content"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="7" height="7" rx="1"/>
+                    <rect x="14" y="3" width="7" height="7" rx="1"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1"/>
+                    <rect x="14" y="14" width="7" height="7" rx="1"/>
+                  </svg>
+                  Manage content
+                </button>
+              )}
+              <button
+                type="button"
+                className="sr-edit-btn"
+                onClick={(e) => { e.stopPropagation(); context.onEditBlock?.(i); }}
+                title={`Edit ${blockTypeLabel(b.type)} settings`}
+                aria-label={`Edit ${blockTypeLabel(b.type)} block`}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 20h9"/>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                </svg>
+                Edit {blockTypeLabel(b.type)}
+              </button>
+            </div>
           </div>
         );
       })}
@@ -438,7 +465,8 @@ const css = `
 .sr-edit-wrap{position:relative;}
 .sr-edit-wrap::after{content:"";position:absolute;inset:0;border:2px dashed transparent;border-radius:8px;pointer-events:none;transition:border-color .12s;}
 .sr-edit-wrap:hover::after{border-color:color-mix(in srgb, var(--accent) 55%, transparent);}
-.sr-edit-btn{position:absolute;top:10px;right:10px;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;background:#1c1c1c;color:#fff;border:none;border-radius:7px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;opacity:0;transform:translateY(-2px);transition:opacity .15s, transform .15s, background .15s;z-index:5;box-shadow:0 6px 18px rgba(0,0,0,.22);}
+.sr-edit-actions{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;}
+.sr-edit-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;background:#1c1c1c;color:#fff;border:none;border-radius:7px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;opacity:0;transform:translateY(-2px);transition:opacity .15s, transform .15s, background .15s;box-shadow:0 6px 18px rgba(0,0,0,.22);}
 .sr-edit-wrap:hover .sr-edit-btn{opacity:1;transform:translateY(0);}
 .sr-edit-btn:hover{background:var(--accent);}
 
@@ -487,22 +515,12 @@ const css = `
 
 .sr-empty{max-width:560px;margin:64px auto;padding:48px 24px;text-align:center;color:var(--t3);font-size:14px;background:#fff;border:1px dashed var(--border2);border-radius:14px;}
 
-/* Quote rotator */
-.sr-rotator{max-width:900px;margin:32px auto;padding:0 32px;}
-.sr-rotator-compact{max-width:680px;}
-.sr-rotator-inner{background:linear-gradient(135deg, #f5efe2, #ebe6ef);border-radius:18px;padding:48px 56px;position:relative;transition:opacity .4s ease;}
-.sr-rotator-inner.fading{opacity:0;}
-.sr-rotator-compact .sr-rotator-inner{padding:32px 36px;}
-.sr-rotator-mark{position:absolute;top:18px;left:36px;font-family:var(--serif);font-size:80px;line-height:1;color:rgba(110,40,217,.18);user-select:none;}
-.sr-rotator-text{font-family:var(--serif);font-size:24px;font-weight:500;font-style:italic;line-height:1.4;color:var(--t1);margin:0;padding-left:8px;}
-.sr-rotator-compact .sr-rotator-text{font-size:19px;}
-.sr-rotator-attr{margin-top:18px;display:flex;gap:10px;align-items:center;font-size:13px;color:var(--t3);padding-left:8px;}
-.sr-rotator-attr-name{font-weight:600;color:var(--t2);}
-.sr-rotator-attr-org{color:var(--t3);}
-.sr-rotator-attr-org::before{content:"·";margin-right:8px;color:var(--t4);}
-.sr-rotator-dots{display:flex;justify-content:center;gap:6px;margin-top:18px;}
-.sr-rotator-dot{width:6px;height:6px;border-radius:50%;background:var(--border2);transition:background .2s;}
-.sr-rotator-dot.on{background:var(--accent);}
+/* Quote rotator wrapper — the rotator itself owns its visual
+   treatment (FeaturedQuoteRotator self-contained styles). The
+   wrapper just constrains width to align with the rest of the
+   page and applies the size variant. */
+.sr-rotator-wrap{max-width:1100px;margin:32px auto;padding:0 32px;}
+.sr-rotator-compact{max-width:760px;}
 
 /* Intro text */
 .sr-intro{max-width:760px;margin:0 auto;padding:8px 32px 24px;font-family:var(--font);}
@@ -529,8 +547,6 @@ const css = `
   .sr-grid{padding:0 20px 32px;gap:16px;}
   .sr-grid-cols-2{grid-template-columns:1fr;}
   .sr-grid-cols-3,.sr-grid-cols-4{grid-template-columns:1fr;}
-  .sr-rotator-inner{padding:32px 28px;}
-  .sr-rotator-text{font-size:18px;}
-  .sr-rotator-mark{font-size:60px;left:20px;top:10px;}
+  .sr-rotator-wrap{padding:0 16px;}
 }
 `;

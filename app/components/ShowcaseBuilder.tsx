@@ -112,6 +112,12 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
   // owned inside LayoutPanel) so the preview-side hover-edit overlay
   // can open the Layout panel pre-focused on a specific block.
   const [layoutDrillIdx, setLayoutDrillIdx] = useState<number | null>(null);
+  // Content panel view. "default" shows just Title + Description with
+  // a "Manage content →" button. "manage-assets" drills into the
+  // asset list + picker. Hoisted so the preview-side overlay button
+  // can pre-drill it when the admin clicks "Manage content" on the
+  // asset grid block.
+  const [contentView, setContentView] = useState<"default" | "manage-assets">("default");
 
   // Holds the most recently saved showcase response so closeWithLatest()
   // can hand it back to the parent. Without this, the parent's
@@ -522,6 +528,8 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                   draft={draft}
                   setDraft={setDraft}
                   assets={assets}
+                  view={contentView}
+                  onSetView={setContentView}
                 />
               )}
               {activeCategory === "layout" && (
@@ -533,12 +541,16 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                   onSelectTemplate={(id) => {
                     // Picking a template clones its blocks into
                     // templateConfig (fork-from-template). Resets
-                    // any prior per-block customizations.
+                    // any prior per-block customizations + drops
+                    // out of any active drill — the previous block
+                    // index might not even map to a valid block in
+                    // the new template's shape.
                     setDraft(d => ({
                       ...d,
                       templateId: id,
                       templateConfig: cloneTemplateBlocks(id),
                     }));
+                    setLayoutDrillIdx(null);
                   }}
                   onUpdateBlock={(idx, newProps) => {
                     // Per-block prop edit. If templateConfig is
@@ -615,6 +627,13 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                 onEditBlock: (idx) => {
                   setActiveCategory("layout");
                   setLayoutDrillIdx(idx);
+                },
+                // Asset-grid overlay's "Manage content" button. Opens
+                // the Content category pre-drilled into the asset
+                // list + picker view.
+                onManageContent: () => {
+                  setActiveCategory("content");
+                  setContentView("manage-assets");
                 },
                 onAssetReorderBegin: beginAssetReorder,
                 // Project our internal drag state to the renderer's
@@ -706,10 +725,16 @@ function BuilderAssetPreview({ asset }: { asset: ShowcaseAssetRef }) {
 }
 
 // ─── Content panel ───────────────────────────────────────────────
-function ContentPanel({ draft, setDraft, assets }: {
+function ContentPanel({ draft, setDraft, assets, view, onSetView }: {
   draft: ShowcaseDraft;
   setDraft: React.Dispatch<React.SetStateAction<ShowcaseDraft>>;
   assets: ShowcaseAssetRef[];
+  // Two-level navigation. "default" shows just Title + Description
+  // plus a "Manage content →" button. "manage-assets" drills into
+  // the in-showcase list + available-asset picker. The split keeps
+  // the panel feeling lightweight on first open.
+  view: "default" | "manage-assets";
+  onSetView: (next: "default" | "manage-assets") => void;
 }) {
   const [search, setSearch] = useState("");
   const assetMap = useMemo(() => {
@@ -749,35 +774,77 @@ function ContentPanel({ draft, setDraft, assets }: {
     });
   };
 
+  // Default view: just Title + Description + a CTA into manage-assets.
+  // Keeps the panel feeling lightweight on first open instead of
+  // surfacing the long asset picker as the immediate UI.
+  if (view === "default") {
+    return (
+      <div className="sb-content">
+        <section className="sb-section">
+          <label className="sb-field">
+            <span>Title</span>
+            <input
+              type="text"
+              value={draft.name === "Untitled showcase" ? "" : draft.name}
+              onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+              placeholder="Name this showcase…"
+              maxLength={200}
+              autoFocus
+            />
+          </label>
+          <label className="sb-field">
+            <span>Description <em>(optional)</em></span>
+            <textarea
+              value={draft.description || ""}
+              onChange={e => setDraft(d => ({ ...d, description: e.target.value || null }))}
+              placeholder="A short intro shown at the top of the public page."
+              rows={3}
+            />
+          </label>
+        </section>
+        {/* Manage content CTA — drills into the asset list + picker.
+            Same destination the preview-side "Manage content" overlay
+            button uses. */}
+        <button
+          type="button"
+          className="sb-manage-cta"
+          onClick={() => onSetView("manage-assets")}
+        >
+          <span className="sb-manage-cta-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+          </span>
+          <div className="sb-manage-cta-body">
+            <div className="sb-manage-cta-h">Manage content</div>
+            <div className="sb-manage-cta-sub">
+              {draft.assetIds.length === 0
+                ? "Add the assets you want in this showcase."
+                : `${draft.assetIds.length} asset${draft.assetIds.length === 1 ? "" : "s"} — add, remove, or reorder.`}
+            </div>
+          </div>
+          <svg className="sb-manage-cta-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
+  // manage-assets drill view: the original list + picker with a Back
+  // affordance up top.
   return (
     <div className="sb-content">
-      {/* Title + description sit at the top of the Content panel so
-          renaming feels like a deliberate edit. The old top-bar
-          inline title was easy to miss — admins thought the showcase
-          was stuck on "Untitled showcase" because the field didn't
-          look like a field. Labels + a real input solve that. */}
-      <section className="sb-section">
-        <label className="sb-field">
-          <span>Title</span>
-          <input
-            type="text"
-            value={draft.name === "Untitled showcase" ? "" : draft.name}
-            onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-            placeholder="Name this showcase…"
-            maxLength={200}
-            autoFocus
-          />
-        </label>
-        <label className="sb-field">
-          <span>Description <em>(optional)</em></span>
-          <textarea
-            value={draft.description || ""}
-            onChange={e => setDraft(d => ({ ...d, description: e.target.value || null }))}
-            placeholder="A short intro shown at the top of the public page."
-            rows={3}
-          />
-        </label>
-      </section>
+      <button type="button" className="sb-drill-back" onClick={() => onSetView("default")}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="19" y1="12" x2="5" y2="12"/>
+          <polyline points="12 19 5 12 12 5"/>
+        </svg>
+        Back to content
+      </button>
 
       <section className="sb-section">
         <header className="sb-section-head">
@@ -907,10 +974,11 @@ function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, onS
   // open. State is here (not the parent) because it's purely a
   // local UI affordance — the parent only needs the result.
   const [claudeOpen, setClaudeOpen] = useState(false);
-  // Switching templates pops back to the top-level block list —
-  // the previous drill index might not even map to a valid block
-  // in the new template's shape.
-  useEffect(() => { setDrillIdx(null); }, [templateId, setDrillIdx]);
+  // (Template-change reset is handled in the parent's onSelectTemplate
+  // callback now. An effect tied to [templateId] also fires on initial
+  // mount, which races the preview-side hover-edit overlay that just
+  // set a specific drill index — caused the "click Edit, see top-level
+  // Layout, click again to drill" double-click bug.)
 
   // Tiny visual previews on the template picker. B4.0 dropped the
   // "Shared via StoryMatch" footer block from built-in templates,
@@ -1669,6 +1737,19 @@ const css = `
 .sb-claude-cta-h{font-size:13.5px;font-weight:600;color:var(--accent);}
 .sb-claude-cta-sub{font-size:11.5px;color:var(--t2);margin-top:2px;line-height:1.45;}
 .sb-claude-cta-chev{color:var(--accent);flex-shrink:0;}
+
+/* Manage content CTA — quieter than the Claude CTA (this is a
+   utility action, not a feature pitch). White card with a subtle
+   border that tints on hover. */
+.sb-manage-cta{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:#fff;color:var(--t1);font-family:var(--font);text-align:left;cursor:pointer;transition:border-color .12s,background .12s;}
+.sb-manage-cta:hover{border-color:var(--accent);background:color-mix(in srgb, var(--accent) 4%, transparent);}
+.sb-manage-cta-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:7px;background:var(--bg2);color:var(--t2);flex-shrink:0;}
+.sb-manage-cta:hover .sb-manage-cta-icon{background:var(--accent);color:#fff;}
+.sb-manage-cta-body{flex:1;min-width:0;}
+.sb-manage-cta-h{font-size:13.5px;font-weight:600;color:var(--t1);}
+.sb-manage-cta-sub{font-size:11.5px;color:var(--t3);margin-top:2px;line-height:1.45;}
+.sb-manage-cta-chev{color:var(--t4);flex-shrink:0;}
+.sb-manage-cta:hover .sb-manage-cta-chev{color:var(--accent);}
 
 /* Claude prompt sheet — slides over the Layout panel content.
    Same width as the panel so it feels like a sub-page, not a
