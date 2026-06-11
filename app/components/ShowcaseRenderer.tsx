@@ -529,7 +529,11 @@ export function applyFilters(
 function FiltersInlineBlock({ props, ctx }: BlockProps<FiltersInlineBlockProps>) {
   const showSort = props.showSort !== false;
   const showFilter = props.showFilter !== false;
-  const showSearch = props.showSearch !== false;
+  // Search defaults OFF — admins explicitly opt in. (Sort + Filter
+  // still default on; they're the affordances that matter for any
+  // showcase with more than a handful of assets.)
+  const showSearch = props.showSearch === true;
+  const align = props.align || "left";
   const categoryKeys = props.filterCategoryKeys || [];
   const sortOptions = props.sortOptions || ["recent", "az", "za"];
   const [openMenu, setOpenMenu] = useState<"sort" | "filter" | null>(null);
@@ -565,7 +569,7 @@ function FiltersInlineBlock({ props, ctx }: BlockProps<FiltersInlineBlockProps>)
   if (!showSort && !showFilter && !showSearch) return null;
 
   return (
-    <div className="sr-fin-wrap" ref={wrapRef}>
+    <div className={`sr-fin-wrap sr-fin-align-${align}`} ref={wrapRef}>
       {showFilter && categoryKeys.length > 0 && (
         <div className="sr-fin-pop-wrap">
           <button
@@ -917,8 +921,8 @@ function blockTypeLabel(type: TemplateBlock["type"]): string {
     case "intro-text": return "intro text";
     case "divider": return "divider";
     case "footer": return "footer";
-    case "filters-inline": return "filters";
-    case "filters-sticky": return "sticky filters";
+    case "filters-inline": return "filters bar";
+    case "filters-sticky": return "filter sidebar";
   }
 }
 
@@ -1053,6 +1057,9 @@ const css = `
    with a popover; Search is an icon-only button that expands inline
    to an input when clicked. */
 .sr-fin-wrap{max-width:1100px;margin:0 auto;padding:0 32px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:relative;}
+.sr-fin-align-left{justify-content:flex-start;}
+.sr-fin-align-center{justify-content:center;}
+.sr-fin-align-right{justify-content:flex-end;}
 .sr-fin-pop-wrap{position:relative;}
 .sr-fin-filter{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--border);background:#fff;border-radius:7px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--t2);cursor:pointer;transition:all .12s;}
 .sr-fin-filter:hover{border-color:var(--border2);color:var(--t1);}

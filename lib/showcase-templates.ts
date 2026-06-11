@@ -114,7 +114,13 @@ export type FilterCategoryKey = string;
 export interface FiltersInlineBlockProps {
   showSort?: boolean;
   showFilter?: boolean;
+  // Search defaults OFF (admins explicitly opt in) — the icon was
+  // proving noisy on most showcase layouts. Sort + Filter remain
+  // on by default.
   showSearch?: boolean;
+  // Horizontal placement of the bar within the asset-grid frame.
+  // Defaults to "left" so it reads as a tool bar rather than a hero.
+  align?: "left" | "center" | "right";
   // Which categories the Filter popover exposes. Empty = no filter
   // popover content (the button hides itself even when showFilter is
   // on). Admin opts in to specific categories from the settings panel.

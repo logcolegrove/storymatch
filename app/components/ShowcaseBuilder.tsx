@@ -1071,7 +1071,11 @@ function defaultBlockForType(type: TemplateBlock["type"]): TemplateBlock {
     // to categories from the settings panel. Showing Sort + Search
     // by default with empty category list still produces a useful
     // sort + search bar immediately.
-    case "filters-inline":  return { type: "filters-inline", props: { showSort: true, showFilter: true, showSearch: true, filterCategoryKeys: [], sortOptions: ["recent", "az", "za"] } };
+    // Filters bar defaults: Sort + Filter on, Search off (admin opts
+    // in), left-aligned. Category list starts empty — admin picks
+    // which fields to expose from the connected dropdown below the
+    // Filters toggle in the settings panel.
+    case "filters-inline":  return { type: "filters-inline", props: { showSort: true, showFilter: true, showSearch: false, align: "left", filterCategoryKeys: [], sortOptions: ["recent", "az", "za"] } };
     case "filters-sticky":  return { type: "filters-sticky", props: { heading: "FILTER BY", filterCategoryKeys: [], side: "left" } };
   }
 }
@@ -1079,8 +1083,8 @@ function defaultBlockForType(type: TemplateBlock["type"]): TemplateBlock {
 // Blocks the "Add block" picker exposes. Footer omitted (deprecated
 // in B4.0). Order matches what an admin probably reaches for most.
 const ADDABLE_BLOCK_TYPES: { type: TemplateBlock["type"]; label: string; help: string }[] = [
-  { type: "filters-inline", label: "Filters bar",     help: "Subtle Sort + Filter + Search trio that sits above your grid." },
-  { type: "filters-sticky", label: "Sticky filters",  help: "Vertical filter sidebar that follows the viewer as they scroll." },
+  { type: "filters-inline", label: "Filters bar",     help: "Subtle Sort + Filter + Search trio above your grid. Matches the master library lib-bar." },
+  { type: "filters-sticky", label: "Filter sidebar",  help: "Asana-style vertical accordion that pins to the side of the viewport as viewers scroll." },
   { type: "quote-rotator",  label: "Quote rotator",   help: "Rotates each asset's pull quote with auto-advance." },
   { type: "intro-text",     label: "Intro text",      help: "A short paragraph above or between sections." },
   { type: "asset-grid",     label: "Asset grid",      help: "A grid of testimonial cards. (Adds a second grid.)" },
@@ -1391,7 +1395,7 @@ function blockLabel(type: TemplateBlock["type"]): string {
     case "divider": return "Divider";
     case "footer": return "Footer";
     case "filters-inline": return "Filters bar";
-    case "filters-sticky": return "Sticky filters";
+    case "filters-sticky": return "Filter sidebar";
   }
 }
 function blockSummary(b: TemplateBlock): string {
@@ -1618,51 +1622,66 @@ function FooterSettings({ props, onChange }: { props: FooterBlockProps; onChange
   );
 }
 
-// ─── Filter settings (shared category picker) ────────────────────
-// Both filter elements share a "which categories show?" picker —
-// keep it as a single sub-component so the two settings panels stay
-// thin. Field defs come in as the pool of choices; admin opts in
-// per-field with a checkbox row.
-function FilterCategoryPicker({ value, onChange, fieldDefs }: {
+// ─── Filter category picker (shared) ─────────────────────────────
+// Renders as a connected dropdown panel that sits visually attached
+// to the toggle row above it. Closed by default — admins click the
+// "Choose categories" row to expand. This is what makes the
+// "categories required for Filters to do anything" dependency
+// obvious — when Filters is on but no categories are picked, the
+// admin sees the picker right there, glowing like a follow-up step.
+function FilterCategoryDropdown({ value, onChange, fieldDefs, label, helpWhenEmpty }: {
   value: string[];
   onChange: (next: string[]) => void;
   fieldDefs: ShowcaseFieldDef[];
+  label?: string;
+  helpWhenEmpty?: string;
 }) {
-  // Built-in keys not stored in field defs — admins can always
-  // opt these in regardless of what's defined in the schema.
+  const [open, setOpen] = useState(false);
+  // Built-in keys not stored in field defs — admins can always opt
+  // these in regardless of what's defined in the schema.
   const builtIns: { key: string; label: string }[] = [
     { key: "assetType", label: "Type (Video / Story)" },
   ];
-  // Filter field defs to only categorical-ish types — text fields
-  // make for noisy filters (one option per asset), so we cap to
-  // select / multi_select. Numbers + dates are out for v1.
   const eligible = fieldDefs.filter(d => d.type === "select" || d.type === "multi_select" || d.key === "vertical" || d.key === "company" || d.key === "geography" || d.key === "clientRole");
   const selected = new Set(value);
   const toggle = (k: string) => {
     if (selected.has(k)) onChange(value.filter(v => v !== k));
     else onChange([...value, k]);
   };
+  const count = value.length;
+  const headerLabel = label || "Choose categories";
   return (
-    <FieldLabel label="Filter categories">
-      <div className="sb-bs-cats">
-        {builtIns.map(b => (
-          <label key={b.key} className="sb-bs-cat-row">
-            <input type="checkbox" checked={selected.has(b.key)} onChange={() => toggle(b.key)}/>
-            <span>{b.label}</span>
-          </label>
-        ))}
-        {eligible.length === 0 ? (
-          <div className="sb-bs-cat-empty">No fields defined yet. Add fields in Manage fields to expose them as filters.</div>
-        ) : (
-          eligible.map(d => (
-            <label key={d.key} className="sb-bs-cat-row">
-              <input type="checkbox" checked={selected.has(d.key)} onChange={() => toggle(d.key)}/>
-              <span>{d.label}</span>
+    <div className={`sb-bs-fdd${open ? " open" : ""}${count === 0 ? " empty" : ""}`}>
+      <button type="button" className="sb-bs-fdd-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        <span className="sb-bs-fdd-h">{headerLabel}</span>
+        <span className="sb-bs-fdd-meta">
+          {count === 0 ? "Pick at least one" : `${count} selected`}
+          <svg className={`sb-bs-fdd-chev${open ? " open" : ""}`} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </span>
+      </button>
+      {open && (
+        <div className="sb-bs-fdd-body">
+          {builtIns.map(b => (
+            <label key={b.key} className="sb-bs-cat-row">
+              <input type="checkbox" checked={selected.has(b.key)} onChange={() => toggle(b.key)}/>
+              <span>{b.label}</span>
             </label>
-          ))
-        )}
-      </div>
-    </FieldLabel>
+          ))}
+          {eligible.length === 0 ? (
+            <div className="sb-bs-cat-empty">{helpWhenEmpty || "No filterable fields yet. Add fields in Manage fields."}</div>
+          ) : (
+            eligible.map(d => (
+              <label key={d.key} className="sb-bs-cat-row">
+                <input type="checkbox" checked={selected.has(d.key)} onChange={() => toggle(d.key)}/>
+                <span>{d.label}</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1671,29 +1690,51 @@ function FiltersInlineSettings({ props, onChange, fieldDefs }: {
   onChange: (p: Record<string, unknown>) => void;
   fieldDefs: ShowcaseFieldDef[];
 }) {
+  const showFilter = props.showFilter !== false;
   return (
     <div className="sb-bs">
-      <p className="sb-bs-hint">Three independent affordances — show any combination. Search expands inline when clicked.</p>
+      <p className="sb-bs-hint">Three independent affordances — show any combination. Search defaults off; turn it on when admins need it.</p>
       <Toggle
         label="Show Sort button"
         checked={props.showSort !== false}
         onChange={(v) => onChange({ showSort: v })}
       />
-      <Toggle
-        label="Show Filters button"
-        checked={props.showFilter !== false}
-        onChange={(v) => onChange({ showFilter: v })}
-      />
+      {/* Filters toggle + connected categories dropdown. Wrapped so
+          the dropdown reads visually as a follow-on step — same
+          card edge, no gap, slight indent when open. The whole
+          dropdown collapses when showFilter is off so there's no
+          orphaned UI. */}
+      <div className="sb-bs-fgroup">
+        <Toggle
+          label="Show Filters button"
+          checked={showFilter}
+          onChange={(v) => onChange({ showFilter: v })}
+        />
+        {showFilter && (
+          <FilterCategoryDropdown
+            value={props.filterCategoryKeys || []}
+            onChange={(next) => onChange({ filterCategoryKeys: next })}
+            fieldDefs={fieldDefs}
+            label="Categories viewers can filter by"
+          />
+        )}
+      </div>
       <Toggle
         label="Show Search icon"
-        checked={props.showSearch !== false}
+        checked={props.showSearch === true}
         onChange={(v) => onChange({ showSearch: v })}
       />
-      <FilterCategoryPicker
-        value={props.filterCategoryKeys || []}
-        onChange={(next) => onChange({ filterCategoryKeys: next })}
-        fieldDefs={fieldDefs}
-      />
+      <FieldLabel label="Bar alignment">
+        <RadioGroup
+          value={props.align || "left"}
+          options={[
+            { value: "left", label: "Left" },
+            { value: "center", label: "Center" },
+            { value: "right", label: "Right" },
+          ]}
+          onChange={(v) => onChange({ align: v })}
+        />
+      </FieldLabel>
     </div>
   );
 }
@@ -1705,7 +1746,7 @@ function FiltersStickySettings({ props, onChange, fieldDefs }: {
 }) {
   return (
     <div className="sb-bs">
-      <p className="sb-bs-hint">Vertical accordion sidebar — pins to one side of the viewport as viewers scroll.</p>
+      <p className="sb-bs-hint">Asana-style vertical sidebar — pins to one side of the viewport as viewers scroll. Each category collapses to a chevron row until expanded.</p>
       <FieldLabel label="Heading">
         <input
           type="text"
@@ -1715,17 +1756,18 @@ function FiltersStickySettings({ props, onChange, fieldDefs }: {
           placeholder="FILTER BY"
         />
       </FieldLabel>
-      <FieldLabel label="Anchor">
+      <FieldLabel label="Anchor side">
         <RadioGroup
           value={props.side || "left"}
           options={[{ value: "left", label: "Left" }, { value: "right", label: "Right" }]}
           onChange={(v) => onChange({ side: v })}
         />
       </FieldLabel>
-      <FilterCategoryPicker
+      <FilterCategoryDropdown
         value={props.filterCategoryKeys || []}
         onChange={(next) => onChange({ filterCategoryKeys: next })}
         fieldDefs={fieldDefs}
+        label="Categories shown in the sidebar"
       />
     </div>
   );
@@ -2038,13 +2080,31 @@ const css = `
 .sb-bs-switch-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.2);}
 .sb-bs-switch.on .sb-bs-switch-thumb{transform:translateX(16px);}
 .sb-bs-hint{font-size:11.5px;color:var(--t3);line-height:1.5;margin:-2px 0 0;}
-/* Filter category picker — list of checkboxes for the admin to
-   opt in to per-category filter exposure. */
 .sb-bs-text{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);}
 .sb-bs-text:focus{outline:none;border-color:var(--accent);}
-.sb-bs-cats{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);max-height:260px;overflow-y:auto;}
+/* Filters-toggle + category-dropdown group. The two sit in one
+   bordered card so admins read the dependency at a glance ("turn
+   on filters → pick categories"). When the toggle is off, the
+   dropdown unmounts so there's no orphaned UI. */
+.sb-bs-fgroup{display:flex;flex-direction:column;gap:0;border:1px solid var(--border);border-radius:9px;background:#fff;overflow:hidden;}
+.sb-bs-fgroup>.sb-bs-toggle{padding:10px 12px;}
+/* The category dropdown lives INSIDE the same card edge as the
+   toggle above. Top border only — bottom of the toggle row is the
+   top of the dropdown. */
+.sb-bs-fdd{border-top:1px solid var(--border);background:var(--bg);}
+/* Empty state pulses faintly so admins notice the follow-up step. */
+.sb-bs-fdd.empty:not(.open) .sb-bs-fdd-head{color:var(--accent);}
+.sb-bs-fdd.empty:not(.open){background:color-mix(in srgb, var(--accent) 4%, transparent);}
+.sb-bs-fdd-head{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:11px 12px;background:none;border:none;cursor:pointer;font-family:var(--font);text-align:left;}
+.sb-bs-fdd-head:hover{background:color-mix(in srgb, var(--accent) 6%, transparent);}
+.sb-bs-fdd-h{font-size:12.5px;font-weight:600;color:var(--t1);}
+.sb-bs-fdd-meta{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t3);font-weight:500;}
+.sb-bs-fdd.empty:not(.open) .sb-bs-fdd-meta{color:var(--accent);}
+.sb-bs-fdd-chev{transition:transform .15s ease;}
+.sb-bs-fdd-chev.open{transform:rotate(180deg);}
+.sb-bs-fdd-body{display:flex;flex-direction:column;gap:0;padding:4px 12px 10px 22px;border-top:1px solid var(--border);background:#fff;max-height:260px;overflow-y:auto;}
 .sb-bs-cat-row{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:12.5px;color:var(--t1);cursor:pointer;border-radius:4px;}
-.sb-bs-cat-row:hover{background:#fff;}
+.sb-bs-cat-row:hover{background:var(--bg);}
 .sb-bs-cat-row input{accent-color:var(--accent);}
 .sb-bs-cat-empty{font-size:11.5px;color:var(--t3);font-style:italic;padding:6px 4px;line-height:1.5;}
 .sb-coming-soon{padding:36px 24px;text-align:center;color:var(--t3);font-size:12.5px;line-height:1.55;background:var(--bg);border:1px dashed var(--border2);border-radius:10px;}
