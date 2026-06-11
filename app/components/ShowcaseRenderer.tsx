@@ -79,12 +79,31 @@ export interface ShowcaseContext {
   // this because they're the only block whose content lives in
   // showcase.assetIds rather than in the block's own props.
   onManageContent?: () => void;
+  // Block-level drag-reorder (admin preview only). The host owns
+  // the drag state + transitions; the renderer just applies the
+  // pointer-down handler to each block wrap and renders magic-shift
+  // transforms when a drag is engaged. Mirrors how onAssetReorder
+  // works for asset cards within the grid.
+  onBlockReorderBegin?: (blockIdx: number, e: React.PointerEvent) => void;
+  blockDrag?: {
+    fromIdx: number;
+    insertIdx: number;
+    pointerDx: number;
+    pointerDy: number;
+    rects: { left: number; top: number }[];
+    engaged: boolean;
+    source: "list" | "preview";
+  };
 }
 
 export interface ShowcaseRenderAsset {
   id: string;
   headline: string;
   pull_quote: string;
+  // Asset description — rendered below the title on grid cards when
+  // showDescription is on. Optional; empty string when the asset
+  // doesn't carry one.
+  description: string;
   client_name: string;
   company: string;
   thumbnail: string;
@@ -218,12 +237,17 @@ function AssetGridBlock({ props, ctx }: BlockProps<AssetGridBlockProps>) {
               </div>
             </div>
             <div className="sr-card-body">
-              {props.showCompany === true && (
-                <div className="sr-card-eyebrow">{a.company || a.client_name}</div>
-              )}
+              {/* Title always renders. Company + description default
+                  off and, when on, appear BELOW the title — eyebrow-
+                  above was distracting and not what admins expect.
+                  showQuote is deprecated; description replaces it
+                  as the secondary text option. */}
               <h3 className="sr-card-headline">{a.headline || "Customer story"}</h3>
-              {props.showQuote === true && a.pull_quote && (
-                <p className="sr-card-quote">&ldquo;{a.pull_quote}&rdquo;</p>
+              {props.showCompany === true && (a.company || a.client_name) && (
+                <div className="sr-card-co">{a.company || a.client_name}</div>
+              )}
+              {props.showDescription === true && a.description && (
+                <p className="sr-card-desc">{a.description}</p>
               )}
             </div>
           </>
@@ -379,20 +403,74 @@ interface Props {
 
 export default function ShowcaseRenderer({ template, context }: Props) {
   const editable = !!context.onEditBlock;
+  const drag = context.blockDrag && context.blockDrag.source === "preview" ? context.blockDrag : null;
   return (
     <div className="sr">
       <style>{css}</style>
       {template.blocks.map((b, i) => {
         const rendered = renderBlock(b, context, i);
         if (!editable) return rendered;
+        // Magic-shift drag transform for preview-side block drag.
+        // Dragged block follows the pointer; others translate from
+        // their old slot to their new slot. Same idiom the asset
+        // grid uses for card drag inside this same renderer.
+        let dragStyle: React.CSSProperties | undefined;
+        if (drag && drag.engaged) {
+          if (i === drag.fromIdx) {
+            dragStyle = {
+              transform: `translate(${drag.pointerDx}px, ${drag.pointerDy}px)`,
+              transition: "none",
+              zIndex: 10,
+              position: "relative",
+              pointerEvents: "none",
+            };
+          } else {
+            const newIdx = shiftFor(i, drag.fromIdx, drag.insertIdx);
+            if (newIdx !== i) {
+              const oldR = drag.rects[i];
+              const newR = drag.rects[newIdx];
+              if (oldR && newR) {
+                dragStyle = {
+                  transform: `translate(${newR.left - oldR.left}px, ${newR.top - oldR.top}px)`,
+                  transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)",
+                };
+              }
+            } else {
+              dragStyle = { transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)" };
+            }
+          }
+        }
         // Wrap each block in a hover-revealed "Edit block" overlay.
         // Visible only when context.onEditBlock is provided (i.e.
         // the builder preview path) — public showcase pages render
         // the block bare. Label uses the block-type label table so
         // admins know exactly what they'll be editing.
         return (
-          <div key={`edit-${i}`} className="sr-edit-wrap">
+          <div
+            key={`edit-${i}`}
+            className="sr-edit-wrap"
+            data-block-idx={i}
+            style={dragStyle}
+          >
             {rendered}
+            {/* Drag handle on the block — pointer-down here kicks
+                off the preview-side reorder. Floats top-left so it
+                doesn't collide with the Edit/Manage buttons at
+                top-right. Only visible on hover, same affordance
+                as the Edit buttons. */}
+            {context.onBlockReorderBegin && (
+              <span
+                className="sr-drag-handle"
+                title="Drag to reorder"
+                onPointerDown={(e) => { e.stopPropagation(); context.onBlockReorderBegin?.(i, e); }}
+              >
+                <svg width="12" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <circle cx="9" cy="5" r="1.6"/><circle cx="15" cy="5" r="1.6"/>
+                  <circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>
+                  <circle cx="9" cy="19" r="1.6"/><circle cx="15" cy="19" r="1.6"/>
+                </svg>
+              </span>
+            )}
             <div className="sr-edit-actions">
               {/* Asset-grid blocks get a "Manage content" shortcut
                   next to Edit because the grid's CONTENT (which
@@ -437,6 +515,18 @@ export default function ShowcaseRenderer({ template, context }: Props) {
   );
 }
 
+// Magic-rearrange shift function. Mirror of the helper in
+// ShowcaseBuilder so the renderer doesn't reach across files.
+function shiftFor(idx: number, fromIdx: number, insertIdx: number): number {
+  if (idx === fromIdx) return insertIdx;
+  if (fromIdx < insertIdx) {
+    if (idx > fromIdx && idx <= insertIdx) return idx - 1;
+  } else {
+    if (idx >= insertIdx && idx < fromIdx) return idx + 1;
+  }
+  return idx;
+}
+
 // Friendly labels for the edit overlay. Kept here (not imported) so
 // the renderer stays self-contained; matches the labels used in the
 // builder's block list.
@@ -466,6 +556,13 @@ const css = `
 .sr-edit-wrap::after{content:"";position:absolute;inset:0;border:2px dashed transparent;border-radius:8px;pointer-events:none;transition:border-color .12s;}
 .sr-edit-wrap:hover::after{border-color:color-mix(in srgb, var(--accent) 55%, transparent);}
 .sr-edit-actions{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;}
+/* Drag handle for preview-side block reorder. Top-LEFT so it
+   doesn't collide with the Edit buttons at top-right. Same fade-in
+   pattern as the Edit buttons. */
+.sr-drag-handle{position:absolute;top:12px;left:12px;display:grid;place-items:center;width:26px;height:26px;background:#1c1c1c;color:rgba(255,255,255,.92);border-radius:6px;cursor:grab;opacity:0;transform:translateY(-2px);transition:opacity .15s, transform .15s, background .15s;z-index:5;box-shadow:0 4px 12px rgba(0,0,0,.22);touch-action:none;}
+.sr-edit-wrap:hover .sr-drag-handle{opacity:1;transform:translateY(0);}
+.sr-drag-handle:hover{background:var(--accent);}
+.sr-drag-handle:active{cursor:grabbing;}
 .sr-edit-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;background:#1c1c1c;color:#fff;border:none;border-radius:7px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;opacity:0;transform:translateY(-2px);transition:opacity .15s, transform .15s, background .15s;box-shadow:0 6px 18px rgba(0,0,0,.22);}
 .sr-edit-wrap:hover .sr-edit-btn{opacity:1;transform:translateY(0);}
 .sr-edit-btn:hover{background:var(--accent);}
@@ -503,9 +600,12 @@ const css = `
    at glance-scale on every surface. */
 .sr-card-badge{position:absolute;bottom:8px;right:8px;background:rgba(20,20,28,.55);color:rgba(255,255,255,.94);font-size:10.5px;padding:3px 7px;border-radius:4px;font-weight:500;display:inline-flex;align-items:center;gap:4px;letter-spacing:.01em;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);font-family:var(--font);}
 .sr-card-body{padding:14px 4px 0;}
-.sr-card-eyebrow{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
 .sr-card-headline{font-size:17px;font-weight:600;letter-spacing:-.012em;color:var(--t1);margin:0;line-height:1.38;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
-.sr-card-quote{font-size:13px;color:var(--t2);margin:8px 0 0;line-height:1.5;font-style:italic;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+/* Company + description sit below the title when toggled on. The
+   company line is a quieter color (t3) so it reads as metadata
+   rather than competing with the headline. */
+.sr-card-co{font-size:12.5px;color:var(--t3);margin:5px 0 0;line-height:1.45;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sr-card-desc{font-size:13px;color:var(--t2);margin:8px 0 0;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 /* Drag-state styling — applied by the host when a card is being
    reordered. The dragged card dims; the rest stay normal. Live
    reorder visual feedback comes from the host repositioning the
@@ -521,6 +621,32 @@ const css = `
    page and applies the size variant. */
 .sr-rotator-wrap{max-width:1100px;margin:32px auto;padding:0 32px;}
 .sr-rotator-compact{max-width:760px;}
+/* The rotator's own narrow-layout media query keys on VIEWPORT
+   width — fine on the public showcase page (rotator gets a full
+   browser width) but breaks in the builder's narrow preview frame
+   where the viewport is still desktop-wide. Force the narrow
+   layout whenever the rotator's container itself is below 900px;
+   the @container query keeps it self-contained. */
+.sr-rotator-wrap{container-type:inline-size;}
+@container (max-width: 900px) {
+  .sr-rotator-wrap .fqr-hero{grid-template-columns:1fr;}
+  .sr-rotator-wrap .fqr-meta{border-left:none;border-top:1px solid var(--border);}
+  .sr-rotator-wrap .fqr-quote{padding:36px 30px;aspect-ratio:auto;}
+  .sr-rotator-wrap .fqr-glyph{font-size:96px;margin-right:18px;}
+  .sr-rotator-wrap .fqr-q-default .fqr-text{font-size:24px;}
+  .sr-rotator-wrap .fqr-q-medium .fqr-text{font-size:20px;}
+  .sr-rotator-wrap .fqr-q-long .fqr-text{font-size:17px;}
+}
+/* Extra-tight container (the builder preview at default rail state
+   sits around 500–620px). Shrink padding + type one more notch so
+   the quote doesn't overflow. */
+@container (max-width: 640px) {
+  .sr-rotator-wrap .fqr-quote{padding:28px 24px;}
+  .sr-rotator-wrap .fqr-glyph{font-size:72px;margin-right:12px;}
+  .sr-rotator-wrap .fqr-q-default .fqr-text{font-size:20px;}
+  .sr-rotator-wrap .fqr-q-medium .fqr-text{font-size:17px;}
+  .sr-rotator-wrap .fqr-q-long .fqr-text{font-size:15px;}
+}
 
 /* Intro text */
 .sr-intro{max-width:760px;margin:0 auto;padding:8px 32px 24px;font-family:var(--font);}

@@ -179,11 +179,11 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
       out.push({
         id: a.id,
         headline: a.headline,
-        // ShowcaseAssetRef carries pullQuote — pipe it through so
-        // the QuoteRotatorBlock (which filters out assets without
-        // a pull_quote) actually has rows to rotate. Without this
-        // the rotator silently renders nothing in the preview.
+        // ShowcaseAssetRef carries pullQuote + description — both
+        // pipe through so the quote rotator has text to rotate and
+        // the asset-grid block's showDescription toggle works.
         pull_quote: a.pullQuote || "",
+        description: a.description || "",
         client_name: a.clientName,
         company: a.company,
         thumbnail: a.thumbnail,
@@ -221,6 +221,110 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
   } | null>(null);
   const cardDragRef = React.useRef(cardDrag);
   cardDragRef.current = cardDrag;
+
+  // Block-level drag for reordering blocks inside templateConfig.
+  // Same shape as cardDrag but tracks "source" so both the left-rail
+  // block list and the right-side preview can animate consistently
+  // (the renderer/list both transform their rows based on the same
+  // fromIdx + insertIdx). Closest-centroid wins for the insert idx.
+  const [blockDrag, setBlockDrag] = useState<{
+    fromIdx: number;
+    insertIdx: number;
+    startX: number;
+    startY: number;
+    pointerX: number;
+    pointerY: number;
+    rects: { left: number; top: number; cx: number; cy: number }[];
+    engaged: boolean;
+    source: "list" | "preview";
+  } | null>(null);
+  const blockDragRef = React.useRef(blockDrag);
+  blockDragRef.current = blockDrag;
+
+  // Commit a block reorder to draft.templateConfig. Both drag
+  // surfaces call this on drop. Same fork-from-template dance as
+  // onUpdateBlock — if the admin hasn't customized yet, we clone
+  // the named template's blocks before splicing.
+  const reorderBlocks = (fromIdx: number, insertIdx: number) => {
+    if (fromIdx === insertIdx) return;
+    setDraft(d => {
+      const base = d.templateConfig ?? cloneTemplateBlocks(d.templateId);
+      const next = [...base];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(insertIdx, 0, moved);
+      return { ...d, templateConfig: next };
+    });
+  };
+
+  // Factory: returns a pointerdown handler bound to a specific index
+  // and source. The handler captures rects via `selector` so each
+  // surface measures its own layout (vertical list rows on the left,
+  // block bands on the right).
+  const beginBlockDrag = (idx: number, source: "list" | "preview", selector: string) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const els = Array.from(document.querySelectorAll<HTMLElement>(selector));
+    const rects = els.map(el => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+    });
+    if (rects.length === 0) return;
+    setBlockDrag({
+      fromIdx: idx,
+      insertIdx: idx,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      rects,
+      engaged: false,
+      source,
+    });
+    const onMove = (ev: PointerEvent) => {
+      const cur = blockDragRef.current;
+      if (!cur) return;
+      const dx = ev.clientX - cur.startX;
+      const dy = ev.clientY - cur.startY;
+      const engaged = cur.engaged || Math.hypot(dx, dy) >= 5;
+      // Closest-centroid wins. For the vertical list we only care
+      // about Y; for the preview we use Euclidean. Using the same
+      // formula in both is fine — vertical lists naturally pick
+      // the right row because horizontal deltas are ~0.
+      let best = cur.fromIdx;
+      let bestDist = Infinity;
+      for (let i = 0; i < cur.rects.length; i++) {
+        const d = Math.hypot(ev.clientX - cur.rects[i].cx, ev.clientY - cur.rects[i].cy);
+        if (d < bestDist) { bestDist = d; best = i; }
+      }
+      setBlockDrag({
+        ...cur,
+        pointerX: ev.clientX,
+        pointerY: ev.clientY,
+        insertIdx: engaged ? best : cur.fromIdx,
+        engaged,
+      });
+    };
+    const onUp = () => {
+      const cur = blockDragRef.current;
+      setBlockDrag(null);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (!cur) return;
+      // Suppress the synthetic click that follows pointerup so a
+      // drag doesn't also open the block's drill-in or focus the
+      // hover-edit button.
+      if (cur.engaged) {
+        dragJustEndedRef.current = true;
+        setTimeout(() => { dragJustEndedRef.current = false; }, 150);
+      }
+      if (cur.engaged && cur.insertIdx !== cur.fromIdx) {
+        reorderBlocks(cur.fromIdx, cur.insertIdx);
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
 
   const beginAssetReorder = (idx: number, e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -538,6 +642,8 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                   effectiveBlocks={template.blocks}
                   drillIdx={layoutDrillIdx}
                   onSetDrillIdx={setLayoutDrillIdx}
+                  blockDrag={blockDrag}
+                  onBlockDragBegin={(idx, e) => beginBlockDrag(idx, "list", ".sb-block-row[data-block-idx]")(e)}
                   onSelectTemplate={(id) => {
                     // Picking a template clones its blocks into
                     // templateConfig (fork-from-template). Resets
@@ -646,6 +752,23 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                   pointerDy: cardDrag.pointerY - cardDrag.startY,
                   rects: cardDrag.rects.map(r => ({ left: r.left, top: r.top })),
                   engaged: cardDrag.engaged,
+                } : undefined,
+                // Block-level drag-reorder in the preview surface.
+                // Same idiom — the handler is bound to the block
+                // index + selector for the preview wraps, and the
+                // drag state gets projected to the slim shape the
+                // renderer expects. `source: "preview"` lets the
+                // renderer guard against applying preview transforms
+                // when the drag started in the left-rail list.
+                onBlockReorderBegin: (idx, e) => beginBlockDrag(idx, "preview", ".sr-edit-wrap[data-block-idx]")(e),
+                blockDrag: blockDrag ? {
+                  fromIdx: blockDrag.fromIdx,
+                  insertIdx: blockDrag.insertIdx,
+                  pointerDx: blockDrag.pointerX - blockDrag.startX,
+                  pointerDy: blockDrag.pointerY - blockDrag.startY,
+                  rects: blockDrag.rects.map(r => ({ left: r.left, top: r.top })),
+                  engaged: blockDrag.engaged,
+                  source: blockDrag.source,
                 } : undefined,
               }}
             />
@@ -931,7 +1054,7 @@ function ContentPanel({ draft, setDraft, assets, view, onSetView }: {
 function defaultBlockForType(type: TemplateBlock["type"]): TemplateBlock {
   switch (type) {
     case "hero":          return { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "center", padding: "comfortable" } };
-    case "asset-grid":    return { type: "asset-grid", props: { columns: 3, showCompany: true, showQuote: true, aspect: "16/9", clickTarget: "modal" } };
+    case "asset-grid":    return { type: "asset-grid", props: { columns: 3, aspect: "16/9", clickTarget: "modal" } };
     case "quote-rotator": return { type: "quote-rotator", props: { source: "showcase-assets", intervalSec: 6, size: "full" } };
     case "intro-text":    return { type: "intro-text", props: { content: "Write an intro for this section.", align: "left" } };
     case "divider":       return { type: "divider", props: { spacing: "normal" } };
@@ -949,18 +1072,48 @@ const ADDABLE_BLOCK_TYPES: { type: TemplateBlock["type"]; label: string; help: s
   { type: "divider",       label: "Divider",       help: "A horizontal rule between sections." },
 ];
 
+// Magic-rearrange shift function. Given the static index of a row,
+// the index of the dragged row, and where it's being inserted,
+// returns the visual index that row should appear at — every row
+// between source and destination slides one slot to make room.
+// Same math both the renderer and the layout panel block list use.
+function shiftFor(idx: number, fromIdx: number, insertIdx: number): number {
+  if (idx === fromIdx) return insertIdx;
+  if (fromIdx < insertIdx) {
+    if (idx > fromIdx && idx <= insertIdx) return idx - 1;
+  } else {
+    if (idx >= insertIdx && idx < fromIdx) return idx + 1;
+  }
+  return idx;
+}
+
 // ─── Layout panel ────────────────────────────────────────────────
 // Two-level navigation. Top level shows the template picker + a
 // block list (one row per block in the effective template). Click
 // a block row to drill into its per-block settings; back arrow
 // returns. Mirrors the Vimeo Showcases / Elfsight pattern.
-function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, onSelectTemplate, onUpdateBlock, onAddBlock, onRemoveBlock, onGenerateWithClaude }: {
+function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, blockDrag, onBlockDragBegin, onSelectTemplate, onUpdateBlock, onAddBlock, onRemoveBlock, onGenerateWithClaude }: {
   templateId: string | null;
   effectiveBlocks: TemplateBlock[];
   // Drill-in index is now controlled from above so the preview-side
   // hover-edit overlay can open the panel pre-focused on a block.
   drillIdx: number | null;
   onSetDrillIdx: (idx: number | null) => void;
+  // Shared block-drag state from the parent. Drives magic-shift
+  // transforms on non-dragged rows + pointer-follow on the dragged
+  // row. Null when no drag is in flight.
+  blockDrag: {
+    fromIdx: number;
+    insertIdx: number;
+    startX: number;
+    startY: number;
+    pointerX: number;
+    pointerY: number;
+    rects: { left: number; top: number; cx: number; cy: number }[];
+    engaged: boolean;
+    source: "list" | "preview";
+  } | null;
+  onBlockDragBegin: (idx: number, e: React.PointerEvent) => void;
   onSelectTemplate: (id: string) => void;
   onUpdateBlock: (idx: number, props: Record<string, unknown>) => void;
   onAddBlock: (type: TemplateBlock["type"]) => void;
@@ -1083,42 +1236,90 @@ function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, onS
           <h3>Blocks</h3>
           <span className="sb-section-count">{effectiveBlocks.length}</span>
         </header>
-        <p className="sb-section-help">Each block has its own settings — click one to dive in.</p>
+        <p className="sb-section-help">Each block has its own settings — click one to dive in. Drag the handle to reorder.</p>
         <div className="sb-block-list">
-          {effectiveBlocks.map((b, i) => (
-            <button
-              key={i}
-              type="button"
-              className="sb-block-row"
-              onClick={() => setDrillIdx(i)}
-            >
-              <span className="sb-block-icon">{blockIcon(b.type)}</span>
-              <div className="sb-block-body">
-                <div className="sb-block-h">{blockLabel(b.type)}</div>
-                <div className="sb-block-sub">{blockSummary(b)}</div>
-              </div>
-              <span
-                role="button"
-                tabIndex={0}
-                className="sb-block-remove"
-                title="Remove this block"
-                aria-label="Remove block"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (typeof window !== "undefined" && !window.confirm(`Remove the ${blockLabel(b.type).toLowerCase()} block?`)) return;
-                  onRemoveBlock(i);
-                }}
+          {effectiveBlocks.map((b, i) => {
+            // Magic-shift transform: same pattern as the library
+            // card drag. Dragged row follows the pointer; others
+            // translate from their old slot to their new slot.
+            const drag = blockDrag && blockDrag.source === "list" ? blockDrag : null;
+            let style: React.CSSProperties | undefined;
+            if (drag && drag.engaged) {
+              if (i === drag.fromIdx) {
+                style = {
+                  transform: `translate(${drag.pointerX - drag.startX}px, ${drag.pointerY - drag.startY}px)`,
+                  transition: "none",
+                  zIndex: 10,
+                  position: "relative",
+                  pointerEvents: "none",
+                };
+              } else {
+                const newIdx = shiftFor(i, drag.fromIdx, drag.insertIdx);
+                if (newIdx !== i) {
+                  const oldR = drag.rects[i];
+                  const newR = drag.rects[newIdx];
+                  if (oldR && newR) {
+                    style = {
+                      transform: `translate(${newR.left - oldR.left}px, ${newR.top - oldR.top}px)`,
+                      transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)",
+                    };
+                  }
+                } else {
+                  style = { transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)" };
+                }
+              }
+            }
+            return (
+              <button
+                key={i}
+                type="button"
+                className="sb-block-row"
+                data-block-idx={i}
+                style={style}
+                onClick={() => { if (!drag?.engaged) setDrillIdx(i); }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                {/* Drag handle — pointerdown here kicks off the
+                    block drag. Sits to the left of the icon so the
+                    rest of the row stays clickable for drill-in. */}
+                <span
+                  className="sb-block-handle"
+                  title="Drag to reorder"
+                  onPointerDown={(e) => { e.stopPropagation(); onBlockDragBegin(i, e); }}
+                >
+                  <svg width="10" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="9" cy="5" r="1.6"/><circle cx="15" cy="5" r="1.6"/>
+                    <circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>
+                    <circle cx="9" cy="19" r="1.6"/><circle cx="15" cy="19" r="1.6"/>
+                  </svg>
+                </span>
+                <span className="sb-block-icon">{blockIcon(b.type)}</span>
+                <div className="sb-block-body">
+                  <div className="sb-block-h">{blockLabel(b.type)}</div>
+                  <div className="sb-block-sub">{blockSummary(b)}</div>
+                </div>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="sb-block-remove"
+                  title="Remove this block"
+                  aria-label="Remove block"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (typeof window !== "undefined" && !window.confirm(`Remove the ${blockLabel(b.type).toLowerCase()} block?`)) return;
+                    onRemoveBlock(i);
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  </svg>
+                </span>
+                <svg className="sb-block-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 18 15 12 9 6"/>
                 </svg>
-              </span>
-              <svg className="sb-block-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 18 15 12 9 6"/>
-              </svg>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
 
         {/* Add-block picker. Renders all block types admins can drop
@@ -1402,15 +1603,19 @@ function AssetGridSettings({ props, onChange }: { props: AssetGridBlockProps; on
           onChange={(v) => onChange({ clickTarget: v })}
         />
       </FieldLabel>
+      {/* Both context-line toggles default OFF. Title-only is the
+          cleanest baseline; admins opt in when they want richer
+          cards. Company + description render BELOW the title (no
+          eyebrow above) when on. */}
       <Toggle
         label="Show company name"
-        checked={props.showCompany !== false}
+        checked={props.showCompany === true}
         onChange={(v) => onChange({ showCompany: v })}
       />
       <Toggle
-        label="Show pull-quote excerpt"
-        checked={props.showQuote !== false}
-        onChange={(v) => onChange({ showQuote: v })}
+        label="Show description"
+        checked={props.showDescription === true}
+        onChange={(v) => onChange({ showDescription: v })}
       />
     </div>
   );
@@ -1789,8 +1994,11 @@ const css = `
 
 /* Block list — top-level Layout view shows one row per block in
    the effective template. Click to drill into per-block settings. */
-.sb-block-list{display:flex;flex-direction:column;gap:4px;}
-.sb-block-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t1);font-family:var(--font);text-align:left;cursor:pointer;transition:all .12s;}
+.sb-block-list{display:flex;flex-direction:column;gap:4px;position:relative;}
+.sb-block-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t1);font-family:var(--font);text-align:left;cursor:pointer;transition:border-color .12s, background .12s;}
+.sb-block-handle{display:grid;place-items:center;width:18px;height:24px;color:var(--t4);cursor:grab;flex-shrink:0;touch-action:none;}
+.sb-block-handle:hover{color:var(--t2);}
+.sb-block-handle:active{cursor:grabbing;}
 .sb-block-row:hover{background:var(--bg);border-color:var(--border2);}
 .sb-block-icon{display:grid;place-items:center;width:28px;height:28px;border-radius:6px;background:var(--bg2);color:var(--t2);flex-shrink:0;}
 .sb-block-body{flex:1;min-width:0;}

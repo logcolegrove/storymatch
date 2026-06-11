@@ -71,6 +71,7 @@ function toRenderAsset(a: ShowcaseAsset): ShowcaseRenderAsset {
     id: a.id,
     headline: a.headline,
     pull_quote: a.pull_quote,
+    description: a.description,
     client_name: a.client_name,
     company: a.company,
     thumbnail: a.thumbnail,

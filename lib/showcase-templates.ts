@@ -47,7 +47,15 @@ export interface AssetGridBlockProps {
   // Number of columns at the widest breakpoint. Smaller breakpoints
   // collapse automatically. 0 = "auto" (uses CSS auto-fill).
   columns?: 2 | 3 | 4;
+  // All three optional context lines default OFF — title-only cards
+  // are the cleanest baseline and the most common admin preference.
+  // When on, both render BELOW the title (no eyebrow above).
   showCompany?: boolean;
+  showDescription?: boolean;
+  // showQuote is deprecated as of the description swap. Kept on the
+  // type so legacy templateConfig blobs validate cleanly; the
+  // renderer ignores it. Admins re-enable secondary text via
+  // showDescription on the new toggle.
   showQuote?: boolean;
   aspect?: "16/9" | "4/3" | "1/1";
   // What happens when a viewer clicks an asset card:
@@ -127,7 +135,7 @@ export const TEMPLATES: Template[] = [
     builtIn: true,
     blocks: [
       { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "center", padding: "comfortable" } },
-      { type: "asset-grid", props: { columns: 3, showCompany: true, showQuote: true, aspect: "16/9" } },
+      { type: "asset-grid", props: { columns: 3, aspect: "16/9" } },
     ],
   },
   {
@@ -139,7 +147,7 @@ export const TEMPLATES: Template[] = [
       { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "center", padding: "comfortable" } },
       { type: "quote-rotator", props: { source: "showcase-assets", intervalSec: 6, size: "full" } },
       { type: "divider", props: { spacing: "wide" } },
-      { type: "asset-grid", props: { columns: 3, showCompany: true, showQuote: false, aspect: "16/9" } },
+      { type: "asset-grid", props: { columns: 3, aspect: "16/9" } },
     ],
   },
   {
@@ -149,7 +157,7 @@ export const TEMPLATES: Template[] = [
     builtIn: true,
     blocks: [
       { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "left", padding: "spacious" } },
-      { type: "asset-grid", props: { columns: 2, showCompany: true, showQuote: true, aspect: "16/9" } },
+      { type: "asset-grid", props: { columns: 2, aspect: "16/9" } },
     ],
   },
 ];
