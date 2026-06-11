@@ -31,10 +31,11 @@ import type {
   IntroTextBlockProps,
   DividerBlockProps,
   FooterBlockProps,
-  FiltersInlineBlockProps,
+  FiltersBlockProps,
   FiltersStickyBlockProps,
   FilterCategoryKey,
 } from "@/lib/showcase-templates";
+import { migrateLegacyFilterBlock } from "@/lib/showcase-templates";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./FeaturedQuoteRotator";
 
 // Slim FieldDef shape — only the bits the renderer needs. Kept here
@@ -522,11 +523,24 @@ export function applyFilters(
   return out;
 }
 
-// ── FiltersInlineBlock ────────────────────────────────────────────
-// Sort + Filter + Search trio that mirrors the master library's
-// lib-bar styling 1:1. Each affordance is independently togglable;
-// "search" is a single icon that expands to an input when clicked.
-function FiltersInlineBlock({ props, ctx }: BlockProps<FiltersInlineBlockProps>) {
+// ── FiltersBlock ──────────────────────────────────────────────────
+// Unified filters element. Branches internally on `style`:
+//   "bar"     — horizontal Sort + Filter + Search toolbar (mirrors
+//               the master library lib-bar 1:1)
+//   "sidebar" — vertical Asana-style accordion. NOTE: the actual
+//               side-by-side LAYOUT (sidebar next to the grid) is
+//               handled by ShowcaseRenderer's outer container — the
+//               sidebar block here just renders its own contents.
+function FiltersBlock({ props, ctx }: BlockProps<FiltersBlockProps>) {
+  const style = props.style || "bar";
+  if (style === "sidebar") return <FiltersSidebarBody props={props} ctx={ctx}/>;
+  return <FiltersBarBody props={props} ctx={ctx}/>;
+}
+
+// The horizontal toolbar variant. Extracted as its own component so
+// the dispatcher can pick the right body without nesting conditional
+// hooks (each variant uses different state).
+function FiltersBarBody({ props, ctx }: BlockProps<FiltersBlockProps>) {
   const showSort = props.showSort !== false;
   const showFilter = props.showFilter !== false;
   // Search defaults OFF — admins explicitly opt in. (Sort + Filter
@@ -700,17 +714,25 @@ function FilterCategorySection({ catKey, ctx }: { catKey: string; ctx: ShowcaseC
   );
 }
 
-// ── FiltersStickyBlock ────────────────────────────────────────────
-// Vertical accordion sidebar that pins to the viewport edge. Each
-// category is a row with a circular chevron; expanded rows show the
-// checkbox list inline. Matches the FILTER BY pattern from B2B
-// catalog pages.
-function FiltersStickyBlock({ props, ctx }: BlockProps<FiltersStickyBlockProps>) {
+// The vertical accordion variant. The outer container's layout
+// (placing the sidebar beside the main column with a sticky position)
+// is handled by ShowcaseRenderer — this component renders just the
+// sidebar's inner content.
+function FiltersSidebarBody({ props, ctx }: BlockProps<FiltersBlockProps>) {
   const heading = props.heading || "FILTER BY";
-  const side = props.side || "left";
   const categoryKeys = props.filterCategoryKeys || [];
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  if (categoryKeys.length === 0) return null;
+  if (categoryKeys.length === 0) {
+    // Render an empty-state hint so admins (in editor preview) see
+    // why nothing's showing. On public viewer pages this just won't
+    // render because admin shouldn't ship an empty sidebar.
+    return (
+      <div className="sr-fsb">
+        <div className="sr-fsb-h">{heading}</div>
+        <div className="sr-fsb-empty">Pick categories in the element settings.</div>
+      </div>
+    );
+  }
   const toggleExpand = (k: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
@@ -719,7 +741,7 @@ function FiltersStickyBlock({ props, ctx }: BlockProps<FiltersStickyBlockProps>)
     });
   };
   return (
-    <aside className={`sr-fsb sr-fsb-${side}`}>
+    <div className="sr-fsb">
       <div className="sr-fsb-h">{heading}</div>
       {categoryKeys.map(k => {
         const isOpen = expanded.has(k);
@@ -756,7 +778,7 @@ function FiltersStickyBlock({ props, ctx }: BlockProps<FiltersStickyBlockProps>)
           </div>
         );
       })}
-    </aside>
+    </div>
   );
 }
 
@@ -765,16 +787,21 @@ function FiltersStickyBlock({ props, ctx }: BlockProps<FiltersStickyBlockProps>)
 // Each renderer narrows the props through its own type via the
 // discriminator union.
 function renderBlock(block: TemplateBlock, ctx: ShowcaseContext, key: number) {
-  switch (block.type) {
-    case "hero":            return <HeroBlock            key={key} props={block.props} ctx={ctx}/>;
-    case "asset-grid":      return <AssetGridBlock       key={key} props={block.props} ctx={ctx}/>;
-    case "quote-rotator":   return <QuoteRotatorBlock    key={key} props={block.props} ctx={ctx}/>;
-    case "intro-text":      return <IntroTextBlock       key={key} props={block.props} ctx={ctx}/>;
-    case "divider":         return <DividerBlock         key={key} props={block.props} ctx={ctx}/>;
-    case "footer":          return <FooterBlock          key={key} props={block.props} ctx={ctx}/>;
-    case "filters-inline":  return <FiltersInlineBlock   key={key} props={block.props} ctx={ctx}/>;
-    case "filters-sticky":  return <FiltersStickyBlock   key={key} props={block.props} ctx={ctx}/>;
-    // No default needed — exhaustive over the discriminated union.
+  // Migrate legacy filter block types up-front so the switch below
+  // only has to know about the modern shape.
+  const b = migrateLegacyFilterBlock(block);
+  switch (b.type) {
+    case "hero":            return <HeroBlock            key={key} props={b.props} ctx={ctx}/>;
+    case "asset-grid":      return <AssetGridBlock       key={key} props={b.props} ctx={ctx}/>;
+    case "quote-rotator":   return <QuoteRotatorBlock    key={key} props={b.props} ctx={ctx}/>;
+    case "intro-text":      return <IntroTextBlock       key={key} props={b.props} ctx={ctx}/>;
+    case "divider":         return <DividerBlock         key={key} props={b.props} ctx={ctx}/>;
+    case "footer":          return <FooterBlock          key={key} props={b.props} ctx={ctx}/>;
+    case "filters":         return <FiltersBlock         key={key} props={b.props} ctx={ctx}/>;
+    // filters-inline / filters-sticky never reach this point — the
+    // migration above converts them. Defensive null return:
+    case "filters-inline":
+    case "filters-sticky":  return null;
   }
 }
 
@@ -784,116 +811,167 @@ interface Props {
   context: ShowcaseContext;
 }
 
+// Identify a block as the sidebar variant of the unified filters
+// element (modern OR legacy). The outer renderer pulls these blocks
+// out of the main vertical flow and renders them in a viewport-
+// sticky aside next to the main column.
+function isSidebarFilterBlock(b: TemplateBlock): boolean {
+  if (b.type === "filters" && (b.props.style || "bar") === "sidebar") return true;
+  if (b.type === "filters-sticky") return true;
+  return false;
+}
+
+// Resolve the side prop for a sidebar filter block, defaulting to
+// "left". Works for both modern and legacy block shapes.
+function sidebarSideOf(b: TemplateBlock): "left" | "right" {
+  if (b.type === "filters") return (b.props.side || "left");
+  if (b.type === "filters-sticky") return ((b.props as FiltersStickyBlockProps).side || "left");
+  return "left";
+}
+
+// Render-one-block-with-chrome helper. Extracted from the renderer's
+// main loop so we can call it from BOTH the sidebar aside AND the
+// main column when a sidebar filter exists. Keeps the edit overlay
+// + drag chrome consistent across both surfaces. `withDrag`=false
+// disables drag/transform on the sidebar variant (admins reorder
+// sidebar blocks via the left rail's list instead).
+function renderBlockWithChrome(
+  b: TemplateBlock,
+  i: number,
+  context: ShowcaseContext,
+  editable: boolean,
+  drag: { fromIdx: number; insertIdx: number; pointerDx: number; pointerDy: number; rects: { left: number; top: number }[]; engaged: boolean; source: "list" | "preview" } | null,
+  withDrag: boolean,
+) {
+  const rendered = renderBlock(b, context, i);
+  if (!editable) return rendered;
+  let dragStyle: React.CSSProperties | undefined;
+  if (withDrag && drag && drag.engaged) {
+    if (i === drag.fromIdx) {
+      dragStyle = {
+        transform: `translate(${drag.pointerDx}px, ${drag.pointerDy}px)`,
+        transition: "none",
+        zIndex: 10,
+        position: "relative",
+        pointerEvents: "none",
+      };
+    } else {
+      const newIdx = shiftFor(i, drag.fromIdx, drag.insertIdx);
+      if (newIdx !== i) {
+        const oldR = drag.rects[i];
+        const newR = drag.rects[newIdx];
+        if (oldR && newR) {
+          dragStyle = {
+            transform: `translate(${newR.left - oldR.left}px, ${newR.top - oldR.top}px)`,
+            transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)",
+          };
+        }
+      } else {
+        dragStyle = { transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)" };
+      }
+    }
+  }
+  // Migrate before computing the type-specific overlay shortcuts so
+  // legacy filter blocks still get the right label + actions.
+  const bm = migrateLegacyFilterBlock(b);
+  return (
+    <div
+      key={`edit-${i}`}
+      className="sr-edit-wrap"
+      data-block-idx={i}
+      style={dragStyle}
+    >
+      {rendered}
+      {withDrag && context.onBlockReorderBegin && (
+        <span
+          className="sr-drag-handle"
+          title="Drag to reorder"
+          onPointerDown={(e) => { e.stopPropagation(); context.onBlockReorderBegin?.(i, e); }}
+        >
+          <svg width="12" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="9" cy="5" r="1.6"/><circle cx="15" cy="5" r="1.6"/>
+            <circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>
+            <circle cx="9" cy="19" r="1.6"/><circle cx="15" cy="19" r="1.6"/>
+          </svg>
+        </span>
+      )}
+      <div className="sr-edit-actions">
+        {bm.type === "asset-grid" && context.onManageContent && (
+          <button
+            type="button"
+            className="sr-edit-btn"
+            onClick={(e) => { e.stopPropagation(); context.onManageContent?.(); }}
+            title="Add, remove, or reorder the assets in this showcase"
+            aria-label="Manage showcase content"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+            Manage content
+          </button>
+        )}
+        <button
+          type="button"
+          className="sr-edit-btn"
+          onClick={(e) => { e.stopPropagation(); context.onEditBlock?.(i); }}
+          title={`Edit ${blockTypeLabel(bm.type)} settings`}
+          aria-label={`Edit ${blockTypeLabel(bm.type)} block`}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+          Edit {blockTypeLabel(bm.type)}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ShowcaseRenderer({ template, context }: Props) {
   const editable = !!context.onEditBlock;
   const drag = context.blockDrag && context.blockDrag.source === "preview" ? context.blockDrag : null;
+
+  // Split template blocks into sidebar vs main. Indices preserved
+  // so data-block-idx + drag-reorder still hit the right slot in
+  // templateConfig. v1: first sidebar block wins for layout side;
+  // any additional sidebar blocks render too (stacked in the aside).
+  const sidebarEntries: { block: TemplateBlock; idx: number }[] = [];
+  const mainEntries: { block: TemplateBlock; idx: number }[] = [];
+  template.blocks.forEach((b, i) => {
+    if (isSidebarFilterBlock(b)) sidebarEntries.push({ block: b, idx: i });
+    else mainEntries.push({ block: b, idx: i });
+  });
+  const hasSidebar = sidebarEntries.length > 0;
+  const sidebarSide = hasSidebar ? sidebarSideOf(sidebarEntries[0].block) : "left";
+
+  if (hasSidebar) {
+    return (
+      <div className={`sr sr-layout sr-layout-${sidebarSide}`}>
+        <style>{css}</style>
+        <aside className="sr-aside">
+          {sidebarEntries.map(({ block, idx }) =>
+            renderBlockWithChrome(block, idx, context, editable, drag, false)
+          )}
+        </aside>
+        <div className="sr-main">
+          {mainEntries.map(({ block, idx }) =>
+            renderBlockWithChrome(block, idx, context, editable, drag, true)
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="sr">
       <style>{css}</style>
-      {template.blocks.map((b, i) => {
-        const rendered = renderBlock(b, context, i);
-        if (!editable) return rendered;
-        // Magic-shift drag transform for preview-side block drag.
-        // Dragged block follows the pointer; others translate from
-        // their old slot to their new slot. Same idiom the asset
-        // grid uses for card drag inside this same renderer.
-        let dragStyle: React.CSSProperties | undefined;
-        if (drag && drag.engaged) {
-          if (i === drag.fromIdx) {
-            dragStyle = {
-              transform: `translate(${drag.pointerDx}px, ${drag.pointerDy}px)`,
-              transition: "none",
-              zIndex: 10,
-              position: "relative",
-              pointerEvents: "none",
-            };
-          } else {
-            const newIdx = shiftFor(i, drag.fromIdx, drag.insertIdx);
-            if (newIdx !== i) {
-              const oldR = drag.rects[i];
-              const newR = drag.rects[newIdx];
-              if (oldR && newR) {
-                dragStyle = {
-                  transform: `translate(${newR.left - oldR.left}px, ${newR.top - oldR.top}px)`,
-                  transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)",
-                };
-              }
-            } else {
-              dragStyle = { transition: "transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)" };
-            }
-          }
-        }
-        // Wrap each block in a hover-revealed "Edit block" overlay.
-        // Visible only when context.onEditBlock is provided (i.e.
-        // the builder preview path) — public showcase pages render
-        // the block bare. Label uses the block-type label table so
-        // admins know exactly what they'll be editing.
-        return (
-          <div
-            key={`edit-${i}`}
-            className="sr-edit-wrap"
-            data-block-idx={i}
-            style={dragStyle}
-          >
-            {rendered}
-            {/* Drag handle on the block — pointer-down here kicks
-                off the preview-side reorder. Floats top-left so it
-                doesn't collide with the Edit/Manage buttons at
-                top-right. Only visible on hover, same affordance
-                as the Edit buttons. */}
-            {context.onBlockReorderBegin && (
-              <span
-                className="sr-drag-handle"
-                title="Drag to reorder"
-                onPointerDown={(e) => { e.stopPropagation(); context.onBlockReorderBegin?.(i, e); }}
-              >
-                <svg width="12" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <circle cx="9" cy="5" r="1.6"/><circle cx="15" cy="5" r="1.6"/>
-                  <circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>
-                  <circle cx="9" cy="19" r="1.6"/><circle cx="15" cy="19" r="1.6"/>
-                </svg>
-              </span>
-            )}
-            <div className="sr-edit-actions">
-              {/* Asset-grid blocks get a "Manage content" shortcut
-                  next to Edit because the grid's CONTENT (which
-                  assets it shows) lives outside the block's props
-                  — opening Edit would only get you to columns +
-                  aspect, not the asset list itself. */}
-              {b.type === "asset-grid" && context.onManageContent && (
-                <button
-                  type="button"
-                  className="sr-edit-btn"
-                  onClick={(e) => { e.stopPropagation(); context.onManageContent?.(); }}
-                  title="Add, remove, or reorder the assets in this showcase"
-                  aria-label="Manage showcase content"
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <rect x="3" y="3" width="7" height="7" rx="1"/>
-                    <rect x="14" y="3" width="7" height="7" rx="1"/>
-                    <rect x="3" y="14" width="7" height="7" rx="1"/>
-                    <rect x="14" y="14" width="7" height="7" rx="1"/>
-                  </svg>
-                  Manage content
-                </button>
-              )}
-              <button
-                type="button"
-                className="sr-edit-btn"
-                onClick={(e) => { e.stopPropagation(); context.onEditBlock?.(i); }}
-                title={`Edit ${blockTypeLabel(b.type)} settings`}
-                aria-label={`Edit ${blockTypeLabel(b.type)} block`}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 20h9"/>
-                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-                </svg>
-                Edit {blockTypeLabel(b.type)}
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      {template.blocks.map((b, i) =>
+        renderBlockWithChrome(b, i, context, editable, drag, true)
+      )}
     </div>
   );
 }
@@ -921,8 +999,9 @@ function blockTypeLabel(type: TemplateBlock["type"]): string {
     case "intro-text": return "intro text";
     case "divider": return "divider";
     case "footer": return "footer";
-    case "filters-inline": return "filters bar";
-    case "filters-sticky": return "filter sidebar";
+    case "filters":        return "filters";
+    case "filters-inline": return "filters";
+    case "filters-sticky": return "filters";
   }
 }
 
@@ -1095,13 +1174,11 @@ const css = `
 .sr-fin-search-input{border:none;outline:none;background:transparent;font-family:var(--font);font-size:12.5px;color:var(--t1);width:180px;padding:6px 0;animation:srFinSearchIn .15s ease;}
 @keyframes srFinSearchIn{from{width:0;opacity:0;}to{width:180px;opacity:1;}}
 
-/* ─── Filters: sticky sidebar variant ───────────────────────────
-   Vertical accordion that pins to the viewport edge. Each row has
-   a circular chevron that rotates when expanded. Inline checkbox
-   list on expand. */
-.sr-fsb{position:sticky;top:24px;align-self:flex-start;max-width:240px;width:100%;padding:0 8px 32px;}
-.sr-fsb-left{margin-left:32px;}
-.sr-fsb-right{margin-left:auto;margin-right:32px;}
+/* ─── Filters: sidebar variant ──────────────────────────────────
+   Renders inside an .sr-aside column (see .sr-layout below). The
+   accordion content is sticky within the aside so it follows the
+   viewer as they scroll through the long main column. */
+.sr-fsb{position:sticky;top:24px;width:100%;padding:0 0 32px;}
 .sr-fsb-h{font-family:var(--font);font-size:13px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;padding:8px 0 14px;border-bottom:1px solid var(--border);}
 .sr-fsb-cat{border-bottom:1px solid var(--border);}
 .sr-fsb-row{display:flex;align-items:center;justify-content:space-between;width:100%;padding:18px 0;background:none;border:none;cursor:pointer;font-family:var(--font);}
@@ -1112,7 +1189,37 @@ const css = `
 .sr-fsb-opts{display:flex;flex-direction:column;gap:6px;padding:0 0 18px 16px;}
 .sr-fsb-opt{display:flex;align-items:center;gap:10px;font-family:var(--font);font-size:14px;color:var(--t1);cursor:pointer;padding:4px 0;}
 .sr-fsb-opt input{accent-color:var(--accent);width:14px;height:14px;}
-.sr-fsb-empty{font-size:12px;color:var(--t4);font-style:italic;}
+.sr-fsb-empty{font-size:12px;color:var(--t4);font-style:italic;padding:14px 0;}
+
+/* ─── Sidebar layout ────────────────────────────────────────────
+   When the template contains a sidebar-style filters element, the
+   renderer wraps everything in a 2-column CSS Grid: the sidebar
+   pins to one side, the main column stacks blocks vertically. The
+   sidebar inner content uses position:sticky to follow scroll. */
+.sr-layout{display:grid;align-items:start;gap:32px;max-width:1360px;margin:0 auto;padding:24px 32px 32px;}
+.sr-layout-left{grid-template-columns:240px 1fr;grid-template-areas:"aside main";}
+.sr-layout-right{grid-template-columns:1fr 240px;grid-template-areas:"main aside";}
+.sr-aside{grid-area:aside;align-self:stretch;}
+.sr-main{grid-area:main;display:flex;flex-direction:column;min-width:0;}
+/* The main column already wraps blocks with their own max-width
+   (sr-hero/sr-grid/etc. cap at 1100px). Inside the sidebar layout
+   those caps should yield to the column width so they share space
+   gracefully with the sidebar. */
+.sr-layout .sr-hero,
+.sr-layout .sr-grid,
+.sr-layout .sr-intro,
+.sr-layout .sr-rotator-wrap{max-width:none;}
+.sr-layout .sr-hero,
+.sr-layout .sr-grid,
+.sr-layout .sr-rotator-wrap{padding-left:0;padding-right:0;}
+
+@media (max-width: 800px) {
+  /* On narrow viewports collapse the sidebar to a regular vertical
+     block above the main column — the side-by-side layout doesn't
+     read well when the main column gets squeezed. */
+  .sr-layout{grid-template-columns:1fr;grid-template-areas:"aside" "main";}
+  .sr-fsb{position:static;}
+}
 
 @media (max-width: 700px) {
   .sr-hero{padding:40px 20px 24px;}

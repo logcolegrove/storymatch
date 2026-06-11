@@ -24,7 +24,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import ShowcaseRenderer, { type ShowcaseRenderAsset, type ShowcaseFieldDef, type FilterState, type SortKey, applyFilters } from "./ShowcaseRenderer";
-import { effectiveTemplate, cloneTemplateBlocks, TEMPLATES, type TemplateBlock, type HeroBlockProps, type AssetGridBlockProps, type QuoteRotatorBlockProps, type IntroTextBlockProps, type DividerBlockProps, type FooterBlockProps, type FiltersInlineBlockProps, type FiltersStickyBlockProps } from "@/lib/showcase-templates";
+import { effectiveTemplate, cloneTemplateBlocks, migrateLegacyFilterBlock, TEMPLATES, type TemplateBlock, type HeroBlockProps, type AssetGridBlockProps, type QuoteRotatorBlockProps, type IntroTextBlockProps, type DividerBlockProps, type FooterBlockProps, type FiltersBlockProps } from "@/lib/showcase-templates";
 import type { ShowcaseAssetRef } from "./ShowcasesView";
 
 interface ShowcaseDraft {
@@ -664,10 +664,17 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                     // Per-block prop edit. If templateConfig is
                     // still null (admin hasn't customized yet),
                     // clone the named template's blocks first so
-                    // we have something to mutate.
+                    // we have something to mutate. Legacy filter
+                    // blocks get migrated to the unified type
+                    // before the edit lands, so saves persist as
+                    // the modern shape.
                     setDraft(d => {
                       const base = d.templateConfig ?? cloneTemplateBlocks(d.templateId);
-                      const next = base.map((b, i) => i === idx ? { ...b, props: { ...b.props, ...newProps } } as TemplateBlock : b);
+                      const next = base.map((b, i) => {
+                        if (i !== idx) return b;
+                        const migrated = migrateLegacyFilterBlock(b);
+                        return { ...migrated, props: { ...migrated.props, ...newProps } } as TemplateBlock;
+                      });
                       return { ...d, templateConfig: next };
                     });
                   }}
@@ -1067,29 +1074,28 @@ function defaultBlockForType(type: TemplateBlock["type"]): TemplateBlock {
     case "intro-text":      return { type: "intro-text", props: { content: "Write an intro for this section.", align: "left" } };
     case "divider":         return { type: "divider", props: { spacing: "normal" } };
     case "footer":          return { type: "footer", props: { showBrand: false } };
-    // Filter elements default to subtle defaults — the admin opts in
-    // to categories from the settings panel. Showing Sort + Search
-    // by default with empty category list still produces a useful
-    // sort + search bar immediately.
-    // Filters bar defaults: Sort + Filter on, Search off (admin opts
-    // in), left-aligned. Category list starts empty — admin picks
-    // which fields to expose from the connected dropdown below the
-    // Filters toggle in the settings panel.
-    case "filters-inline":  return { type: "filters-inline", props: { showSort: true, showFilter: true, showSearch: false, align: "left", filterCategoryKeys: [], sortOptions: ["recent", "az", "za"] } };
-    case "filters-sticky":  return { type: "filters-sticky", props: { heading: "FILTER BY", filterCategoryKeys: [], side: "left" } };
+    // Filters element — defaults to the subtle horizontal bar.
+    // Admin flips to sidebar mode in the drill-in if they want the
+    // Asana-style accordion. Sort + Filter on, Search off, left
+    // alignment, empty category list (admin picks via the
+    // connected dropdown).
+    case "filters":         return { type: "filters", props: { style: "bar", showSort: true, showFilter: true, showSearch: false, align: "left", filterCategoryKeys: [], sortOptions: ["recent", "az", "za"], heading: "FILTER BY", side: "left" } };
+    // Legacy types — never produced via Add element anymore, but
+    // defaultBlockForType still needs an exhaustive switch.
+    case "filters-inline":  return { type: "filters", props: { style: "bar", showSort: true, showFilter: true, showSearch: false, align: "left", filterCategoryKeys: [] } };
+    case "filters-sticky":  return { type: "filters", props: { style: "sidebar", heading: "FILTER BY", filterCategoryKeys: [], side: "left" } };
   }
 }
 
 // Blocks the "Add block" picker exposes. Footer omitted (deprecated
 // in B4.0). Order matches what an admin probably reaches for most.
 const ADDABLE_BLOCK_TYPES: { type: TemplateBlock["type"]; label: string; help: string }[] = [
-  { type: "filters-inline", label: "Filters bar",     help: "Subtle Sort + Filter + Search trio above your grid. Matches the master library lib-bar." },
-  { type: "filters-sticky", label: "Filter sidebar",  help: "Asana-style vertical accordion that pins to the side of the viewport as viewers scroll." },
-  { type: "quote-rotator",  label: "Quote rotator",   help: "Rotates each asset's pull quote with auto-advance." },
-  { type: "intro-text",     label: "Intro text",      help: "A short paragraph above or between sections." },
-  { type: "asset-grid",     label: "Asset grid",      help: "A grid of testimonial cards. (Adds a second grid.)" },
-  { type: "hero",           label: "Hero",            help: "A headline + subtitle band. (Adds a second hero.)" },
-  { type: "divider",        label: "Divider",         help: "A horizontal rule between sections." },
+  { type: "filters",       label: "Filters",        help: "Sort / Filter / Search controls — choose between a horizontal bar above the grid or an Asana-style sidebar beside it." },
+  { type: "quote-rotator", label: "Quote rotator",  help: "Rotates each asset's pull quote with auto-advance." },
+  { type: "intro-text",    label: "Intro text",     help: "A short paragraph above or between sections." },
+  { type: "asset-grid",    label: "Asset grid",     help: "A grid of testimonial cards. (Adds a second grid.)" },
+  { type: "hero",          label: "Hero",           help: "A headline + subtitle band. (Adds a second hero.)" },
+  { type: "divider",       label: "Divider",        help: "A horizontal rule between sections." },
 ];
 
 // Magic-rearrange shift function. Given the static index of a row,
@@ -1394,8 +1400,9 @@ function blockLabel(type: TemplateBlock["type"]): string {
     case "intro-text": return "Intro text";
     case "divider": return "Divider";
     case "footer": return "Footer";
-    case "filters-inline": return "Filters bar";
-    case "filters-sticky": return "Filter sidebar";
+    case "filters": return "Filters";
+    case "filters-inline": return "Filters";
+    case "filters-sticky": return "Filters";
   }
 }
 function blockSummary(b: TemplateBlock): string {
@@ -1406,18 +1413,21 @@ function blockSummary(b: TemplateBlock): string {
     case "intro-text": return b.props.content ? b.props.content.slice(0, 60) + (b.props.content.length > 60 ? "…" : "") : "Empty";
     case "divider": return `${b.props.spacing || "normal"} spacing`;
     case "footer": return b.props.showBrand === false ? "Unbranded" : "StoryMatch branded";
-    case "filters-inline": {
+    case "filters": {
+      const style = b.props.style || "bar";
+      const cats = b.props.filterCategoryKeys?.length || 0;
+      if (style === "sidebar") {
+        return `Sidebar · ${b.props.side === "right" ? "right" : "left"} · ${cats} categor${cats === 1 ? "y" : "ies"}`;
+      }
       const parts: string[] = [];
       if (b.props.showSort !== false) parts.push("Sort");
       if (b.props.showFilter !== false) parts.push("Filter");
-      if (b.props.showSearch !== false) parts.push("Search");
-      const cats = b.props.filterCategoryKeys?.length || 0;
-      return `${parts.join(" · ") || "Disabled"}${cats ? ` · ${cats} categor${cats === 1 ? "y" : "ies"}` : ""}`;
+      if (b.props.showSearch === true) parts.push("Search");
+      return `Bar · ${parts.join(" · ") || "Disabled"}${cats ? ` · ${cats} cat${cats === 1 ? "" : "s"}` : ""}`;
     }
-    case "filters-sticky": {
-      const cats = b.props.filterCategoryKeys?.length || 0;
-      return `${b.props.side === "right" ? "Right" : "Left"} sidebar · ${cats} categor${cats === 1 ? "y" : "ies"}`;
-    }
+    case "filters-inline":
+    case "filters-sticky":
+      return "Legacy filter element — re-add as Filters";
   }
 }
 function blockIcon(type: TemplateBlock["type"]) {
@@ -1429,6 +1439,7 @@ function blockIcon(type: TemplateBlock["type"]) {
     case "intro-text":      return <svg {...common}><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>;
     case "divider":         return <svg {...common}><line x1="3" y1="12" x2="21" y2="12"/></svg>;
     case "footer":          return <svg {...common}><rect x="3" y="5" width="18" height="9" rx="1"/><line x1="3" y1="19" x2="21" y2="19"/></svg>;
+    case "filters":         return <svg {...common}><polyline points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>;
     case "filters-inline":  return <svg {...common}><polyline points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>;
     case "filters-sticky":  return <svg {...common}><rect x="3" y="4" width="6" height="16" rx="1"/><line x1="13" y1="8" x2="20" y2="8"/><line x1="13" y1="14" x2="20" y2="14"/><line x1="13" y1="20" x2="20" y2="20"/></svg>;
   }
@@ -1444,15 +1455,24 @@ function BlockSettings({ block, onChange, fieldDefs }: {
   onChange: (newProps: Record<string, unknown>) => void;
   fieldDefs: ShowcaseFieldDef[];
 }) {
-  switch (block.type) {
-    case "hero":            return <HeroSettings            props={block.props} onChange={onChange}/>;
-    case "asset-grid":      return <AssetGridSettings       props={block.props} onChange={onChange}/>;
-    case "quote-rotator":   return <QuoteRotatorSettings    props={block.props} onChange={onChange}/>;
-    case "intro-text":      return <IntroTextSettings       props={block.props} onChange={onChange}/>;
-    case "divider":         return <DividerSettings         props={block.props} onChange={onChange}/>;
-    case "footer":          return <FooterSettings          props={block.props} onChange={onChange}/>;
-    case "filters-inline":  return <FiltersInlineSettings   props={block.props} onChange={onChange} fieldDefs={fieldDefs}/>;
-    case "filters-sticky":  return <FiltersStickySettings   props={block.props} onChange={onChange} fieldDefs={fieldDefs}/>;
+  // Legacy filter shapes are normalized to the modern "filters"
+  // block before we render their settings panel. The first onChange
+  // the admin triggers will commit the migrated shape back into
+  // templateConfig (parent merges props but keeps type — handled
+  // separately below).
+  const b = migrateLegacyFilterBlock(block);
+  switch (b.type) {
+    case "hero":            return <HeroSettings            props={b.props} onChange={onChange}/>;
+    case "asset-grid":      return <AssetGridSettings       props={b.props} onChange={onChange}/>;
+    case "quote-rotator":   return <QuoteRotatorSettings    props={b.props} onChange={onChange}/>;
+    case "intro-text":      return <IntroTextSettings       props={b.props} onChange={onChange}/>;
+    case "divider":         return <DividerSettings         props={b.props} onChange={onChange}/>;
+    case "footer":          return <FooterSettings          props={b.props} onChange={onChange}/>;
+    case "filters":         return <FiltersSettings         props={b.props} onChange={onChange} fieldDefs={fieldDefs}/>;
+    // Defensive: migration above converts legacy types, but the
+    // exhaustive switch needs cases for them too.
+    case "filters-inline":
+    case "filters-sticky":  return null;
   }
 }
 
@@ -1685,90 +1705,103 @@ function FilterCategoryDropdown({ value, onChange, fieldDefs, label, helpWhenEmp
   );
 }
 
-function FiltersInlineSettings({ props, onChange, fieldDefs }: {
-  props: FiltersInlineBlockProps;
+// Unified settings panel for the filters element. Top-level style
+// selector swaps between the bar variant (subtle horizontal toolbar)
+// and the sidebar variant (Asana-style vertical accordion). The
+// sub-controls below the selector change accordingly.
+function FiltersSettings({ props, onChange, fieldDefs }: {
+  props: FiltersBlockProps;
   onChange: (p: Record<string, unknown>) => void;
   fieldDefs: ShowcaseFieldDef[];
 }) {
+  const style = props.style || "bar";
   const showFilter = props.showFilter !== false;
   return (
     <div className="sb-bs">
-      <p className="sb-bs-hint">Three independent affordances — show any combination. Search defaults off; turn it on when admins need it.</p>
-      <Toggle
-        label="Show Sort button"
-        checked={props.showSort !== false}
-        onChange={(v) => onChange({ showSort: v })}
-      />
-      {/* Filters toggle + connected categories dropdown. Wrapped so
-          the dropdown reads visually as a follow-on step — same
-          card edge, no gap, slight indent when open. The whole
-          dropdown collapses when showFilter is off so there's no
-          orphaned UI. */}
-      <div className="sb-bs-fgroup">
-        <Toggle
-          label="Show Filters button"
-          checked={showFilter}
-          onChange={(v) => onChange({ showFilter: v })}
+      {/* Style selector — the single switch that determines whether
+          this element renders as the inline bar above the grid OR
+          the sticky sidebar next to it. Lives at the top so admins
+          orient immediately. */}
+      <FieldLabel label="Style">
+        <RadioGroup
+          value={style}
+          options={[
+            { value: "bar", label: "Bar" },
+            { value: "sidebar", label: "Sidebar" },
+          ]}
+          onChange={(v) => onChange({ style: v })}
         />
-        {showFilter && (
+      </FieldLabel>
+
+      {style === "bar" ? (
+        <>
+          <p className="sb-bs-hint">Subtle horizontal toolbar above the grid. Sort + Filter on by default; Search opts in.</p>
+          <Toggle
+            label="Show Sort button"
+            checked={props.showSort !== false}
+            onChange={(v) => onChange({ showSort: v })}
+          />
+          {/* Filters toggle + connected categories dropdown. Wrapped
+              so the dropdown reads visually as a follow-on step. */}
+          <div className="sb-bs-fgroup">
+            <Toggle
+              label="Show Filters button"
+              checked={showFilter}
+              onChange={(v) => onChange({ showFilter: v })}
+            />
+            {showFilter && (
+              <FilterCategoryDropdown
+                value={props.filterCategoryKeys || []}
+                onChange={(next) => onChange({ filterCategoryKeys: next })}
+                fieldDefs={fieldDefs}
+                label="Categories viewers can filter by"
+              />
+            )}
+          </div>
+          <Toggle
+            label="Show Search icon"
+            checked={props.showSearch === true}
+            onChange={(v) => onChange({ showSearch: v })}
+          />
+          <FieldLabel label="Bar alignment">
+            <RadioGroup
+              value={props.align || "left"}
+              options={[
+                { value: "left", label: "Left" },
+                { value: "center", label: "Center" },
+                { value: "right", label: "Right" },
+              ]}
+              onChange={(v) => onChange({ align: v })}
+            />
+          </FieldLabel>
+        </>
+      ) : (
+        <>
+          <p className="sb-bs-hint">Asana-style vertical accordion that sits beside the grid and follows the viewer as they scroll.</p>
+          <FieldLabel label="Heading">
+            <input
+              type="text"
+              className="sb-bs-text"
+              value={props.heading ?? "FILTER BY"}
+              onChange={(e) => onChange({ heading: e.target.value })}
+              placeholder="FILTER BY"
+            />
+          </FieldLabel>
+          <FieldLabel label="Anchor side">
+            <RadioGroup
+              value={props.side || "left"}
+              options={[{ value: "left", label: "Left" }, { value: "right", label: "Right" }]}
+              onChange={(v) => onChange({ side: v })}
+            />
+          </FieldLabel>
           <FilterCategoryDropdown
             value={props.filterCategoryKeys || []}
             onChange={(next) => onChange({ filterCategoryKeys: next })}
             fieldDefs={fieldDefs}
-            label="Categories viewers can filter by"
+            label="Categories shown in the sidebar"
           />
-        )}
-      </div>
-      <Toggle
-        label="Show Search icon"
-        checked={props.showSearch === true}
-        onChange={(v) => onChange({ showSearch: v })}
-      />
-      <FieldLabel label="Bar alignment">
-        <RadioGroup
-          value={props.align || "left"}
-          options={[
-            { value: "left", label: "Left" },
-            { value: "center", label: "Center" },
-            { value: "right", label: "Right" },
-          ]}
-          onChange={(v) => onChange({ align: v })}
-        />
-      </FieldLabel>
-    </div>
-  );
-}
-
-function FiltersStickySettings({ props, onChange, fieldDefs }: {
-  props: FiltersStickyBlockProps;
-  onChange: (p: Record<string, unknown>) => void;
-  fieldDefs: ShowcaseFieldDef[];
-}) {
-  return (
-    <div className="sb-bs">
-      <p className="sb-bs-hint">Asana-style vertical sidebar — pins to one side of the viewport as viewers scroll. Each category collapses to a chevron row until expanded.</p>
-      <FieldLabel label="Heading">
-        <input
-          type="text"
-          className="sb-bs-text"
-          value={props.heading ?? "FILTER BY"}
-          onChange={(e) => onChange({ heading: e.target.value })}
-          placeholder="FILTER BY"
-        />
-      </FieldLabel>
-      <FieldLabel label="Anchor side">
-        <RadioGroup
-          value={props.side || "left"}
-          options={[{ value: "left", label: "Left" }, { value: "right", label: "Right" }]}
-          onChange={(v) => onChange({ side: v })}
-        />
-      </FieldLabel>
-      <FilterCategoryDropdown
-        value={props.filterCategoryKeys || []}
-        onChange={(next) => onChange({ filterCategoryKeys: next })}
-        fieldDefs={fieldDefs}
-        label="Categories shown in the sidebar"
-      />
+        </>
+      )}
     </div>
   );
 }

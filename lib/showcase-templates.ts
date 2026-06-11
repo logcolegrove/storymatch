@@ -107,10 +107,40 @@ export interface FooterBlockProps {
 // new field types when the admin adds one.
 export type FilterCategoryKey = string;
 
-// Inline filter element — sort + filter + search trio that mirrors
-// the master library lib-bar. Each affordance is independently
-// toggleable; default to all-on so dropping the element into a
-// layout produces the full trio without configuration.
+// Unified filters element. Earlier slices shipped two separate
+// block types (filters-inline + filters-sticky); admins found that
+// confusing in the Add-element picker, so we collapsed them into
+// one element with a `style` switch. The legacy block types stay in
+// the discriminated union so previously-saved templateConfigs still
+// validate — the renderer migrates them to FiltersBlock on read.
+export interface FiltersBlockProps {
+  // Which visual the element renders as.
+  //   "bar"     — subtle horizontal Sort + Filter + Search toolbar
+  //   "sidebar" — vertical accordion pinned beside the asset grid
+  // Defaults to "bar" because it's the less-disruptive default.
+  style?: "bar" | "sidebar";
+
+  // Shared across both styles. Built-in keys ("assetType") plus
+  // FieldDef.key values the admin opted in to. Empty = no filter
+  // popover content in bar mode, empty sidebar in sidebar mode.
+  filterCategoryKeys?: FilterCategoryKey[];
+
+  // ── Bar-mode props ──────────────────────────────────────────
+  showSort?: boolean;
+  showFilter?: boolean;
+  showSearch?: boolean;
+  align?: "left" | "center" | "right";
+  sortOptions?: ("recent" | "az" | "za")[];
+
+  // ── Sidebar-mode props ──────────────────────────────────────
+  heading?: string;
+  side?: "left" | "right";
+}
+
+// Legacy: inline filter element — sort + filter + search trio that
+// mirrors the master library lib-bar. Kept in the DSL for backward
+// compat with old saved configs. New showcases use FiltersBlock
+// with style="bar" instead.
 export interface FiltersInlineBlockProps {
   showSort?: boolean;
   showFilter?: boolean;
@@ -131,9 +161,9 @@ export interface FiltersInlineBlockProps {
   sortOptions?: ("recent" | "az" | "za")[];
 }
 
-// Sticky vertical filter sidebar — modeled after the FILTER BY
-// accordion on B2B catalog pages. Pins to one side of the viewport
-// and expands each category in place when its row chevron is clicked.
+// Legacy: sticky vertical filter sidebar. Kept in the DSL for
+// backward compat. New showcases use FiltersBlock with
+// style="sidebar".
 export interface FiltersStickyBlockProps {
   heading?: string;
   filterCategoryKeys?: FilterCategoryKey[];
@@ -152,6 +182,8 @@ export type TemplateBlock =
   | { type: "intro-text"; props: IntroTextBlockProps }
   | { type: "divider"; props: DividerBlockProps }
   | { type: "footer"; props: FooterBlockProps }
+  | { type: "filters"; props: FiltersBlockProps }
+  // Legacy. Migrated to "filters" on read.
   | { type: "filters-inline"; props: FiltersInlineBlockProps }
   | { type: "filters-sticky"; props: FiltersStickyBlockProps };
 
@@ -246,6 +278,21 @@ export function effectiveTemplate(
     };
   }
   return getTemplate(templateId);
+}
+
+// Migrate any legacy filters-inline / filters-sticky blocks to the
+// unified filters block with a style switch. Idempotent — modern
+// "filters" blocks pass through untouched. Used by both the renderer
+// and the builder when consuming a templateConfig from disk.
+export function migrateLegacyFilterBlock(b: TemplateBlock): TemplateBlock {
+  if (b.type === "filters-inline") {
+    return { type: "filters", props: { ...(b.props as FiltersInlineBlockProps), style: "bar" } };
+  }
+  if (b.type === "filters-sticky") {
+    const p = b.props as FiltersStickyBlockProps;
+    return { type: "filters", props: { style: "sidebar", heading: p.heading, side: p.side, filterCategoryKeys: p.filterCategoryKeys } };
+  }
+  return b;
 }
 
 // Returns a deep clone of the template's blocks, suitable for
