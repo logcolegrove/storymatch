@@ -13,6 +13,7 @@ import { headers, cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { hashIp, isBotUserAgent } from "@/lib/share-tracking";
 import { resolveShowcase } from "@/lib/showcase-dal";
+import { fetchOrgFieldDefs } from "@/lib/field-defs";
 import SharePageClient from "./SharePageClient";
 import ShowcasePageClient from "@/app/showcase/[id]/ShowcasePageClient";
 
@@ -123,6 +124,16 @@ export default async function SharePage({
   // enhancement (the showcase page doesn't propagate the share_id
   // to each child asset render yet).
   if (isShowcaseShare && resolvedShowcase) {
+    // Field defs ride along so the filter elements (if the showcase
+    // template includes any) can show real category labels + value
+    // pickers. Empty array on error keeps the page rendering.
+    let fieldDefs: { key: string; label: string; type: "text" | "select" | "multi_select" | "number" | "date"; options?: string[] }[] = [];
+    try {
+      const defs = await fetchOrgFieldDefs(resolvedShowcase.orgId);
+      fieldDefs = defs.map(d => ({ key: d.key, label: d.label, type: d.type, options: d.options }));
+    } catch (e) {
+      console.error("[/s] failed to fetch field defs", e);
+    }
     return (
       <ShowcasePageClient
         showcase={{
@@ -133,6 +144,7 @@ export default async function SharePage({
           templateConfig: resolvedShowcase.templateConfig,
         }}
         assets={resolvedShowcase.assets}
+        fieldDefs={fieldDefs}
       />
     );
   }

@@ -5,13 +5,20 @@
 // The page itself is a thin shell — chrome + back-nav + the
 // AssetDetail view. The actual layout lives in the template.
 //
-// v1 always uses the "default" template — admin template
-// selection arrives in Phase B2.2 (a template_id column on the
-// showcases table + picker in the editor modal).
+// Filter state lives here: filter / sort / search state are owned
+// at this top level, the renderer's filter-element components edit
+// it through callbacks, and the asset-grid block sees ctx.assets as
+// the already-filtered list. Keeps each block component simple.
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import AssetDetail, { type AssetDetailAsset } from "../../components/AssetDetail";
-import ShowcaseRenderer, { type ShowcaseRenderAsset } from "../../components/ShowcaseRenderer";
+import ShowcaseRenderer, {
+  type ShowcaseRenderAsset,
+  type ShowcaseFieldDef,
+  type FilterState,
+  type SortKey,
+  applyFilters,
+} from "../../components/ShowcaseRenderer";
 import { effectiveTemplate } from "@/lib/showcase-templates";
 import type { TemplateBlock } from "@/lib/showcase-templates";
 
@@ -25,8 +32,11 @@ interface ShowcaseAsset {
   client_name: string;
   company: string;
   vertical: string;
+  geography: string;
+  client_role: string;
   asset_type: string;
   duration_seconds: number | null;
+  custom_field_values: Record<string, unknown>;
 }
 
 interface Props {
@@ -38,6 +48,10 @@ interface Props {
     templateConfig: TemplateBlock[] | null;
   };
   assets: ShowcaseAsset[];
+  // Org's field defs, slim shape. Passed straight through to the
+  // renderer so filter-element blocks can show category labels +
+  // value pickers keyed off the same schema as the master library.
+  fieldDefs: ShowcaseFieldDef[];
 }
 
 // Server-side ShowcaseAsset → AssetDetail's camelCase shape. The
@@ -55,7 +69,7 @@ function toAssetDetail(a: ShowcaseAsset): AssetDetailAsset {
     clientName: a.client_name || "",
     company: a.company || "",
     vertical: a.vertical || "",
-    geography: "",
+    geography: a.geography || "",
     companySize: "",
     challenge: "",
     outcome: "",
@@ -65,8 +79,27 @@ function toAssetDetail(a: ShowcaseAsset): AssetDetailAsset {
 }
 
 // Server-side ShowcaseAsset → renderer-facing shape (only the
-// fields the blocks need; keeps the data graph tight).
+// fields the blocks need; keeps the data graph tight). The
+// fieldValues map carries arbitrary field-keyed values so filter
+// elements can read them uniformly.
 function toRenderAsset(a: ShowcaseAsset): ShowcaseRenderAsset {
+  // Compose the field values map. Built-ins (vertical, geography,
+  // clientRole, company, clientName, assetType) get mirrored in
+  // alongside any custom field values. This way the renderer can
+  // read every category through a single uniform `fieldValues[key]`
+  // accessor regardless of whether the source is a typed column or
+  // a JSONB custom field.
+  const fieldValues: Record<string, unknown> = {
+    ...(a.custom_field_values || {}),
+    vertical: a.vertical,
+    geography: a.geography,
+    clientRole: a.client_role,
+    company: a.company,
+    clientName: a.client_name,
+    headline: a.headline,
+    description: a.description,
+    assetType: a.asset_type,
+  };
   return {
     id: a.id,
     headline: a.headline,
@@ -77,20 +110,38 @@ function toRenderAsset(a: ShowcaseAsset): ShowcaseRenderAsset {
     thumbnail: a.thumbnail,
     asset_type: a.asset_type,
     duration_seconds: a.duration_seconds,
+    fieldValues,
   };
 }
 
-export default function ShowcasePageClient({ showcase, assets }: Props) {
+export default function ShowcasePageClient({ showcase, assets, fieldDefs }: Props) {
   // Active asset (if any) drives whether we show the template-
   // rendered index or the asset detail view. null = showing index.
   const [activeAssetId, setActiveAssetId] = useState<string | null>(null);
   const activeAsset = activeAssetId ? assets.find(a => a.id === activeAssetId) || null : null;
+
+  // Filter / sort / search state. Owned here so multiple filter
+  // elements in the same template share the same conceptual cursor
+  // — selecting a filter in the sticky sidebar updates the inline
+  // bar's count badge too.
+  const [filterState, setFilterState] = useState<FilterState>({});
+  const [sortKey, setSortKey] = useState<SortKey>("recent");
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Effective template = showcase's saved templateConfig (if it's
   // been customized) or the named template (if just a starter).
   // Defaults to "default" preset when both are null. Safe across
   // schema migrations and template-registry changes.
   const template = effectiveTemplate(showcase.templateConfig, showcase.templateId);
+
+  // Project + memoize. Render assets are filtered + sorted + searched
+  // through one pipeline. Both filter elements + the asset grid read
+  // from the SAME post-filter list, so the result is consistent.
+  const renderAssets = useMemo(() => assets.map(toRenderAsset), [assets]);
+  const filteredAssets = useMemo(
+    () => applyFilters(renderAssets, filterState, sortKey, searchQuery),
+    [renderAssets, filterState, sortKey, searchQuery],
+  );
 
   return (
     <div className="sp">
@@ -114,8 +165,15 @@ export default function ShowcasePageClient({ showcase, assets }: Props) {
           template={template}
           context={{
             showcase,
-            assets: assets.map(toRenderAsset),
+            assets: filteredAssets,
             onAssetClick: (id) => setActiveAssetId(id),
+            fieldDefs,
+            filterState,
+            onFilterChange: setFilterState,
+            sortKey,
+            onSortChange: setSortKey,
+            searchQuery,
+            onSearchChange: setSearchQuery,
           }}
         />
       )}
@@ -139,7 +197,7 @@ body{background:var(--bg);margin:0;font-family:var(--font);color:var(--t1);}
 
 .sp-asset-wrap{padding-top:0;}
 .sp-asset-nav{max-width:1100px;margin:0 auto;padding:18px 32px 0;}
-.sp-back{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .12s;}
+.sp-back{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--border);background:#fff;color:var(--t2);font-family:var(--font);font-size:12.5px;font-weight:600;border-radius:8px;cursor:pointer;transition:all .12s;}
 .sp-back:hover{background:var(--bg2);color:var(--t1);}
 
 @media (max-width: 700px) {

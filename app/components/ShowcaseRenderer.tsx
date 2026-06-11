@@ -21,6 +21,7 @@
 // (useState/useEffect previously powered the inline QuoteRotator
 // implementation — replaced by FeaturedQuoteRotator which owns its
 // own state. No top-level hooks needed here anymore.)
+import { useState, useRef, useEffect } from "react";
 import type {
   TemplateBlock,
   Template,
@@ -30,8 +31,29 @@ import type {
   IntroTextBlockProps,
   DividerBlockProps,
   FooterBlockProps,
+  FiltersInlineBlockProps,
+  FiltersStickyBlockProps,
+  FilterCategoryKey,
 } from "@/lib/showcase-templates";
 import FeaturedQuoteRotator, { type FeaturedQuote } from "./FeaturedQuoteRotator";
+
+// Slim FieldDef shape — only the bits the renderer needs. Kept here
+// (not imported from lib/field-defs) so the renderer stays decoupled
+// from the FieldDef DAL. Public showcase pages project orgFieldDefs
+// to this shape before passing into the context.
+export interface ShowcaseFieldDef {
+  key: string;
+  label: string;
+  type: "text" | "select" | "multi_select" | "number" | "date";
+  options?: string[];
+}
+
+// Active filter values per category key. Each entry is a SET of
+// selected values (the filter is "any of these values"). A category
+// with no entry (or empty set) means "no filter on that category".
+export type FilterState = Record<string, string[]>;
+
+export type SortKey = "recent" | "az" | "za";
 
 // ── Shared types ──────────────────────────────────────────────────
 
@@ -94,6 +116,21 @@ export interface ShowcaseContext {
     engaged: boolean;
     source: "list" | "preview";
   };
+  // Field definitions for the org — drives filter category labels +
+  // value pickers in the filter blocks. The renderer never fetches;
+  // the host passes whatever roster they want exposed. Empty list is
+  // fine (filter blocks then hide themselves gracefully).
+  fieldDefs?: ShowcaseFieldDef[];
+  // Live filter / sort / search state. Owned by the host (public
+  // ShowcasePageClient or builder preview). Filter blocks call the
+  // setters; the asset-grid block reads ctx.assets which is already
+  // the filtered + sorted result.
+  filterState?: FilterState;
+  onFilterChange?: (next: FilterState) => void;
+  sortKey?: SortKey;
+  onSortChange?: (next: SortKey) => void;
+  searchQuery?: string;
+  onSearchChange?: (next: string) => void;
 }
 
 export interface ShowcaseRenderAsset {
@@ -111,6 +148,14 @@ export interface ShowcaseRenderAsset {
   // grid card so showcase tiles feel exactly like internal tiles.
   asset_type: string;
   duration_seconds: number | null;
+  // Field-keyed value map — populated by the host with every value
+  // the filter blocks might need to read. Keys match FieldDef.key
+  // ("vertical", "company", "geography", ...) plus the built-in
+  // "assetType" key. Values are strings (typed fields), arrays of
+  // strings (multi_select), null/undefined, or whatever the host's
+  // custom_field_values JSONB happens to carry. Filter logic uses
+  // `fieldValueAsArray(a, key)` to normalize → string[].
+  fieldValues?: Record<string, unknown>;
 }
 
 interface BlockProps<T> {
@@ -379,18 +424,352 @@ function FooterBlock(_props: BlockProps<FooterBlockProps>) {
   return <div className="sr-footer-spacer" aria-hidden/>;
 }
 
+// ── Filter helpers ────────────────────────────────────────────────
+// Normalize a field value to an array of strings so multi_select +
+// scalar values share a single comparison path. Numbers cast to
+// strings; null/undefined → empty array.
+function fieldValueAsArray(a: ShowcaseRenderAsset, key: string): string[] {
+  // Built-in keys not stored in fieldValues map. Project from the
+  // canonical fields on the asset itself.
+  if (key === "assetType") return a.asset_type ? [a.asset_type] : [];
+  if (key === "company") return a.company ? [a.company] : (a.fieldValues?.[key] ? coerceArray(a.fieldValues[key]) : []);
+  if (key === "client_name" || key === "clientName") return a.client_name ? [a.client_name] : [];
+  const v = a.fieldValues?.[key];
+  return coerceArray(v);
+}
+function coerceArray(v: unknown): string[] {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.map(String).filter(s => s.length > 0);
+  const s = String(v).trim();
+  return s ? [s] : [];
+}
+
+// Compute the unique set of values across all assets for a given
+// category key. Used to populate dropdown options when the field def
+// doesn't ship a fixed options list. Sorted alphabetically for
+// predictable UI order.
+export function distinctValuesForCategory(assets: ShowcaseRenderAsset[], key: string): string[] {
+  const seen = new Set<string>();
+  for (const a of assets) {
+    for (const v of fieldValueAsArray(a, key)) seen.add(v);
+  }
+  return Array.from(seen).sort((x, y) => x.localeCompare(y));
+}
+
+// Resolve a filter category key → friendly label. Field defs win;
+// built-in keys fall through to a hard-coded label table.
+function labelForCategory(key: string, fieldDefs: ShowcaseFieldDef[] | undefined): string {
+  const def = fieldDefs?.find(d => d.key === key);
+  if (def) return def.label;
+  if (key === "assetType") return "Type";
+  if (key === "company") return "Company";
+  if (key === "clientName" || key === "client_name") return "Client name";
+  return key;
+}
+
+// Resolve the options to show in the picker for a category. Field
+// defs ship a fixed list when they're select / multi_select types;
+// otherwise we derive from the asset set so admins don't have to
+// curate dropdown values by hand.
+function optionsForCategory(
+  key: string,
+  assets: ShowcaseRenderAsset[],
+  fieldDefs: ShowcaseFieldDef[] | undefined,
+): string[] {
+  const def = fieldDefs?.find(d => d.key === key);
+  if (def && (def.type === "select" || def.type === "multi_select") && def.options && def.options.length > 0) {
+    return def.options;
+  }
+  return distinctValuesForCategory(assets, key);
+}
+
+// Filter + sort + search pipeline. Public ShowcasePageClient
+// (or builder preview) calls this with full asset list + current
+// filter/sort/search state and passes the result as ctx.assets to
+// the renderer. AssetGridBlock + QuoteRotatorBlock both see the
+// already-filtered list, so filtering "above the grid" is transparent
+// to the downstream blocks.
+export function applyFilters(
+  assets: ShowcaseRenderAsset[],
+  filterState: FilterState | undefined,
+  sortKey: SortKey | undefined,
+  searchQuery: string | undefined,
+): ShowcaseRenderAsset[] {
+  let out = assets;
+  // 1. Filter by category. AND across categories, OR within.
+  if (filterState) {
+    const activeKeys = Object.keys(filterState).filter(k => (filterState[k]?.length ?? 0) > 0);
+    if (activeKeys.length > 0) {
+      out = out.filter(a => activeKeys.every(k => {
+        const need = new Set(filterState[k]);
+        const have = fieldValueAsArray(a, k);
+        return have.some(v => need.has(v));
+      }));
+    }
+  }
+  // 2. Search — case-insensitive substring across title + description.
+  const q = (searchQuery || "").trim().toLowerCase();
+  if (q.length > 0) {
+    out = out.filter(a => {
+      const hay = `${a.headline} ${a.description} ${a.pull_quote} ${a.company} ${a.client_name}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  // 3. Sort.
+  if (sortKey === "az") out = [...out].sort((a, b) => a.headline.localeCompare(b.headline));
+  else if (sortKey === "za") out = [...out].sort((a, b) => b.headline.localeCompare(a.headline));
+  // "recent" — assets are already in newest-first order from the host.
+  return out;
+}
+
+// ── FiltersInlineBlock ────────────────────────────────────────────
+// Sort + Filter + Search trio that mirrors the master library's
+// lib-bar styling 1:1. Each affordance is independently togglable;
+// "search" is a single icon that expands to an input when clicked.
+function FiltersInlineBlock({ props, ctx }: BlockProps<FiltersInlineBlockProps>) {
+  const showSort = props.showSort !== false;
+  const showFilter = props.showFilter !== false;
+  const showSearch = props.showSearch !== false;
+  const categoryKeys = props.filterCategoryKeys || [];
+  const sortOptions = props.sortOptions || ["recent", "az", "za"];
+  const [openMenu, setOpenMenu] = useState<"sort" | "filter" | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!openMenu && !searchOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) {
+        setOpenMenu(null);
+        // Close the search popover when clicking outside — but only
+        // if it's empty, so users don't accidentally lose their query
+        // by clicking away.
+        if (searchOpen && !(ctx.searchQuery || "").trim()) setSearchOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDoc);
+    return () => window.removeEventListener("mousedown", onDoc);
+  }, [openMenu, searchOpen, ctx.searchQuery]);
+
+  // Count the total number of selected filter values across exposed
+  // categories — drives the badge on the Filters button.
+  const filterCount = categoryKeys.reduce((n, k) => n + (ctx.filterState?.[k]?.length || 0), 0);
+
+  const sortLabel = (k: SortKey): string => {
+    if (k === "az") return "A → Z";
+    if (k === "za") return "Z → A";
+    return "Recent";
+  };
+
+  // If everything's toggled off, render nothing — the element is a
+  // no-op (admin can remove it from the layout).
+  if (!showSort && !showFilter && !showSearch) return null;
+
+  return (
+    <div className="sr-fin-wrap" ref={wrapRef}>
+      {showFilter && categoryKeys.length > 0 && (
+        <div className="sr-fin-pop-wrap">
+          <button
+            type="button"
+            className={`sr-fin-filter${filterCount > 0 ? " on" : ""}`}
+            onClick={() => setOpenMenu(openMenu === "filter" ? null : "filter")}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            <span>Filters</span>
+            {filterCount > 0 && <span className="sr-fin-count">{filterCount}</span>}
+          </button>
+          {openMenu === "filter" && (
+            <div className="sr-fin-pop sr-fin-pop-filter">
+              {categoryKeys.map(k => (
+                <FilterCategorySection
+                  key={k}
+                  catKey={k}
+                  ctx={ctx}
+                />
+              ))}
+              {filterCount > 0 && (
+                <div className="sr-fin-pop-foot">
+                  <button
+                    type="button"
+                    className="sr-fin-clear"
+                    onClick={() => ctx.onFilterChange?.({})}
+                  >Clear all</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showSort && sortOptions.length > 0 && (
+        <div className="sr-fin-pop-wrap">
+          <button
+            type="button"
+            className={`sr-fin-btn${openMenu === "sort" ? " on" : ""}`}
+            onClick={() => setOpenMenu(openMenu === "sort" ? null : "sort")}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
+            Sort: {sortLabel(ctx.sortKey || "recent")}
+          </button>
+          {openMenu === "sort" && (
+            <div className="sr-fin-pop sr-fin-pop-sort">
+              {sortOptions.map(o => (
+                <div
+                  key={o}
+                  className={`sr-fin-menu-item${(ctx.sortKey || "recent") === o ? " on" : ""}`}
+                  onClick={() => { ctx.onSortChange?.(o); setOpenMenu(null); }}
+                >
+                  <svg className="sr-fin-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  {sortLabel(o)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showSearch && (
+        <div className={`sr-fin-search${searchOpen ? " open" : ""}`}>
+          <button
+            type="button"
+            className="sr-fin-search-toggle"
+            onClick={() => setSearchOpen(s => !s)}
+            aria-label="Search assets"
+            title="Search"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </button>
+          {searchOpen && (
+            <input
+              type="text"
+              className="sr-fin-search-input"
+              placeholder="Search…"
+              value={ctx.searchQuery || ""}
+              onChange={(e) => ctx.onSearchChange?.(e.target.value)}
+              autoFocus
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One category section inside the Filters popover. Renders a small
+// header + a checkbox row per option. Toggling a checkbox edits the
+// filterState in place via ctx.onFilterChange.
+function FilterCategorySection({ catKey, ctx }: { catKey: string; ctx: ShowcaseContext }) {
+  const label = labelForCategory(catKey, ctx.fieldDefs);
+  const opts = optionsForCategory(catKey, ctx.assets, ctx.fieldDefs);
+  // assets passed in here are already filtered, which means hiding
+  // options that are no longer reachable. We want to surface ALL
+  // options for the category regardless of current filters so users
+  // can broaden their query — use the unfiltered counterpart from
+  // ctx (host should pass unfiltered list... but for simplicity here
+  // we read from ctx.assets, which is the filtered set; admins can
+  // still see currently-selected filter values rendered as on regardless).
+  const selected = new Set(ctx.filterState?.[catKey] || []);
+  const toggle = (v: string) => {
+    const cur = new Set(ctx.filterState?.[catKey] || []);
+    if (cur.has(v)) cur.delete(v); else cur.add(v);
+    const next: FilterState = { ...(ctx.filterState || {}), [catKey]: Array.from(cur) };
+    ctx.onFilterChange?.(next);
+  };
+  return (
+    <div className="sr-fin-cat">
+      <div className="sr-fin-cat-h">{label}</div>
+      {opts.length === 0 ? (
+        <div className="sr-fin-cat-empty">No values to filter</div>
+      ) : (
+        <div className="sr-fin-cat-opts">
+          {opts.map(v => (
+            <label key={v} className="sr-fin-cat-opt">
+              <input type="checkbox" checked={selected.has(v)} onChange={() => toggle(v)}/>
+              <span>{v}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── FiltersStickyBlock ────────────────────────────────────────────
+// Vertical accordion sidebar that pins to the viewport edge. Each
+// category is a row with a circular chevron; expanded rows show the
+// checkbox list inline. Matches the FILTER BY pattern from B2B
+// catalog pages.
+function FiltersStickyBlock({ props, ctx }: BlockProps<FiltersStickyBlockProps>) {
+  const heading = props.heading || "FILTER BY";
+  const side = props.side || "left";
+  const categoryKeys = props.filterCategoryKeys || [];
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  if (categoryKeys.length === 0) return null;
+  const toggleExpand = (k: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  };
+  return (
+    <aside className={`sr-fsb sr-fsb-${side}`}>
+      <div className="sr-fsb-h">{heading}</div>
+      {categoryKeys.map(k => {
+        const isOpen = expanded.has(k);
+        const label = labelForCategory(k, ctx.fieldDefs);
+        const opts = optionsForCategory(k, ctx.assets, ctx.fieldDefs);
+        const selected = new Set(ctx.filterState?.[k] || []);
+        const toggle = (v: string) => {
+          const cur = new Set(selected);
+          if (cur.has(v)) cur.delete(v); else cur.add(v);
+          ctx.onFilterChange?.({ ...(ctx.filterState || {}), [k]: Array.from(cur) });
+        };
+        return (
+          <div key={k} className="sr-fsb-cat">
+            <button type="button" className="sr-fsb-row" onClick={() => toggleExpand(k)}>
+              <span className="sr-fsb-row-l">{label}</span>
+              <span className={`sr-fsb-chev${isOpen ? " open" : ""}`}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
+            </button>
+            {isOpen && (
+              <div className="sr-fsb-opts">
+                {opts.length === 0 ? (
+                  <div className="sr-fsb-empty">No values</div>
+                ) : (
+                  opts.map(v => (
+                    <label key={v} className="sr-fsb-opt">
+                      <input type="checkbox" checked={selected.has(v)} onChange={() => toggle(v)}/>
+                      <span>{v}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </aside>
+  );
+}
+
 // ── Block registry ────────────────────────────────────────────────
 // Discriminated dispatch: given a block, pick the right renderer.
 // Each renderer narrows the props through its own type via the
 // discriminator union.
 function renderBlock(block: TemplateBlock, ctx: ShowcaseContext, key: number) {
   switch (block.type) {
-    case "hero":          return <HeroBlock          key={key} props={block.props} ctx={ctx}/>;
-    case "asset-grid":    return <AssetGridBlock     key={key} props={block.props} ctx={ctx}/>;
-    case "quote-rotator": return <QuoteRotatorBlock  key={key} props={block.props} ctx={ctx}/>;
-    case "intro-text":    return <IntroTextBlock     key={key} props={block.props} ctx={ctx}/>;
-    case "divider":       return <DividerBlock       key={key} props={block.props} ctx={ctx}/>;
-    case "footer":        return <FooterBlock        key={key} props={block.props} ctx={ctx}/>;
+    case "hero":            return <HeroBlock            key={key} props={block.props} ctx={ctx}/>;
+    case "asset-grid":      return <AssetGridBlock       key={key} props={block.props} ctx={ctx}/>;
+    case "quote-rotator":   return <QuoteRotatorBlock    key={key} props={block.props} ctx={ctx}/>;
+    case "intro-text":      return <IntroTextBlock       key={key} props={block.props} ctx={ctx}/>;
+    case "divider":         return <DividerBlock         key={key} props={block.props} ctx={ctx}/>;
+    case "footer":          return <FooterBlock          key={key} props={block.props} ctx={ctx}/>;
+    case "filters-inline":  return <FiltersInlineBlock   key={key} props={block.props} ctx={ctx}/>;
+    case "filters-sticky":  return <FiltersStickyBlock   key={key} props={block.props} ctx={ctx}/>;
     // No default needed — exhaustive over the discriminated union.
   }
 }
@@ -538,6 +917,8 @@ function blockTypeLabel(type: TemplateBlock["type"]): string {
     case "intro-text": return "intro text";
     case "divider": return "divider";
     case "footer": return "footer";
+    case "filters-inline": return "filters";
+    case "filters-sticky": return "sticky filters";
   }
 }
 
@@ -665,6 +1046,66 @@ const css = `
 .sr-footer{text-align:center;padding:32px 24px 48px;color:var(--t4);font-size:12px;}
 .sr-footer-brand{font-family:var(--serif);font-weight:600;color:var(--accent);}
 .sr-footer-spacer{height:48px;}
+
+/* ─── Filters: inline (subtle) variant ──────────────────────────
+   Mirrors the master library lib-bar 1:1. Filters button is a
+   filled accent pill with a count badge; Sort is an outline button
+   with a popover; Search is an icon-only button that expands inline
+   to an input when clicked. */
+.sr-fin-wrap{max-width:1100px;margin:0 auto;padding:0 32px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:relative;}
+.sr-fin-pop-wrap{position:relative;}
+.sr-fin-filter{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--border);background:#fff;border-radius:7px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--t2);cursor:pointer;transition:all .12s;}
+.sr-fin-filter:hover{border-color:var(--border2);color:var(--t1);}
+.sr-fin-filter.on{background:var(--accent);color:#fff;border-color:var(--accent);}
+.sr-fin-count{background:rgba(255,255,255,.25);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;}
+.sr-fin-filter:not(.on) .sr-fin-count{background:var(--accent);color:#fff;}
+.sr-fin-btn{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--border);background:#fff;border-radius:7px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--t2);cursor:pointer;transition:all .12s;}
+.sr-fin-btn:hover{border-color:var(--border2);color:var(--t1);}
+.sr-fin-btn.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accentL);}
+/* Popovers anchored under the buttons */
+.sr-fin-pop{position:absolute;top:calc(100% + 6px);left:0;min-width:200px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14), 0 4px 10px rgba(0,0,0,.05);padding:6px;z-index:40;}
+.sr-fin-pop-filter{min-width:260px;max-width:340px;padding:10px;display:flex;flex-direction:column;gap:12px;max-height:420px;overflow-y:auto;}
+.sr-fin-menu-item{display:flex;align-items:center;gap:8px;padding:7px 10px;font-family:var(--font);font-size:12.5px;color:var(--t1);cursor:pointer;border-radius:6px;transition:background .12s;}
+.sr-fin-menu-item:hover{background:var(--bg2);}
+.sr-fin-menu-item.on{color:var(--accent);font-weight:600;}
+.sr-fin-check{width:13px;height:13px;visibility:hidden;color:var(--accent);}
+.sr-fin-menu-item.on .sr-fin-check{visibility:visible;}
+.sr-fin-cat-h{font-size:10.5px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
+.sr-fin-cat-opts{display:flex;flex-direction:column;gap:2px;}
+.sr-fin-cat-opt{display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:12.5px;color:var(--t1);cursor:pointer;border-radius:4px;}
+.sr-fin-cat-opt:hover{background:var(--bg);}
+.sr-fin-cat-opt input{accent-color:var(--accent);}
+.sr-fin-cat-empty{font-size:11.5px;color:var(--t4);font-style:italic;padding:4px 0;}
+.sr-fin-pop-foot{display:flex;justify-content:flex-end;border-top:1px solid var(--border);padding-top:8px;margin-top:4px;}
+.sr-fin-clear{background:none;border:none;font-family:var(--font);font-size:12px;color:var(--t3);font-weight:600;cursor:pointer;padding:4px 8px;border-radius:5px;}
+.sr-fin-clear:hover{background:var(--bg2);color:var(--t1);}
+/* Search — icon collapses to a button; expanded shows an input */
+.sr-fin-search{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:7px;background:#fff;transition:all .15s;}
+.sr-fin-search.open{padding-right:8px;}
+.sr-fin-search-toggle{display:grid;place-items:center;width:30px;height:30px;background:none;border:none;color:var(--t2);cursor:pointer;border-radius:7px 0 0 7px;transition:color .12s;}
+.sr-fin-search-toggle:hover{color:var(--t1);}
+.sr-fin-search.open .sr-fin-search-toggle{color:var(--accent);}
+.sr-fin-search-input{border:none;outline:none;background:transparent;font-family:var(--font);font-size:12.5px;color:var(--t1);width:180px;padding:6px 0;animation:srFinSearchIn .15s ease;}
+@keyframes srFinSearchIn{from{width:0;opacity:0;}to{width:180px;opacity:1;}}
+
+/* ─── Filters: sticky sidebar variant ───────────────────────────
+   Vertical accordion that pins to the viewport edge. Each row has
+   a circular chevron that rotates when expanded. Inline checkbox
+   list on expand. */
+.sr-fsb{position:sticky;top:24px;align-self:flex-start;max-width:240px;width:100%;padding:0 8px 32px;}
+.sr-fsb-left{margin-left:32px;}
+.sr-fsb-right{margin-left:auto;margin-right:32px;}
+.sr-fsb-h{font-family:var(--font);font-size:13px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;padding:8px 0 14px;border-bottom:1px solid var(--border);}
+.sr-fsb-cat{border-bottom:1px solid var(--border);}
+.sr-fsb-row{display:flex;align-items:center;justify-content:space-between;width:100%;padding:18px 0;background:none;border:none;cursor:pointer;font-family:var(--font);}
+.sr-fsb-row-l{font-size:15px;font-weight:600;color:var(--t1);text-align:left;}
+.sr-fsb-chev{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--bg2);color:var(--t2);transition:transform .15s, background .12s;}
+.sr-fsb-row:hover .sr-fsb-chev{background:var(--bg3);color:var(--t1);}
+.sr-fsb-chev.open{transform:rotate(180deg);background:var(--bg3);color:var(--t1);}
+.sr-fsb-opts{display:flex;flex-direction:column;gap:6px;padding:0 0 18px 16px;}
+.sr-fsb-opt{display:flex;align-items:center;gap:10px;font-family:var(--font);font-size:14px;color:var(--t1);cursor:pointer;padding:4px 0;}
+.sr-fsb-opt input{accent-color:var(--accent);width:14px;height:14px;}
+.sr-fsb-empty{font-size:12px;color:var(--t4);font-style:italic;}
 
 @media (max-width: 700px) {
   .sr-hero{padding:40px 20px 24px;}

@@ -23,8 +23,8 @@
 // admin's customization stops at "pick a template."
 
 import React, { useEffect, useMemo, useState } from "react";
-import ShowcaseRenderer, { type ShowcaseRenderAsset } from "./ShowcaseRenderer";
-import { effectiveTemplate, cloneTemplateBlocks, TEMPLATES, type TemplateBlock, type HeroBlockProps, type AssetGridBlockProps, type QuoteRotatorBlockProps, type IntroTextBlockProps, type DividerBlockProps, type FooterBlockProps } from "@/lib/showcase-templates";
+import ShowcaseRenderer, { type ShowcaseRenderAsset, type ShowcaseFieldDef, type FilterState, type SortKey, applyFilters } from "./ShowcaseRenderer";
+import { effectiveTemplate, cloneTemplateBlocks, TEMPLATES, type TemplateBlock, type HeroBlockProps, type AssetGridBlockProps, type QuoteRotatorBlockProps, type IntroTextBlockProps, type DividerBlockProps, type FooterBlockProps, type FiltersInlineBlockProps, type FiltersStickyBlockProps } from "@/lib/showcase-templates";
 import type { ShowcaseAssetRef } from "./ShowcasesView";
 
 interface ShowcaseDraft {
@@ -79,11 +79,16 @@ interface Props {
   // the showcases list and close the builder.
   onClose: (updated?: SavedShowcase) => void;
   onToast: (msg: string) => void;
+  // Slim org field defs — drives the filter-element category picker
+  // (admin chooses which categories to expose) AND the live preview
+  // (so dropdowns show real labels + values without a fetch). Empty
+  // array is fine — filter elements just show fewer options.
+  fieldDefs: ShowcaseFieldDef[];
 }
 
 type Category = "content" | "layout" | "style" | "settings";
 
-export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, onClose, onToast }: Props) {
+export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, onClose, onToast, fieldDefs }: Props) {
   const [draft, setDraft] = useState<ShowcaseDraft>({
     name: showcase.name,
     description: showcase.description,
@@ -176,6 +181,21 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
       const a = assetMap.get(id);
       if (!a) continue; // silent drop, matches the live-reference contract
       if (a.status !== "published") continue;
+      // Compose the fieldValues map exactly like the public path
+      // does so the filter elements see real values. Built-ins
+      // (vertical, geography, etc.) mirror in alongside any custom
+      // fields admin defined.
+      const fieldValues: Record<string, unknown> = {
+        ...(a.customFieldValues || {}),
+        vertical: a.vertical || "",
+        geography: a.geography || "",
+        clientRole: a.clientRole || "",
+        company: a.company || "",
+        clientName: a.clientName || "",
+        headline: a.headline || "",
+        description: a.description || "",
+        assetType: a.assetType || "",
+      };
       out.push({
         id: a.id,
         headline: a.headline,
@@ -189,10 +209,22 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
         thumbnail: a.thumbnail,
         asset_type: a.assetType,
         duration_seconds: a.durationSeconds,
+        fieldValues,
       });
     }
     return out;
   }, [draft.assetIds, assetMap]);
+
+  // Live filter / sort / search state for the preview. Drives the
+  // exact same applyFilters pipeline the public page uses, so what
+  // the admin sees in the preview is what the viewer will see.
+  const [previewFilterState, setPreviewFilterState] = useState<FilterState>({});
+  const [previewSortKey, setPreviewSortKey] = useState<SortKey>("recent");
+  const [previewSearchQuery, setPreviewSearchQuery] = useState<string>("");
+  const filteredPreviewAssets = useMemo(
+    () => applyFilters(previewAssets, previewFilterState, previewSortKey, previewSearchQuery),
+    [previewAssets, previewFilterState, previewSortKey, previewSearchQuery],
+  );
 
   // Effective template the preview renders against. When the
   // admin has started customizing, this comes from templateConfig;
@@ -467,37 +499,6 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
     }
   };
 
-  // "Build with Claude" — admin describes a layout in plain
-  // English; Claude returns a validated TemplateBlock[]; we
-  // apply it straight to the draft so the preview updates
-  // immediately. Errors surface to the panel for the admin to
-  // adjust their prompt + retry. The endpoint validates against
-  // the same shape contract the DAL enforces.
-  const generateWithClaude = async (prompt: string): Promise<{ ok: true } | { ok: false; error: string }> => {
-    try {
-      const headers = await authHeaders();
-      const r = await fetch(`/api/showcases/${encodeURIComponent(showcase.id)}/generate-template`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...headers },
-        body: JSON.stringify({ prompt }),
-      });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({})) as { error?: string };
-        return { ok: false, error: body.error || "Generation failed" };
-      }
-      const data = await r.json() as { blocks: TemplateBlock[] };
-      // Apply the generated blocks. We keep templateId as the
-      // starting-point hint (so the picker shows "you started
-      // from X but customized") and put the AI output into the
-      // owned config slot.
-      setDraft(d => ({ ...d, templateConfig: data.blocks }));
-      return { ok: true };
-    } catch (e) {
-      console.error("[generateWithClaude] failed", e);
-      return { ok: false, error: "Couldn't reach the generation service" };
-    }
-  };
-
   const copyShareLink = () => {
     if (typeof window === "undefined") return;
     const u = `${window.location.origin}/showcase/${showcase.id}`;
@@ -642,6 +643,7 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                   effectiveBlocks={template.blocks}
                   drillIdx={layoutDrillIdx}
                   onSetDrillIdx={setLayoutDrillIdx}
+                  fieldDefs={fieldDefs}
                   blockDrag={blockDrag}
                   onBlockDragBegin={(idx, e) => beginBlockDrag(idx, "list", ".sb-block-row[data-block-idx]")(e)}
                   onSelectTemplate={(id) => {
@@ -688,7 +690,6 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                       return { ...d, templateConfig: base.filter((_, i) => i !== idx) };
                     });
                   }}
-                  onGenerateWithClaude={generateWithClaude}
                 />
               )}
               {activeCategory === "style" && (
@@ -718,7 +719,14 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
               template={template}
               context={{
                 showcase: { id: showcase.id, name: draft.name || "Untitled showcase", description: draft.description },
-                assets: previewAssets,
+                assets: filteredPreviewAssets,
+                fieldDefs,
+                filterState: previewFilterState,
+                onFilterChange: setPreviewFilterState,
+                sortKey: previewSortKey,
+                onSortChange: setPreviewSortKey,
+                searchQuery: previewSearchQuery,
+                onSearchChange: setPreviewSearchQuery,
                 onAssetClick: (id) => {
                   // Swallow the click if a drag just ended — otherwise
                   // releasing a drag would also open the asset.
@@ -1053,23 +1061,31 @@ function ContentPanel({ draft, setDraft, assets, view, onSetView }: {
 // because B4.0 deprecated it; we don't want admins adding new ones.
 function defaultBlockForType(type: TemplateBlock["type"]): TemplateBlock {
   switch (type) {
-    case "hero":          return { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "center", padding: "comfortable" } };
-    case "asset-grid":    return { type: "asset-grid", props: { columns: 3, aspect: "16/9", clickTarget: "modal" } };
-    case "quote-rotator": return { type: "quote-rotator", props: { source: "showcase-assets", intervalSec: 6, size: "full" } };
-    case "intro-text":    return { type: "intro-text", props: { content: "Write an intro for this section.", align: "left" } };
-    case "divider":       return { type: "divider", props: { spacing: "normal" } };
-    case "footer":        return { type: "footer", props: { showBrand: false } };
+    case "hero":            return { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "center", padding: "comfortable" } };
+    case "asset-grid":      return { type: "asset-grid", props: { columns: 3, aspect: "16/9", clickTarget: "modal" } };
+    case "quote-rotator":   return { type: "quote-rotator", props: { source: "showcase-assets", intervalSec: 6, size: "full" } };
+    case "intro-text":      return { type: "intro-text", props: { content: "Write an intro for this section.", align: "left" } };
+    case "divider":         return { type: "divider", props: { spacing: "normal" } };
+    case "footer":          return { type: "footer", props: { showBrand: false } };
+    // Filter elements default to subtle defaults — the admin opts in
+    // to categories from the settings panel. Showing Sort + Search
+    // by default with empty category list still produces a useful
+    // sort + search bar immediately.
+    case "filters-inline":  return { type: "filters-inline", props: { showSort: true, showFilter: true, showSearch: true, filterCategoryKeys: [], sortOptions: ["recent", "az", "za"] } };
+    case "filters-sticky":  return { type: "filters-sticky", props: { heading: "FILTER BY", filterCategoryKeys: [], side: "left" } };
   }
 }
 
 // Blocks the "Add block" picker exposes. Footer omitted (deprecated
 // in B4.0). Order matches what an admin probably reaches for most.
 const ADDABLE_BLOCK_TYPES: { type: TemplateBlock["type"]; label: string; help: string }[] = [
-  { type: "quote-rotator", label: "Quote rotator", help: "Rotates each asset's pull quote with auto-advance." },
-  { type: "intro-text",    label: "Intro text",    help: "A short paragraph above or between sections." },
-  { type: "asset-grid",    label: "Asset grid",    help: "A grid of testimonial cards. (Adds a second grid.)" },
-  { type: "hero",          label: "Hero",          help: "A headline + subtitle band. (Adds a second hero.)" },
-  { type: "divider",       label: "Divider",       help: "A horizontal rule between sections." },
+  { type: "filters-inline", label: "Filters bar",     help: "Subtle Sort + Filter + Search trio that sits above your grid." },
+  { type: "filters-sticky", label: "Sticky filters",  help: "Vertical filter sidebar that follows the viewer as they scroll." },
+  { type: "quote-rotator",  label: "Quote rotator",   help: "Rotates each asset's pull quote with auto-advance." },
+  { type: "intro-text",     label: "Intro text",      help: "A short paragraph above or between sections." },
+  { type: "asset-grid",     label: "Asset grid",      help: "A grid of testimonial cards. (Adds a second grid.)" },
+  { type: "hero",           label: "Hero",            help: "A headline + subtitle band. (Adds a second hero.)" },
+  { type: "divider",        label: "Divider",         help: "A horizontal rule between sections." },
 ];
 
 // Magic-rearrange shift function. Given the static index of a row,
@@ -1092,13 +1108,17 @@ function shiftFor(idx: number, fromIdx: number, insertIdx: number): number {
 // block list (one row per block in the effective template). Click
 // a block row to drill into its per-block settings; back arrow
 // returns. Mirrors the Vimeo Showcases / Elfsight pattern.
-function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, blockDrag, onBlockDragBegin, onSelectTemplate, onUpdateBlock, onAddBlock, onRemoveBlock, onGenerateWithClaude }: {
+function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, fieldDefs, blockDrag, onBlockDragBegin, onSelectTemplate, onUpdateBlock, onAddBlock, onRemoveBlock }: {
   templateId: string | null;
   effectiveBlocks: TemplateBlock[];
   // Drill-in index is now controlled from above so the preview-side
   // hover-edit overlay can open the panel pre-focused on a block.
   drillIdx: number | null;
   onSetDrillIdx: (idx: number | null) => void;
+  // Org field defs — needed by the filter-element settings sub-
+  // components to render the category picker (which fields the
+  // public viewer can filter on).
+  fieldDefs: ShowcaseFieldDef[];
   // Shared block-drag state from the parent. Drives magic-shift
   // transforms on non-dragged rows + pointer-follow on the dragged
   // row. Null when no drag is in flight.
@@ -1118,15 +1138,10 @@ function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, blo
   onUpdateBlock: (idx: number, props: Record<string, unknown>) => void;
   onAddBlock: (type: TemplateBlock["type"]) => void;
   onRemoveBlock: (idx: number) => void;
-  onGenerateWithClaude: (prompt: string) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   // Convenience aliases so we don't have to thread the controlled
   // props through every call site below.
   const setDrillIdx = onSetDrillIdx;
-  // The Claude prompt sheet slides over the panel content when
-  // open. State is here (not the parent) because it's purely a
-  // local UI affordance — the parent only needs the result.
-  const [claudeOpen, setClaudeOpen] = useState(false);
   // (Template-change reset is handled in the parent's onSelectTemplate
   // callback now. An effect tied to [templateId] also fires on initial
   // mount, which races the preview-side hover-edit overlay that just
@@ -1165,37 +1180,15 @@ function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, blo
         <BlockSettings
           block={block}
           onChange={(props) => onUpdateBlock(drillIdx, props)}
+          fieldDefs={fieldDefs}
         />
       </div>
     );
   }
 
-  // Top-level view: Build-with-Claude CTA + template picker + block list
+  // Top-level view: template picker + element list
   return (
     <div className="sb-content">
-      {claudeOpen && (
-        <ClaudeSheet
-          onGenerate={onGenerateWithClaude}
-          onClose={() => setClaudeOpen(false)}
-        />
-      )}
-
-      <button
-        type="button"
-        className="sb-claude-cta"
-        onClick={() => setClaudeOpen(true)}
-        title="Describe a layout in plain English and let Claude draft it"
-      >
-        <span className="sb-claude-cta-glyph">✦</span>
-        <div className="sb-claude-cta-body">
-          <div className="sb-claude-cta-h">Build with Claude</div>
-          <div className="sb-claude-cta-sub">Describe a layout — Claude drafts it for you in seconds.</div>
-        </div>
-        <svg className="sb-claude-cta-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="9 18 15 12 9 6"/>
-        </svg>
-      </button>
-
       <section className="sb-section">
         <header className="sb-section-head">
           <h3>Template</h3>
@@ -1233,10 +1226,10 @@ function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, blo
 
       <section className="sb-section">
         <header className="sb-section-head">
-          <h3>Blocks</h3>
+          <h3>Elements</h3>
           <span className="sb-section-count">{effectiveBlocks.length}</span>
         </header>
-        <p className="sb-section-help">Each block has its own settings — click one to dive in. Drag the handle to reorder.</p>
+        <p className="sb-section-help">Each element has its own settings — click one to dive in. Drag the handle to reorder.</p>
         <div className="sb-block-list">
           {effectiveBlocks.map((b, i) => {
             // Magic-shift transform: same pattern as the library
@@ -1362,7 +1355,7 @@ function AddBlockPicker({ onAdd }: { onAdd: (type: TemplateBlock["type"]) => voi
           <line x1="12" y1="5" x2="12" y2="19"/>
           <line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
-        Add block
+        Add element
       </button>
       {open && (
         <div className="sb-addblock-pop" role="menu">
@@ -1386,103 +1379,6 @@ function AddBlockPicker({ onAdd }: { onAdd: (type: TemplateBlock["type"]) => voi
   );
 }
 
-// ─── Claude prompt sheet ─────────────────────────────────────────
-// Slides over the Layout panel content. Admin types a description,
-// hits Generate, sees a loading state while Claude responds. On
-// success the parent applies the generated blocks to the draft
-// and we close ourselves. On error we surface inline so the admin
-// can rephrase + retry.
-//
-// Example prompts seed inspiration — most admins won't know what
-// "good prompts" look like for a layout-generation tool, so giving
-// them concrete starting points dramatically improves first-use
-// conversion.
-function ClaudeSheet({ onGenerate, onClose }: {
-  onGenerate: (prompt: string) => Promise<{ ok: true } | { ok: false; error: string }>;
-  onClose: () => void;
-}) {
-  const [prompt, setPrompt] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const examples = [
-    "An editorial layout with a big hero, a quote rotator, then a 2-column asset grid.",
-    "Minimal — small hero, no rotator, dense 4-column grid of assets.",
-    "Add a written intro between the hero and the asset grid that introduces our customer success program.",
-    "Asset-heavy showcase with quote rotation up top to set the tone before the grid.",
-  ];
-
-  const submit = async () => {
-    const p = prompt.trim();
-    if (!p || busy) return;
-    setBusy(true);
-    setError(null);
-    const result = await onGenerate(p);
-    setBusy(false);
-    if (result.ok) {
-      onClose();
-    } else {
-      setError(result.error);
-    }
-  };
-
-  return (
-    <div className="sb-claude-sheet">
-      <header className="sb-claude-sheet-head">
-        <button type="button" className="sb-claude-back" onClick={onClose} disabled={busy} aria-label="Close">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="19" y1="12" x2="5" y2="12"/>
-            <polyline points="12 19 5 12 12 5"/>
-          </svg>
-          Back
-        </button>
-        <h3>✦ Build with Claude</h3>
-      </header>
-
-      <div className="sb-claude-body">
-        <label className="sb-claude-label">
-          <span>Describe the layout you want</span>
-          <textarea
-            value={prompt}
-            onChange={e => setPrompt(e.target.value)}
-            placeholder="e.g. A hero on top, a rotating quote band, then a 3-column grid of assets, ending with a footer."
-            rows={6}
-            disabled={busy}
-            autoFocus
-          />
-        </label>
-
-        <div className="sb-claude-examples">
-          <div className="sb-claude-examples-h">Need a starting point? Try:</div>
-          {examples.map((ex, i) => (
-            <button
-              key={i}
-              type="button"
-              className="sb-claude-example"
-              onClick={() => setPrompt(ex)}
-              disabled={busy}
-            >{ex}</button>
-          ))}
-        </div>
-
-        {error && <div className="sb-claude-error">{error}</div>}
-      </div>
-
-      <footer className="sb-claude-foot">
-        <button type="button" className="sb-claude-cancel" onClick={onClose} disabled={busy}>Cancel</button>
-        <button type="button" className="sb-claude-submit" onClick={submit} disabled={busy || !prompt.trim()}>
-          {busy ? (
-            <>
-              <span className="sb-claude-spin"/>
-              Generating…
-            </>
-          ) : "Generate layout"}
-        </button>
-      </footer>
-    </div>
-  );
-}
-
 // ─── Block metadata helpers ──────────────────────────────────────
 // Friendly labels + brief summaries that appear in the block list
 // row. Keeps the drill-down hierarchy navigable at a glance.
@@ -1494,6 +1390,8 @@ function blockLabel(type: TemplateBlock["type"]): string {
     case "intro-text": return "Intro text";
     case "divider": return "Divider";
     case "footer": return "Footer";
+    case "filters-inline": return "Filters bar";
+    case "filters-sticky": return "Sticky filters";
   }
 }
 function blockSummary(b: TemplateBlock): string {
@@ -1504,17 +1402,31 @@ function blockSummary(b: TemplateBlock): string {
     case "intro-text": return b.props.content ? b.props.content.slice(0, 60) + (b.props.content.length > 60 ? "…" : "") : "Empty";
     case "divider": return `${b.props.spacing || "normal"} spacing`;
     case "footer": return b.props.showBrand === false ? "Unbranded" : "StoryMatch branded";
+    case "filters-inline": {
+      const parts: string[] = [];
+      if (b.props.showSort !== false) parts.push("Sort");
+      if (b.props.showFilter !== false) parts.push("Filter");
+      if (b.props.showSearch !== false) parts.push("Search");
+      const cats = b.props.filterCategoryKeys?.length || 0;
+      return `${parts.join(" · ") || "Disabled"}${cats ? ` · ${cats} categor${cats === 1 ? "y" : "ies"}` : ""}`;
+    }
+    case "filters-sticky": {
+      const cats = b.props.filterCategoryKeys?.length || 0;
+      return `${b.props.side === "right" ? "Right" : "Left"} sidebar · ${cats} categor${cats === 1 ? "y" : "ies"}`;
+    }
   }
 }
 function blockIcon(type: TemplateBlock["type"]) {
   const common = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2 as const, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   switch (type) {
-    case "hero":          return <svg {...common}><rect x="3" y="5" width="18" height="9" rx="1"/><line x1="3" y1="19" x2="14" y2="19"/></svg>;
-    case "asset-grid":    return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>;
-    case "quote-rotator": return <svg {...common}><path d="M3 21c0-7 6-13 13-13"/><path d="M14 8a5 5 0 0 1 5 5"/></svg>;
-    case "intro-text":    return <svg {...common}><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>;
-    case "divider":       return <svg {...common}><line x1="3" y1="12" x2="21" y2="12"/></svg>;
-    case "footer":        return <svg {...common}><rect x="3" y="5" width="18" height="9" rx="1"/><line x1="3" y1="19" x2="21" y2="19"/></svg>;
+    case "hero":            return <svg {...common}><rect x="3" y="5" width="18" height="9" rx="1"/><line x1="3" y1="19" x2="14" y2="19"/></svg>;
+    case "asset-grid":      return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>;
+    case "quote-rotator":   return <svg {...common}><path d="M3 21c0-7 6-13 13-13"/><path d="M14 8a5 5 0 0 1 5 5"/></svg>;
+    case "intro-text":      return <svg {...common}><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>;
+    case "divider":         return <svg {...common}><line x1="3" y1="12" x2="21" y2="12"/></svg>;
+    case "footer":          return <svg {...common}><rect x="3" y="5" width="18" height="9" rx="1"/><line x1="3" y1="19" x2="21" y2="19"/></svg>;
+    case "filters-inline":  return <svg {...common}><polyline points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>;
+    case "filters-sticky":  return <svg {...common}><rect x="3" y="4" width="6" height="16" rx="1"/><line x1="13" y1="8" x2="20" y2="8"/><line x1="13" y1="14" x2="20" y2="14"/><line x1="13" y1="20" x2="20" y2="20"/></svg>;
   }
 }
 
@@ -1523,17 +1435,20 @@ function blockIcon(type: TemplateBlock["type"]) {
 // returns a set of typed form controls bound to that block's
 // props. Changes flow up via the onChange callback which the
 // parent merges into templateConfig[idx].props.
-function BlockSettings({ block, onChange }: {
+function BlockSettings({ block, onChange, fieldDefs }: {
   block: TemplateBlock;
   onChange: (newProps: Record<string, unknown>) => void;
+  fieldDefs: ShowcaseFieldDef[];
 }) {
   switch (block.type) {
-    case "hero":          return <HeroSettings          props={block.props} onChange={onChange}/>;
-    case "asset-grid":    return <AssetGridSettings     props={block.props} onChange={onChange}/>;
-    case "quote-rotator": return <QuoteRotatorSettings  props={block.props} onChange={onChange}/>;
-    case "intro-text":    return <IntroTextSettings     props={block.props} onChange={onChange}/>;
-    case "divider":       return <DividerSettings       props={block.props} onChange={onChange}/>;
-    case "footer":        return <FooterSettings        props={block.props} onChange={onChange}/>;
+    case "hero":            return <HeroSettings            props={block.props} onChange={onChange}/>;
+    case "asset-grid":      return <AssetGridSettings       props={block.props} onChange={onChange}/>;
+    case "quote-rotator":   return <QuoteRotatorSettings    props={block.props} onChange={onChange}/>;
+    case "intro-text":      return <IntroTextSettings       props={block.props} onChange={onChange}/>;
+    case "divider":         return <DividerSettings         props={block.props} onChange={onChange}/>;
+    case "footer":          return <FooterSettings          props={block.props} onChange={onChange}/>;
+    case "filters-inline":  return <FiltersInlineSettings   props={block.props} onChange={onChange} fieldDefs={fieldDefs}/>;
+    case "filters-sticky":  return <FiltersStickySettings   props={block.props} onChange={onChange} fieldDefs={fieldDefs}/>;
   }
 }
 
@@ -1698,6 +1613,119 @@ function FooterSettings({ props, onChange }: { props: FooterBlockProps; onChange
         label="Show &quot;Shared via StoryMatch&quot; brand mark"
         checked={props.showBrand !== false}
         onChange={(v) => onChange({ showBrand: v })}
+      />
+    </div>
+  );
+}
+
+// ─── Filter settings (shared category picker) ────────────────────
+// Both filter elements share a "which categories show?" picker —
+// keep it as a single sub-component so the two settings panels stay
+// thin. Field defs come in as the pool of choices; admin opts in
+// per-field with a checkbox row.
+function FilterCategoryPicker({ value, onChange, fieldDefs }: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  fieldDefs: ShowcaseFieldDef[];
+}) {
+  // Built-in keys not stored in field defs — admins can always
+  // opt these in regardless of what's defined in the schema.
+  const builtIns: { key: string; label: string }[] = [
+    { key: "assetType", label: "Type (Video / Story)" },
+  ];
+  // Filter field defs to only categorical-ish types — text fields
+  // make for noisy filters (one option per asset), so we cap to
+  // select / multi_select. Numbers + dates are out for v1.
+  const eligible = fieldDefs.filter(d => d.type === "select" || d.type === "multi_select" || d.key === "vertical" || d.key === "company" || d.key === "geography" || d.key === "clientRole");
+  const selected = new Set(value);
+  const toggle = (k: string) => {
+    if (selected.has(k)) onChange(value.filter(v => v !== k));
+    else onChange([...value, k]);
+  };
+  return (
+    <FieldLabel label="Filter categories">
+      <div className="sb-bs-cats">
+        {builtIns.map(b => (
+          <label key={b.key} className="sb-bs-cat-row">
+            <input type="checkbox" checked={selected.has(b.key)} onChange={() => toggle(b.key)}/>
+            <span>{b.label}</span>
+          </label>
+        ))}
+        {eligible.length === 0 ? (
+          <div className="sb-bs-cat-empty">No fields defined yet. Add fields in Manage fields to expose them as filters.</div>
+        ) : (
+          eligible.map(d => (
+            <label key={d.key} className="sb-bs-cat-row">
+              <input type="checkbox" checked={selected.has(d.key)} onChange={() => toggle(d.key)}/>
+              <span>{d.label}</span>
+            </label>
+          ))
+        )}
+      </div>
+    </FieldLabel>
+  );
+}
+
+function FiltersInlineSettings({ props, onChange, fieldDefs }: {
+  props: FiltersInlineBlockProps;
+  onChange: (p: Record<string, unknown>) => void;
+  fieldDefs: ShowcaseFieldDef[];
+}) {
+  return (
+    <div className="sb-bs">
+      <p className="sb-bs-hint">Three independent affordances — show any combination. Search expands inline when clicked.</p>
+      <Toggle
+        label="Show Sort button"
+        checked={props.showSort !== false}
+        onChange={(v) => onChange({ showSort: v })}
+      />
+      <Toggle
+        label="Show Filters button"
+        checked={props.showFilter !== false}
+        onChange={(v) => onChange({ showFilter: v })}
+      />
+      <Toggle
+        label="Show Search icon"
+        checked={props.showSearch !== false}
+        onChange={(v) => onChange({ showSearch: v })}
+      />
+      <FilterCategoryPicker
+        value={props.filterCategoryKeys || []}
+        onChange={(next) => onChange({ filterCategoryKeys: next })}
+        fieldDefs={fieldDefs}
+      />
+    </div>
+  );
+}
+
+function FiltersStickySettings({ props, onChange, fieldDefs }: {
+  props: FiltersStickyBlockProps;
+  onChange: (p: Record<string, unknown>) => void;
+  fieldDefs: ShowcaseFieldDef[];
+}) {
+  return (
+    <div className="sb-bs">
+      <p className="sb-bs-hint">Vertical accordion sidebar — pins to one side of the viewport as viewers scroll.</p>
+      <FieldLabel label="Heading">
+        <input
+          type="text"
+          className="sb-bs-text"
+          value={props.heading ?? "FILTER BY"}
+          onChange={(e) => onChange({ heading: e.target.value })}
+          placeholder="FILTER BY"
+        />
+      </FieldLabel>
+      <FieldLabel label="Anchor">
+        <RadioGroup
+          value={props.side || "left"}
+          options={[{ value: "left", label: "Left" }, { value: "right", label: "Right" }]}
+          onChange={(v) => onChange({ side: v })}
+        />
+      </FieldLabel>
+      <FilterCategoryPicker
+        value={props.filterCategoryKeys || []}
+        onChange={(next) => onChange({ filterCategoryKeys: next })}
+        fieldDefs={fieldDefs}
       />
     </div>
   );
@@ -1932,20 +1960,9 @@ const css = `
 
 .sb-coming-soon-inline{padding:12px 14px;background:var(--bg);border:1px dashed var(--border2);border-radius:8px;font-size:11.5px;color:var(--t3);line-height:1.5;}
 
-/* "Build with Claude" CTA — accent-gradient card at the top of
-   the Layout panel. Visually distinct from the regular sections
-   so the magic feature is discoverable on first visit. */
-.sb-claude-cta{display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;border:1.5px solid var(--accent);border-radius:12px;background:linear-gradient(135deg, var(--accentLL), var(--accentL));color:var(--t1);font-family:var(--font);text-align:left;cursor:pointer;transition:transform .12s,box-shadow .15s;}
-.sb-claude-cta:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(109,40,217,.18);}
-.sb-claude-cta-glyph{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;font-family:var(--serif);font-size:18px;flex-shrink:0;font-weight:600;}
-.sb-claude-cta-body{flex:1;min-width:0;}
-.sb-claude-cta-h{font-size:13.5px;font-weight:600;color:var(--accent);}
-.sb-claude-cta-sub{font-size:11.5px;color:var(--t2);margin-top:2px;line-height:1.45;}
-.sb-claude-cta-chev{color:var(--accent);flex-shrink:0;}
-
-/* Manage content CTA — quieter than the Claude CTA (this is a
-   utility action, not a feature pitch). White card with a subtle
-   border that tints on hover. */
+/* Manage content CTA — a quiet utility action surfaced inside the
+   Content panel. White card with a subtle border that tints on
+   hover. */
 .sb-manage-cta{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:#fff;color:var(--t1);font-family:var(--font);text-align:left;cursor:pointer;transition:border-color .12s,background .12s;}
 .sb-manage-cta:hover{border-color:var(--accent);background:color-mix(in srgb, var(--accent) 4%, transparent);}
 .sb-manage-cta-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:7px;background:var(--bg2);color:var(--t2);flex-shrink:0;}
@@ -1956,44 +1973,8 @@ const css = `
 .sb-manage-cta-chev{color:var(--t4);flex-shrink:0;}
 .sb-manage-cta:hover .sb-manage-cta-chev{color:var(--accent);}
 
-/* Claude prompt sheet — slides over the Layout panel content.
-   Same width as the panel so it feels like a sub-page, not a
-   modal. Contains prompt textarea + example chips + Generate. */
-.sb-claude-sheet{position:absolute;inset:0;background:#fff;display:flex;flex-direction:column;z-index:5;animation:sbClaudeIn .15s ease;}
-@keyframes sbClaudeIn{from{transform:translateX(12px);opacity:0;}to{transform:translateX(0);opacity:1;}}
-.sb-claude-sheet-head{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--border);}
-.sb-claude-back{display:inline-flex;align-items:center;gap:5px;background:none;border:none;padding:4px 8px;font-family:var(--font);font-size:11.5px;font-weight:600;color:var(--t3);cursor:pointer;border-radius:5px;}
-.sb-claude-back:hover:not(:disabled){background:var(--bg2);color:var(--t1);}
-.sb-claude-back:disabled{opacity:.4;cursor:not-allowed;}
-.sb-claude-sheet-head h3{font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:-.2px;color:var(--accent);margin:0;}
-
-.sb-claude-body{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:16px;}
-.sb-claude-label{display:flex;flex-direction:column;gap:6px;}
-.sb-claude-label>span{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;}
-.sb-claude-label textarea{padding:10px 12px;border:1.5px solid var(--border);border-radius:9px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);resize:vertical;line-height:1.55;min-height:120px;}
-.sb-claude-label textarea:focus{outline:none;border-color:var(--accent);}
-.sb-claude-label textarea:disabled{background:var(--bg);color:var(--t3);}
-
-.sb-claude-examples{display:flex;flex-direction:column;gap:6px;}
-.sb-claude-examples-h{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);font-weight:700;margin-bottom:2px;}
-.sb-claude-example{text-align:left;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-family:var(--font);font-size:12px;color:var(--t2);cursor:pointer;line-height:1.45;transition:all .12s;}
-.sb-claude-example:hover:not(:disabled){background:var(--accentLL);border-color:var(--accent);color:var(--t1);}
-.sb-claude-example:disabled{opacity:.4;cursor:not-allowed;}
-
-.sb-claude-error{padding:10px 14px;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;color:#b91c1c;font-size:12.5px;line-height:1.5;}
-
-.sb-claude-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 18px;border-top:1px solid var(--border);background:var(--bg);}
-.sb-claude-cancel{padding:8px 14px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;}
-.sb-claude-cancel:hover:not(:disabled){background:var(--bg2);}
-.sb-claude-cancel:disabled{opacity:.4;cursor:not-allowed;}
-.sb-claude-submit{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-radius:7px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;transition:filter .12s;}
-.sb-claude-submit:hover:not(:disabled){filter:brightness(1.08);}
-.sb-claude-submit:disabled{opacity:.5;cursor:not-allowed;}
-.sb-claude-spin{width:12px;height:12px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sbClaudeSpin .8s linear infinite;}
-@keyframes sbClaudeSpin{to{transform:rotate(360deg);}}
-
-/* Block list — top-level Layout view shows one row per block in
-   the effective template. Click to drill into per-block settings. */
+/* Element list — top-level Layout view shows one row per element in
+   the effective template. Click to drill into per-element settings. */
 .sb-block-list{display:flex;flex-direction:column;gap:4px;position:relative;}
 .sb-block-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--t1);font-family:var(--font);text-align:left;cursor:pointer;transition:border-color .12s, background .12s;}
 .sb-block-handle{display:grid;place-items:center;width:18px;height:24px;color:var(--t4);cursor:grab;flex-shrink:0;touch-action:none;}
@@ -2057,6 +2038,15 @@ const css = `
 .sb-bs-switch-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.2);}
 .sb-bs-switch.on .sb-bs-switch-thumb{transform:translateX(16px);}
 .sb-bs-hint{font-size:11.5px;color:var(--t3);line-height:1.5;margin:-2px 0 0;}
+/* Filter category picker — list of checkboxes for the admin to
+   opt in to per-category filter exposure. */
+.sb-bs-text{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);}
+.sb-bs-text:focus{outline:none;border-color:var(--accent);}
+.sb-bs-cats{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);max-height:260px;overflow-y:auto;}
+.sb-bs-cat-row{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:12.5px;color:var(--t1);cursor:pointer;border-radius:4px;}
+.sb-bs-cat-row:hover{background:#fff;}
+.sb-bs-cat-row input{accent-color:var(--accent);}
+.sb-bs-cat-empty{font-size:11.5px;color:var(--t3);font-style:italic;padding:6px 4px;line-height:1.5;}
 .sb-coming-soon{padding:36px 24px;text-align:center;color:var(--t3);font-size:12.5px;line-height:1.55;background:var(--bg);border:1px dashed var(--border2);border-radius:10px;}
 .sb-coming-soon-h{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--t1);margin-bottom:6px;}
 .sb-coming-soon p{margin:0;}

@@ -83,11 +83,21 @@ export interface ShowcaseAssetSlim {
   client_name: string;
   company: string;
   vertical: string;
+  // Additional system fields the showcase render layer reads when
+  // composing filter values. Added because the filter blocks in the
+  // builder/public renderer key off any FieldDef the admin opts in
+  // to expose — so geography/role/etc. need to ride along.
+  geography: string;
+  client_role: string;
   asset_type: string;
   // Duration drives the "Watch · 4m 12s" frosted badge on each
   // card. Null when the asset doesn't have a tracked duration
   // (e.g. written case studies).
   duration_seconds: number | null;
+  // Admin-defined custom field values, keyed by FieldDef.key. Carried
+  // through so admin-defined filter categories work end-to-end without
+  // a separate fetch on the public path.
+  custom_field_values: Record<string, unknown>;
 }
 
 // A showcase fully resolved for rendering: same metadata as
@@ -455,7 +465,7 @@ export async function resolveShowcase(id: string): Promise<ResolvedShowcase | nu
 
   const { data, error } = await supabaseAdmin
     .from("assets")
-    .select("id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical, asset_type, duration_seconds, status, org_id")
+    .select("id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical, geography, client_role, asset_type, duration_seconds, custom_field_values, status, org_id")
     .in("id", showcase.assetIds)
     .eq("org_id", showcase.orgId)
     .eq("status", "published");
@@ -477,8 +487,11 @@ export async function resolveShowcase(id: string): Promise<ResolvedShowcase | nu
       client_name: (row.client_name as string) || "",
       company: (row.company as string) || "",
       vertical: (row.vertical as string) || "",
+      geography: (row.geography as string) || "",
+      client_role: (row.client_role as string) || "",
       asset_type: (row.asset_type as string) || "Video Testimonial",
       duration_seconds: (row.duration_seconds as number | null) ?? null,
+      custom_field_values: (row.custom_field_values as Record<string, unknown>) || {},
     });
   }
   // Preserve original order. IDs the lookup couldn't satisfy

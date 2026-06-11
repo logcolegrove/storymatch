@@ -95,6 +95,45 @@ export interface FooterBlockProps {
   showBrand?: boolean;
 }
 
+// Filter category keys reference either:
+//   • A FieldDef.key from the org's master library schema
+//     ("vertical", "company", "geography", etc.) — both system
+//     fields and custom admin-defined fields are eligible
+//   • A built-in concept that doesn't live in field defs:
+//     "assetType" (Video Testimonial / Customer Story)
+//
+// We keep this as plain strings (not a union) so admin-defined
+// custom fields are first-class — the DSL never has to learn about
+// new field types when the admin adds one.
+export type FilterCategoryKey = string;
+
+// Inline filter element — sort + filter + search trio that mirrors
+// the master library lib-bar. Each affordance is independently
+// toggleable; default to all-on so dropping the element into a
+// layout produces the full trio without configuration.
+export interface FiltersInlineBlockProps {
+  showSort?: boolean;
+  showFilter?: boolean;
+  showSearch?: boolean;
+  // Which categories the Filter popover exposes. Empty = no filter
+  // popover content (the button hides itself even when showFilter is
+  // on). Admin opts in to specific categories from the settings panel.
+  filterCategoryKeys?: FilterCategoryKey[];
+  // Sort options offered in the Sort popover. Default to the sensible
+  // four; admins can prune. Kept tight intentionally — public viewers
+  // shouldn't see ten sort options the way admins do in the library.
+  sortOptions?: ("recent" | "az" | "za")[];
+}
+
+// Sticky vertical filter sidebar — modeled after the FILTER BY
+// accordion on B2B catalog pages. Pins to one side of the viewport
+// and expands each category in place when its row chevron is clicked.
+export interface FiltersStickyBlockProps {
+  heading?: string;
+  filterCategoryKeys?: FilterCategoryKey[];
+  side?: "left" | "right";
+}
+
 // ── Block union ───────────────────────────────────────────────────
 // Discriminated union — each variant pairs a type tag with its
 // strongly-typed props. The renderer narrows on `type` to pick the
@@ -106,7 +145,9 @@ export type TemplateBlock =
   | { type: "quote-rotator"; props: QuoteRotatorBlockProps }
   | { type: "intro-text"; props: IntroTextBlockProps }
   | { type: "divider"; props: DividerBlockProps }
-  | { type: "footer"; props: FooterBlockProps };
+  | { type: "footer"; props: FooterBlockProps }
+  | { type: "filters-inline"; props: FiltersInlineBlockProps }
+  | { type: "filters-sticky"; props: FiltersStickyBlockProps };
 
 export type BlockType = TemplateBlock["type"];
 

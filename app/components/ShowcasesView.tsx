@@ -48,6 +48,16 @@ export interface ShowcaseAssetRef {
   pullQuote: string;
   description: string;
   videoUrl: string;
+  // Filter-element preview support. The builder lives inside a
+  // page that already has these on the parent Asset row; we
+  // forward the subset that map to common filter categories so
+  // the live preview can show filter chips that actually filter.
+  // Custom field values flow through too — admins inevitably want
+  // to filter on their custom-defined categories.
+  vertical?: string;
+  geography?: string;
+  clientRole?: string;
+  customFieldValues?: Record<string, unknown>;
 }
 
 interface Showcase {
@@ -88,6 +98,12 @@ interface Props {
   // Sales reps can't promote to team; admins can.
   role: "admin" | "sales";
   onToast: (msg: string) => void;
+  // Org field defs — passed through to the builder so the filter-
+  // element settings panels (and the live preview) can show
+  // category labels + values keyed off the same schema as the
+  // master library. Slim shape only — we don't need the populator
+  // metadata here.
+  fieldDefs?: { key: string; label: string; type: "text" | "select" | "multi_select" | "number" | "date"; options?: string[] }[];
 }
 
 function timeAgo(iso: string | null): string {
@@ -230,7 +246,7 @@ function ShowcaseCardMenu({ onCopyLink, onCopyEmbed, onView, onEdit, onDelete }:
   );
 }
 
-export default function ShowcasesView({ authHeaders, assets, currentUserId, role, onToast }: Props) {
+export default function ShowcasesView({ authHeaders, assets, currentUserId, role, onToast, fieldDefs }: Props) {
   const [loading, setLoading] = useState(true);
   const [showcases, setShowcases] = useState<Showcase[]>([]);
   // The builder takes over the full viewport when a showcase is
@@ -571,6 +587,7 @@ export default function ShowcasesView({ authHeaders, assets, currentUserId, role
           role={role}
           onClose={handleBuilderClose}
           onToast={onToast}
+          fieldDefs={fieldDefs || []}
         />
       )}
     </div>

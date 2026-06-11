@@ -9206,10 +9206,15 @@ export default function App(){
                   pullQuote: a.pullQuote || "",
                   description: a.description || "",
                   videoUrl: a.videoUrl || "",
+                  vertical: a.vertical || "",
+                  geography: a.geography || "",
+                  clientRole: a.clientRole || "",
+                  customFieldValues: a.customFieldValues || {},
                 }))}
                 currentUserId={user?.id || ""}
                 role={org?.role === "admin" ? "admin" : "sales"}
                 onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); }}
+                fieldDefs={fieldDefs.map(d => ({ key: d.key, label: d.label, type: d.type, options: d.options }))}
               />
             </div>
           ) : (
