@@ -64,6 +64,12 @@ export interface ShowcaseContext {
     // When false, we render no transforms (single click intent).
     engaged: boolean;
   };
+  // Admin-only edit affordance. When set, each rendered block gets
+  // wrapped in a hover-revealed "Edit block" overlay so admins can
+  // jump straight from the live preview to that block's settings.
+  // Public showcase renders never pass this so visitors don't see
+  // the overlay. Receives the block index in template.blocks.
+  onEditBlock?: (blockIdx: number) => void;
 }
 
 export interface ShowcaseRenderAsset {
@@ -369,12 +375,53 @@ interface Props {
 }
 
 export default function ShowcaseRenderer({ template, context }: Props) {
+  const editable = !!context.onEditBlock;
   return (
     <div className="sr">
       <style>{css}</style>
-      {template.blocks.map((b, i) => renderBlock(b, context, i))}
+      {template.blocks.map((b, i) => {
+        const rendered = renderBlock(b, context, i);
+        if (!editable) return rendered;
+        // Wrap each block in a hover-revealed "Edit block" overlay.
+        // Visible only when context.onEditBlock is provided (i.e.
+        // the builder preview path) — public showcase pages render
+        // the block bare. Label uses the block-type label table so
+        // admins know exactly what they'll be editing.
+        return (
+          <div key={`edit-${i}`} className="sr-edit-wrap">
+            {rendered}
+            <button
+              type="button"
+              className="sr-edit-btn"
+              onClick={(e) => { e.stopPropagation(); context.onEditBlock?.(i); }}
+              title={`Edit ${blockTypeLabel(b.type)} settings`}
+              aria-label={`Edit ${blockTypeLabel(b.type)} block`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 20h9"/>
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+              </svg>
+              Edit {blockTypeLabel(b.type)}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+// Friendly labels for the edit overlay. Kept here (not imported) so
+// the renderer stays self-contained; matches the labels used in the
+// builder's block list.
+function blockTypeLabel(type: TemplateBlock["type"]): string {
+  switch (type) {
+    case "hero": return "hero";
+    case "asset-grid": return "asset grid";
+    case "quote-rotator": return "quote rotator";
+    case "intro-text": return "intro text";
+    case "divider": return "divider";
+    case "footer": return "footer";
+  }
 }
 
 // ── Styles ────────────────────────────────────────────────────────
@@ -383,6 +430,17 @@ export default function ShowcaseRenderer({ template, context }: Props) {
 // root that wraps the renderer (see ShowcasePageClient).
 const css = `
 .sr{display:flex;flex-direction:column;}
+
+/* Builder-only edit affordance. Each block sits inside an sr-edit-
+   wrap that shows a dashed outline + floating Edit button on hover.
+   Public render paths skip the wrap entirely so visitors never see
+   the chrome. */
+.sr-edit-wrap{position:relative;}
+.sr-edit-wrap::after{content:"";position:absolute;inset:0;border:2px dashed transparent;border-radius:8px;pointer-events:none;transition:border-color .12s;}
+.sr-edit-wrap:hover::after{border-color:color-mix(in srgb, var(--accent) 55%, transparent);}
+.sr-edit-btn{position:absolute;top:10px;right:10px;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;background:#1c1c1c;color:#fff;border:none;border-radius:7px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;opacity:0;transform:translateY(-2px);transition:opacity .15s, transform .15s, background .15s;z-index:5;box-shadow:0 6px 18px rgba(0,0,0,.22);}
+.sr-edit-wrap:hover .sr-edit-btn{opacity:1;transform:translateY(0);}
+.sr-edit-btn:hover{background:var(--accent);}
 
 /* Hero */
 .sr-hero{max-width:1100px;margin:0 auto;padding:64px 32px 32px;}

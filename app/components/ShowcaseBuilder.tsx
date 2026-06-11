@@ -108,6 +108,10 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
   });
   const [activeCategory, setActiveCategory] = useState<Category | null>("content");
   const [saving, setSaving] = useState(false);
+  // Drill-in index for the Layout panel. Hoisted here (instead of
+  // owned inside LayoutPanel) so the preview-side hover-edit overlay
+  // can open the Layout panel pre-focused on a specific block.
+  const [layoutDrillIdx, setLayoutDrillIdx] = useState<number | null>(null);
 
   // Holds the most recently saved showcase response so closeWithLatest()
   // can hand it back to the parent. Without this, the parent's
@@ -169,7 +173,11 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
       out.push({
         id: a.id,
         headline: a.headline,
-        pull_quote: "",  // ShowcaseAssetRef doesn't carry pull_quote; rendered placeholders are fine for the preview
+        // ShowcaseAssetRef carries pullQuote — pipe it through so
+        // the QuoteRotatorBlock (which filters out assets without
+        // a pull_quote) actually has rows to rotate. Without this
+        // the rotator silently renders nothing in the preview.
+        pull_quote: a.pullQuote || "",
         client_name: a.clientName,
         company: a.company,
         thumbnail: a.thumbnail,
@@ -406,37 +414,18 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
         <div className="sb-trail">
           <span className="sb-trail-crumb">Showcases</span>
           <span className="sb-trail-sep">/</span>
-          {/* The DAL stores "Untitled showcase" as the default name
-              when the user POSTs a blank one. Surfacing that string
-              back into the input makes it look like the field is
-              already filled out — and worse, hides the placeholder
-              hint. Treat the default as empty for display purposes;
-              the DAL will re-sanitize back to "Untitled showcase"
-              on save if the input stays blank. */}
-          <input
-            type="text"
-            className="sb-title-input"
-            value={draft.name === "Untitled showcase" ? "" : draft.name}
-            onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-            placeholder="Name this showcase…"
-            title="Click to rename"
-          />
-          {/* Tiny pencil to advertise that the title is editable —
-              the input alone reads as a label. The icon is purely
-              decorative; clicking it focuses the input. */}
+          {/* Top-bar title is now read-only — editing lives in the
+              Content panel as a labeled "Title" field. Empty name
+              renders as the system default so the breadcrumb still
+              shows something when an admin hasn't named the showcase
+              yet. Clicking it opens the Content panel for renaming. */}
           <button
             type="button"
-            className="sb-title-edit"
-            onClick={(e) => {
-              (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.focus();
-            }}
-            aria-label="Rename showcase"
-            title="Rename"
+            className="sb-trail-title"
+            onClick={() => setActiveCategory("content")}
+            title="Rename in the Content panel"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 20h9"/>
-              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-            </svg>
+            {draft.name || "Untitled showcase"}
           </button>
         </div>
         <div className="sb-top-r">
@@ -539,6 +528,8 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                 <LayoutPanel
                   templateId={draft.templateId}
                   effectiveBlocks={template.blocks}
+                  drillIdx={layoutDrillIdx}
+                  onSetDrillIdx={setLayoutDrillIdx}
                   onSelectTemplate={(id) => {
                     // Picking a template clones its blocks into
                     // templateConfig (fork-from-template). Resets
@@ -558,6 +549,25 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                       const base = d.templateConfig ?? cloneTemplateBlocks(d.templateId);
                       const next = base.map((b, i) => i === idx ? { ...b, props: { ...b.props, ...newProps } } as TemplateBlock : b);
                       return { ...d, templateConfig: next };
+                    });
+                  }}
+                  onAddBlock={(type) => {
+                    // Append a fresh block of the chosen type with
+                    // sensible defaults. Same fork-from-template
+                    // dance as onUpdateBlock — clone the named
+                    // template's blocks first if the admin hasn't
+                    // customized yet. After appending we leave
+                    // drill-down to the new block so the admin can
+                    // immediately tweak its settings.
+                    setDraft(d => {
+                      const base = d.templateConfig ?? cloneTemplateBlocks(d.templateId);
+                      return { ...d, templateConfig: [...base, defaultBlockForType(type)] };
+                    });
+                  }}
+                  onRemoveBlock={(idx) => {
+                    setDraft(d => {
+                      const base = d.templateConfig ?? cloneTemplateBlocks(d.templateId);
+                      return { ...d, templateConfig: base.filter((_, i) => i !== idx) };
                     });
                   }}
                   onGenerateWithClaude={generateWithClaude}
@@ -596,6 +606,15 @@ export default function ShowcaseBuilder({ showcase, assets, authHeaders, role, o
                   // releasing a drag would also open the asset.
                   if (dragJustEndedRef.current) return;
                   setPreviewAssetId(id);
+                },
+                // Hover-edit overlay: clicking "Edit <block>" in the
+                // preview pops the Layout category open AND drills
+                // straight into the block's per-block settings. The
+                // category transition + drill change happen together
+                // so the admin lands exactly where they want.
+                onEditBlock: (idx) => {
+                  setActiveCategory("layout");
+                  setLayoutDrillIdx(idx);
                 },
                 onAssetReorderBegin: beginAssetReorder,
                 // Project our internal drag state to the renderer's
@@ -732,7 +751,23 @@ function ContentPanel({ draft, setDraft, assets }: {
 
   return (
     <div className="sb-content">
+      {/* Title + description sit at the top of the Content panel so
+          renaming feels like a deliberate edit. The old top-bar
+          inline title was easy to miss — admins thought the showcase
+          was stuck on "Untitled showcase" because the field didn't
+          look like a field. Labels + a real input solve that. */}
       <section className="sb-section">
+        <label className="sb-field">
+          <span>Title</span>
+          <input
+            type="text"
+            value={draft.name === "Untitled showcase" ? "" : draft.name}
+            onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+            placeholder="Name this showcase…"
+            maxLength={200}
+            autoFocus
+          />
+        </label>
         <label className="sb-field">
           <span>Description <em>(optional)</em></span>
           <textarea
@@ -822,27 +857,60 @@ function ContentPanel({ draft, setDraft, assets }: {
   );
 }
 
+// Default props for newly-added blocks. Picking sensible defaults so
+// the block renders something usable immediately — the admin can
+// then drill in to fine-tune. Footer is intentionally excluded
+// because B4.0 deprecated it; we don't want admins adding new ones.
+function defaultBlockForType(type: TemplateBlock["type"]): TemplateBlock {
+  switch (type) {
+    case "hero":          return { type: "hero", props: { titleSource: "showcase.name", subtitleSource: "showcase.description", align: "center", padding: "comfortable" } };
+    case "asset-grid":    return { type: "asset-grid", props: { columns: 3, showCompany: true, showQuote: true, aspect: "16/9", clickTarget: "modal" } };
+    case "quote-rotator": return { type: "quote-rotator", props: { source: "showcase-assets", intervalSec: 6, size: "full" } };
+    case "intro-text":    return { type: "intro-text", props: { content: "Write an intro for this section.", align: "left" } };
+    case "divider":       return { type: "divider", props: { spacing: "normal" } };
+    case "footer":        return { type: "footer", props: { showBrand: false } };
+  }
+}
+
+// Blocks the "Add block" picker exposes. Footer omitted (deprecated
+// in B4.0). Order matches what an admin probably reaches for most.
+const ADDABLE_BLOCK_TYPES: { type: TemplateBlock["type"]; label: string; help: string }[] = [
+  { type: "quote-rotator", label: "Quote rotator", help: "Rotates each asset's pull quote with auto-advance." },
+  { type: "intro-text",    label: "Intro text",    help: "A short paragraph above or between sections." },
+  { type: "asset-grid",    label: "Asset grid",    help: "A grid of testimonial cards. (Adds a second grid.)" },
+  { type: "hero",          label: "Hero",          help: "A headline + subtitle band. (Adds a second hero.)" },
+  { type: "divider",       label: "Divider",       help: "A horizontal rule between sections." },
+];
+
 // ─── Layout panel ────────────────────────────────────────────────
 // Two-level navigation. Top level shows the template picker + a
 // block list (one row per block in the effective template). Click
 // a block row to drill into its per-block settings; back arrow
 // returns. Mirrors the Vimeo Showcases / Elfsight pattern.
-function LayoutPanel({ templateId, effectiveBlocks, onSelectTemplate, onUpdateBlock, onGenerateWithClaude }: {
+function LayoutPanel({ templateId, effectiveBlocks, drillIdx, onSetDrillIdx, onSelectTemplate, onUpdateBlock, onAddBlock, onRemoveBlock, onGenerateWithClaude }: {
   templateId: string | null;
   effectiveBlocks: TemplateBlock[];
+  // Drill-in index is now controlled from above so the preview-side
+  // hover-edit overlay can open the panel pre-focused on a block.
+  drillIdx: number | null;
+  onSetDrillIdx: (idx: number | null) => void;
   onSelectTemplate: (id: string) => void;
   onUpdateBlock: (idx: number, props: Record<string, unknown>) => void;
+  onAddBlock: (type: TemplateBlock["type"]) => void;
+  onRemoveBlock: (idx: number) => void;
   onGenerateWithClaude: (prompt: string) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
-  // null = top-level list; a number = drilled into that block's
-  // settings. Reset to null whenever templateId changes (clearer
-  // mental model — switching templates pops you back to the list).
-  const [drillIdx, setDrillIdx] = useState<number | null>(null);
+  // Convenience aliases so we don't have to thread the controlled
+  // props through every call site below.
+  const setDrillIdx = onSetDrillIdx;
   // The Claude prompt sheet slides over the panel content when
   // open. State is here (not the parent) because it's purely a
   // local UI affordance — the parent only needs the result.
   const [claudeOpen, setClaudeOpen] = useState(false);
-  useEffect(() => { setDrillIdx(null); }, [templateId]);
+  // Switching templates pops back to the top-level block list —
+  // the previous drill index might not even map to a valid block
+  // in the new template's shape.
+  useEffect(() => { setDrillIdx(null); }, [templateId, setDrillIdx]);
 
   // Tiny visual previews on the template picker. B4.0 dropped the
   // "Shared via StoryMatch" footer block from built-in templates,
@@ -961,13 +1029,90 @@ function LayoutPanel({ templateId, effectiveBlocks, onSelectTemplate, onUpdateBl
                 <div className="sb-block-h">{blockLabel(b.type)}</div>
                 <div className="sb-block-sub">{blockSummary(b)}</div>
               </div>
+              <span
+                role="button"
+                tabIndex={0}
+                className="sb-block-remove"
+                title="Remove this block"
+                aria-label="Remove block"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (typeof window !== "undefined" && !window.confirm(`Remove the ${blockLabel(b.type).toLowerCase()} block?`)) return;
+                  onRemoveBlock(i);
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                </svg>
+              </span>
               <svg className="sb-block-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="9 18 15 12 9 6"/>
               </svg>
             </button>
           ))}
         </div>
+
+        {/* Add-block picker. Renders all block types admins can drop
+            into the current layout. New blocks land at the bottom;
+            drilling into them via the block list lets the admin
+            fine-tune props right away. */}
+        <AddBlockPicker onAdd={onAddBlock}/>
       </section>
+    </div>
+  );
+}
+
+// Inline picker that turns the "Add block" button into a small
+// dropdown listing every block type the admin can append. Closes
+// on outside click + Esc.
+function AddBlockPicker({ onAdd }: { onAdd: (type: TemplateBlock["type"]) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <div className="sb-addblock-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className="sb-addblock-btn"
+        onClick={() => setOpen(o => !o)}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        Add block
+      </button>
+      {open && (
+        <div className="sb-addblock-pop" role="menu">
+          {ADDABLE_BLOCK_TYPES.map(opt => (
+            <button
+              key={opt.type}
+              type="button"
+              className="sb-addblock-item"
+              onClick={() => { onAdd(opt.type); setOpen(false); }}
+            >
+              <span className="sb-addblock-icon">{blockIcon(opt.type)}</span>
+              <div className="sb-addblock-body">
+                <div className="sb-addblock-h">{opt.label}</div>
+                <div className="sb-addblock-sub">{opt.help}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1423,12 +1568,10 @@ const css = `
 .sb-trail{display:flex;align-items:center;gap:8px;flex:1;min-width:0;}
 .sb-trail-crumb{font-size:13px;color:var(--t3);font-weight:500;flex-shrink:0;}
 .sb-trail-sep{color:var(--t4);}
-.sb-title-input{flex:1;border:none;background:none;font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);padding:6px 8px;border-radius:6px;min-width:0;border-bottom:1.5px dashed var(--border2);transition:background .12s,border-color .12s;}
-.sb-title-input::placeholder{color:var(--t4);font-weight:500;font-style:italic;}
-.sb-title-input:hover{background:var(--bg2);border-bottom-color:var(--accent);}
-.sb-title-input:focus{outline:none;background:#fff;border-bottom:1.5px solid var(--accent);}
-.sb-title-edit{width:26px;height:26px;display:grid;place-items:center;border:none;background:none;color:var(--t3);border-radius:6px;cursor:pointer;flex-shrink:0;transition:all .12s;}
-.sb-title-edit:hover{background:var(--bg2);color:var(--accent);}
+/* Top-bar breadcrumb title — read-only display. Clicking opens the
+   Content panel where editing happens via a proper labeled input. */
+.sb-trail-title{flex:1;min-width:0;background:none;border:none;padding:6px 8px;border-radius:6px;font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:-.3px;color:var(--t1);cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:background .12s;}
+.sb-trail-title:hover{background:var(--bg2);}
 
 .sb-top-r{display:flex;gap:8px;align-items:center;flex-shrink:0;}
 .sb-share{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--t2);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .12s;}
@@ -1466,8 +1609,9 @@ const css = `
 .sb-field{display:flex;flex-direction:column;gap:5px;}
 .sb-field>span{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;}
 .sb-field>span em{font-style:normal;text-transform:none;letter-spacing:0;font-weight:500;color:var(--t4);margin-left:4px;}
-.sb-field textarea{padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);resize:vertical;line-height:1.5;}
-.sb-field textarea:focus{outline:none;border-color:var(--accent);}
+.sb-field textarea,.sb-field input[type=text]{padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;font-family:var(--font);font-size:13px;color:var(--t1);line-height:1.5;}
+.sb-field textarea{resize:vertical;}
+.sb-field textarea:focus,.sb-field input[type=text]:focus{outline:none;border-color:var(--accent);}
 
 .sb-empty{padding:18px 14px;text-align:center;color:var(--t3);font-size:12.5px;line-height:1.5;background:var(--bg);border-radius:8px;}
 
@@ -1573,6 +1717,24 @@ const css = `
 .sb-block-sub{font-size:11px;color:var(--t3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .sb-block-chev{color:var(--t4);flex-shrink:0;}
 .sb-block-row:hover .sb-block-chev{color:var(--t2);}
+/* Per-row remove handle — opacity-0 unless the row is hovered, then
+   a small trash icon appears. Click cycle: confirm → onRemoveBlock. */
+.sb-block-remove{display:grid;place-items:center;width:24px;height:24px;border-radius:5px;color:var(--t4);cursor:pointer;flex-shrink:0;opacity:0;transition:opacity .12s,background .12s,color .12s;}
+.sb-block-row:hover .sb-block-remove{opacity:1;}
+.sb-block-remove:hover{background:#fef2f2;color:#b91c1c;}
+
+/* Add block picker — small popdown right under the block list. */
+.sb-addblock-wrap{position:relative;margin-top:6px;}
+.sb-addblock-btn{width:100%;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 12px;border:1.5px dashed var(--border2);background:var(--bg);color:var(--t2);font-family:var(--font);font-size:12.5px;font-weight:600;border-radius:8px;cursor:pointer;transition:all .12s;}
+.sb-addblock-btn:hover{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb, var(--accent) 5%, transparent);}
+.sb-addblock-pop{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 36px rgba(0,0,0,.14), 0 4px 10px rgba(0,0,0,.05);padding:4px;z-index:30;animation:sbabFade .14s ease;}
+@keyframes sbabFade{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:translateY(0);}}
+.sb-addblock-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 11px;background:none;border:none;cursor:pointer;font-family:var(--font);color:var(--t1);text-align:left;border-radius:6px;transition:background .12s;}
+.sb-addblock-item:hover{background:var(--bg2);}
+.sb-addblock-icon{display:grid;place-items:center;width:26px;height:26px;background:var(--bg);border-radius:6px;color:var(--t2);flex-shrink:0;}
+.sb-addblock-body{flex:1;min-width:0;}
+.sb-addblock-h{font-size:12.5px;font-weight:600;color:var(--t1);}
+.sb-addblock-sub{font-size:11px;color:var(--t3);line-height:1.4;margin-top:1px;}
 
 /* Drill-in panel — header strip + the block-specific settings. */
 .sb-drill-back{display:inline-flex;align-items:center;gap:5px;background:none;border:none;padding:4px 8px 4px 4px;margin:-4px -8px 8px -4px;font-family:var(--font);font-size:11.5px;font-weight:600;color:var(--t3);cursor:pointer;border-radius:5px;}
