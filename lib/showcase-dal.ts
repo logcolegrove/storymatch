@@ -240,6 +240,11 @@ function sanitizeTemplateId(raw: unknown): string | null {
 // renderer falls back to the template_id named template.
 const KNOWN_BLOCK_TYPES = new Set([
   "hero", "asset-grid", "quote-rotator", "intro-text", "divider", "footer",
+  // Filter elements added in B5 — without these on the allowlist
+  // sanitizeTemplateConfig would drop the whole templateConfig to
+  // null the moment an admin adds a filters element, silently
+  // discarding their layout on save.
+  "filters-inline", "filters-sticky",
 ]);
 function sanitizeTemplateConfig(raw: unknown): TemplateBlock[] | null {
   if (raw === null || raw === undefined) return null;
