@@ -12,7 +12,9 @@ import { notFound } from "next/navigation";
 import { headers, cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { hashIp, isBotUserAgent } from "@/lib/share-tracking";
+import { resolveShowcase } from "@/lib/showcase-dal";
 import SharePageClient from "./SharePageClient";
+import ShowcasePageClient from "@/app/showcase/[id]/ShowcasePageClient";
 
 interface Asset {
   id: string;
@@ -40,25 +42,37 @@ export default async function SharePage({
 }) {
   const { id } = await params;
 
-  // 1. Look up the share link
+  // 1. Look up the share link. Now polymorphic — either asset_id
+  // or showcase_id is set (DB constraint enforces exactly-one).
   const { data: shareLink } = await supabaseAdmin
     .from("share_links")
-    .select("id, asset_id, sender_user_id, click_count, sender_ip_hash")
+    .select("id, asset_id, showcase_id, sender_user_id, click_count, sender_ip_hash")
     .eq("id", id)
     .maybeSingle();
 
   if (!shareLink) notFound();
 
-  // 2. Look up the underlying asset
-  const { data: asset } = await supabaseAdmin
-    .from("assets")
-    .select(
-      "id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical, asset_type, challenge, outcome, geography, company_size, transcript, status"
-    )
-    .eq("id", shareLink.asset_id)
-    .maybeSingle<Asset>();
+  // 2. Look up the underlying target. Showcase shares resolve via
+  // the showcase DAL (which silently drops archived/deleted member
+  // assets); asset shares hit assets directly. The click-tracking
+  // step below runs the same way regardless of target type.
+  const isShowcaseShare = !!shareLink.showcase_id;
+  const resolvedShowcase = isShowcaseShare
+    ? await resolveShowcase(shareLink.showcase_id as string)
+    : null;
+  if (isShowcaseShare && !resolvedShowcase) notFound();
 
-  if (!asset) notFound();
+  const { data: asset } = !isShowcaseShare && shareLink.asset_id
+    ? await supabaseAdmin
+        .from("assets")
+        .select(
+          "id, headline, pull_quote, description, video_url, thumbnail, client_name, company, vertical, asset_type, challenge, outcome, geography, company_size, transcript, status"
+        )
+        .eq("id", shareLink.asset_id)
+        .maybeSingle<Asset>()
+    : { data: null };
+
+  if (!isShowcaseShare && !asset) notFound();
 
   // 3. Resolve the visitor identity. The middleware sets `sm_visitor_id` on
   // first visit; we read it here so this very first click event carries it
@@ -102,5 +116,26 @@ export default async function SharePage({
     console.error("share click tracking failed:", e);
   }
 
-  return <SharePageClient asset={asset} shareId={shareLink.id} visitorId={visitorId} />;
+  // Showcase shares render the public showcase page; the click
+  // event has already been recorded above so this share_link's
+  // engagement metrics flow into Insights just like single-asset
+  // shares. Per-video tracking inside the showcase is a future
+  // enhancement (the showcase page doesn't propagate the share_id
+  // to each child asset render yet).
+  if (isShowcaseShare && resolvedShowcase) {
+    return (
+      <ShowcasePageClient
+        showcase={{
+          id: resolvedShowcase.id,
+          name: resolvedShowcase.name,
+          description: resolvedShowcase.description,
+          templateId: resolvedShowcase.templateId,
+          templateConfig: resolvedShowcase.templateConfig,
+        }}
+        assets={resolvedShowcase.assets}
+      />
+    );
+  }
+
+  return <SharePageClient asset={asset!} shareId={shareLink.id} visitorId={visitorId} />;
 }

@@ -47,35 +47,58 @@ function generateShareId(length = 6): string {
 }
 
 // POST /api/share
-// Body: { asset_id: string }
+// Body: { asset_id: string } OR { showcase_id: string }
 // Always creates a NEW share_link — each "I just sent this to someone" gets
-// its own tracked entity, even when it's the same asset twice. We also
+// its own tracked entity, even when it's the same target twice. We also
 // capture the sender's IP hash here so the public page can flag self-views
 // and exclude them from engagement metrics.
+//
+// Showcases share the same /s/<id> infrastructure as single-asset shares so
+// click + engagement insights flow into the same Insights view. The DB
+// constraint enforces exactly-one of (asset_id, showcase_id), so the row
+// shape stays clean for downstream consumers.
 export async function POST(req: NextRequest) {
   const ctx = await getCurrentUserOrg(req);
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  let body: { asset_id?: string };
+  let body: { asset_id?: string; showcase_id?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
   const assetId = body.asset_id;
-  if (!assetId) {
-    return NextResponse.json({ error: "asset_id required" }, { status: 400 });
+  const showcaseId = body.showcase_id;
+  if (!assetId && !showcaseId) {
+    return NextResponse.json({ error: "asset_id or showcase_id required" }, { status: 400 });
+  }
+  if (assetId && showcaseId) {
+    return NextResponse.json({ error: "Provide asset_id OR showcase_id, not both" }, { status: 400 });
   }
 
-  // Verify the asset exists and belongs to this user's org
-  const { data: asset } = await supabaseAdmin
-    .from("assets")
-    .select("id, org_id")
-    .eq("id", assetId)
-    .eq("org_id", ctx.orgId)
-    .maybeSingle();
-  if (!asset) {
-    return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+  // Verify the target exists in this user's org. Asset and showcase live in
+  // different tables but both have org_id; we run whichever lookup matches
+  // the caller's intent.
+  if (assetId) {
+    const { data: asset } = await supabaseAdmin
+      .from("assets")
+      .select("id, org_id")
+      .eq("id", assetId)
+      .eq("org_id", ctx.orgId)
+      .maybeSingle();
+    if (!asset) {
+      return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+    }
+  } else if (showcaseId) {
+    const { data: showcase } = await supabaseAdmin
+      .from("showcases")
+      .select("id, org_id")
+      .eq("id", showcaseId)
+      .eq("org_id", ctx.orgId)
+      .maybeSingle();
+    if (!showcase) {
+      return NextResponse.json({ error: "Showcase not found" }, { status: 404 });
+    }
   }
 
   // Capture the sender's IP hash so we can flag self-views on the public page
@@ -92,7 +115,8 @@ export async function POST(req: NextRequest) {
     const { error } = await supabaseAdmin.from("share_links").insert({
       id: candidate,
       org_id: ctx.orgId,
-      asset_id: assetId,
+      asset_id: assetId || null,
+      showcase_id: showcaseId || null,
       sender_user_id: ctx.userId,
       sender_ip_hash: senderIpHash,
     });

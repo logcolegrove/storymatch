@@ -262,24 +262,57 @@ export default function ShowcasesView({ authHeaders, assets, currentUserId, role
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const copyShareLink = (id: string) => {
+  // Generate a tracked share URL for a showcase. Goes through the
+  // same /api/share flow as single-asset shares so every Copy link
+  // press creates a fresh share_link row, click events flow into
+  // share_events, and the share shows up in the rep's My Shares + the
+  // org Insights view. Returns the short /s/<id> URL on success.
+  const createTrackedShareUrl = async (showcaseId: string): Promise<string | null> => {
+    try {
+      const headers = await authHeaders();
+      const r = await fetch("/api/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ showcase_id: showcaseId }),
+      });
+      if (!r.ok) throw new Error("share api failed");
+      const data = await r.json() as { url?: string };
+      return data.url || null;
+    } catch (e) {
+      console.error("[ShowcasesView] tracked share failed", e);
+      return null;
+    }
+  };
+
+  const copyShareLink = async (id: string) => {
     if (typeof window === "undefined") return;
-    const url = `${window.location.origin}/showcase/${id}`;
+    onToast("Generating link…");
+    const url = await createTrackedShareUrl(id);
+    if (!url) {
+      onToast("Couldn't generate link");
+      return;
+    }
     try {
       navigator.clipboard?.writeText(url);
-      onToast("Link copied to clipboard");
+      onToast("Link copied — clicks track in Insights");
     } catch {
       onToast("Couldn't copy — try selecting the URL manually");
     }
   };
 
   // Embed code = an iframe snippet the admin pastes into a customer
-  // marketing site. Default size sets a 16/9 aspect via CSS so the
-  // embed scales gracefully. Width 100% means the showcase fills the
-  // host container; admins can edit the snippet before pasting.
-  const copyEmbedCode = (id: string) => {
+  // marketing site. Uses a tracked /s/<id> URL so every view that
+  // happens via the embed flows into the same engagement aggregates
+  // as direct shares. Default size sets a 16/9 aspect via CSS so the
+  // embed scales gracefully. Admins can edit the snippet after copy.
+  const copyEmbedCode = async (id: string) => {
     if (typeof window === "undefined") return;
-    const url = `${window.location.origin}/showcase/${id}`;
+    onToast("Generating embed code…");
+    const url = await createTrackedShareUrl(id);
+    if (!url) {
+      onToast("Couldn't generate embed code");
+      return;
+    }
     const snippet = `<iframe src="${url}" title="Customer showcase" width="100%" style="aspect-ratio:16/9;border:0;border-radius:12px;" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
     try {
       navigator.clipboard?.writeText(snippet);
@@ -289,6 +322,10 @@ export default function ShowcasesView({ authHeaders, assets, currentUserId, role
     }
   };
 
+  // "View showcase" goes to the public showcase page directly (not
+  // a tracked link) — this is the admin previewing their OWN work,
+  // not sending it to a prospect, so an extra click event would just
+  // pollute the engagement data with self-views.
   const viewShowcase = (id: string) => {
     if (typeof window === "undefined") return;
     window.open(`/showcase/${id}`, "_blank", "noopener,noreferrer");
